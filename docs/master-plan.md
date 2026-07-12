@@ -201,6 +201,28 @@ conventions. An MCP server for the platform itself (scaffold a module, inspect a
 schema, dry-run a migration, tail events). Reference verticals as few-shot material.
 CI guardrails: lint rules banning raw DB/fetch access; contract tests every module must pass.
 
+**Spec-first contracts.** Every kernel contract has a machine-readable spec as its source
+of truth: TypeSpec as the authoring layer, emitting OAS for the HTTP surface and JSON
+Schema throughout; AsyncAPI for the event contract (§5.3); Arazzo opportunistically for
+connector/workflow flows once it matures. One deliberate exception: capability-scoped RPC
+into DOs stays TypeScript-native (typed interfaces + generated JSON Schema) — forcing it
+through OAS would fight the architecture. Skills, generated SDKs, the MCP server's tools,
+and the §5.7 adapter-conformance tests are all **derived from the specs**, never
+hand-maintained beside them; a module manifest that declares its API and events in spec
+form is what makes an engine self-describing — to agents now, to strangers buying it
+later. Spec *tooling* (registries, portals, pipelines) is deferred per the one-step-ahead
+rule (§6).
+
+**The agent loop is the acceptance test.** The measure of everything above: Claude Code,
+pointed at the module manifest, the specs, and one reference vertical, scaffolds a
+complete new vertical — schema, permissions, screens, workflows — with the platform
+pushing back mechanically instead of via prompting: the typed SDK rejects invalid states
+at compile time, lint blocks raw access, contract tests and dry-run migrations fail fast,
+and the two human checkpoints (§4) gate exactly what agents must never self-approve.
+"Can an agent build a vertical unaided up to the checkpoints?" is the recurring benchmark —
+it is what the 15-minute demo (§13) shows, and the question every kernel API review
+should end with.
+
 ### 5.7 Adapters: Cloudflare is the deployment target, not a dependency
 
 The auth-platform adapter pattern, applied kernel-wide: every kernel contract is a pure TypeScript
@@ -244,7 +266,7 @@ what nobody sells in the needed shape; adopt substrate everywhere else.
 | Billing & entitlements | **Buy billing, build entitlements** | Stripe; entitlements coupled to module system + orchestrator. |
 | GDPR machinery | **Build** | DSAR export, crypto-shredding erasure, retention policies. Nobody sells it in this shape; a genuine selling point in these markets. |
 | Import / migration tooling | **Build** | Staging, mapping, validation, dry-run. Every förvaltar-OS sale is a migration out of Vitec/Fast2/the FSM vendor — turn the biggest sales barrier into onboarding. |
-| API surface | **Build (cheap early)** | Per-tenant keys, rate limits, signed outbound webhooks. |
+| API surface | **Build (cheap early)** | Per-tenant keys, rate limits, signed outbound webhooks. Spec-first: TypeSpec→OAS; events ship AsyncAPI (§5.6). |
 | App shell + design system | **Build shell, buy components** | Login/SSO, org/scope switcher, permission-aware nav, settings, members, audit viewer, notifications, connector UI. **Not** a dashboard framework — that's Retool, a whole company. End-user dashboards: chart components over saved gateway queries; resist configurability until a customer pays for it. |
 | Localization | **Build day one** | sv/no/da/en. Retrofits are miserable; the FSM vendor ships three languages. |
 | Observability per tenant | **Convention** | tenant/scope IDs on every trace and error (Datadog/Sentry/Better Stack exist). |
@@ -578,6 +600,7 @@ now; a negotiation after PropCo runs on it.
 | 12 | 2026-07-12 | Name: **Chassis**. Tagline: **The hard parts, hosted.** | Structure+engines+wiring in one word; only dead squatters; Swedish-native pronunciation. Groundplane = fallback |
 | 13 | 2026-07-12 | Master doc = canonical; PDFs/decks are dated exports | Single source of truth (§0) |
 | 14 | 2026-07-12 | Every kernel contract ships a Cloudflare adapter **and** a pure SQLite adapter; contract tests pass on both | Auth-platform pattern; makes escrow/self-host real, hedges vendor risk, enables local dev/CI (§5.7) |
+| 15 | 2026-07-12 | Spec-first contracts: TypeSpec→OAS (HTTP), AsyncAPI (events), JSON Schema (RPC); Arazzo later; SDKs/MCP/conformance tests derived from specs | Machine-readable surface is the product interface for agent builders; principle cheap now, retrofit costly; tooling deferred per one-step-ahead rule (§5.6) |
 
 ## 13. Next actions
 
@@ -589,5 +612,6 @@ now; a negotiation after PropCo runs on it.
    considered, risks and open questions as questions; deliberately unpolished; ask him to
    break it).
 4. Milestone one: the **15-minute demo** — toy vertical scaffolded by Claude Code on the
-   kernel; show generation succeed and cross-tenant access **fail** at the boundary.
+   kernel from the module manifest + specs (§5.6); show generation succeed and
+   cross-tenant access **fail** at the boundary.
 5. Clarify the FSM-vendor question (subscribe vs acquire) with the friend before fall.
