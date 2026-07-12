@@ -291,6 +291,66 @@ What must **never** become an adapter: the event spine, tenancy/permission model
 entitlements, and the module manifest — those are the product. Swapping them out is
 called "not using Chassis."
 
+### 5.8 Language, build, and distribution
+
+**TypeScript end-to-end** — for reasons that hold regardless of team ("why not Rust/Go"
+is the RFC reviewer's first question; the answer must not be "team muscle"):
+
+1. **Downstream of the runtime, not of taste.** The enforcement domain is V8 isolates
+   (DO-per-scope, §5.2 — chosen for consistency domains and blast radius). On that runtime
+   JS/TS is native and everything else is a WASM guest: Workers RPC — the capability
+   stubs, the enforcement primitive itself — is a JavaScript-class mechanism others can't
+   join first-class; DO APIs land JS-first; Rust arrives via bindings with bundle-size and
+   interop costs; Go compiles to WASM badly. To argue the language you must argue the
+   runtime — §5.2 and the adapter hedge (§5.7) answer that.
+2. **The boundary is where the value is.** Verticals will be TypeScript regardless of the
+   kernel (React UIs, prompt-to-app tools emit TS, agents perform best in it). "Invalid
+   states unrepresentable" (§5.6) materializes at the SDK boundary; a Rust or Go kernel
+   exports its types only as generated bindings — two sources of truth at the most
+   important interface in the system.
+3. **The workload doesn't reward systems languages.** The kernel is I/O orchestration
+   over embedded SQLite, serialized per scope by the actor model — which also nullifies
+   Go's one structural advantage (cheap concurrency). CPU-bound hot paths (EDI parsers,
+   crypto, gateway internals) fit the WASM module slot surgically.
+4. **Memory safety is already paid for** (V8: GC, sandboxed isolates); the security
+   surface here is authorization logic, not memory corruption. For domain modeling, TS's
+   type algebra (discriminated unions, literal + branded types) is strictly stronger than
+   Go's — of the three candidates, Go is the one that *cannot express* "invalid states
+   unrepresentable."
+5. **The platform's primary users are agents** (§5.6). LLM capability is corpus-weighted;
+   TS/JS is the largest corpus with the fastest toolchain feedback. When the customer is
+   an AI, language is a product decision about the customer.
+
+Honest concessions: a self-hosted single-binary product (PocketBase-shaped) should be Go;
+a database or query engine should be Rust — which is why those layers are bought (SQLite,
+R2 SQL), not written. Optics answer: the infrastructure *dependencies* are systems
+languages (workerd, V8, SQLite); the kernel is the orchestration layer above them — the
+layer where Cloudflare, having written workerd in C++/Rust, tells its customers to write
+TypeScript. Team muscle (auth platform, document product, pnpm) is real and listed last
+deliberately: the case survives a team change (risk 10).
+
+**The type-erasure objection, answered structurally.** TS types erase at runtime, so they
+are never the enforcement: every trust boundary validates at runtime with validators
+generated from the specs (§5.6 — parse, don't trust), and the guarantees that matter are
+structural (DO boundary, capability RPC, query gateway), not type-level. Types are agent
+ergonomics; the moat doesn't depend on the compiler.
+
+**Portability = standards + adapters, not WASM.** WASM portably runs *compute*; the
+kernel is I/O orchestration, which WASM doesn't abstract — adapters do (§5.7). Kernel core
+targets the standards surface (fetch, WebCrypto, streams — WinterTC profile: runs on
+Workers, Node, Bun, Deno); platform specifics live only in adapters; external contracts
+(Iceberg, OTel, OIDC, AsyncAPI) cover the rest. Door left open, cheaply: the module
+manifest may later admit WASM component modules for hot paths (parsers, crypto, gateway
+internals) or polyglot engines — additive, never a platform bet.
+
+**Build & distribution.** pnpm monorepo → published npm packages: `@chassis/sdk`,
+adapters (`adapter-cloudflare`, `adapter-sqlite`), engines as manifest-carrying packages,
+the specs, the CLI (`chassis dev` = pure-SQLite composition locally, §5.7), skills + MCP
+server. Semver everywhere (§6); AGPL + commercial licensing (§9). Runtime distribution:
+hosted control plane; verticals deploy as Workers-for-Platforms user workers (the same
+mechanism §9 relies on for per-tenant cost attribution). The auth-platform packaging
+playbook, applied deliberately.
+
 ## 6. Kernel components and build/buy
 
 Principle: **build contracts and control planes, buy engines.** Build what is the moat and
@@ -720,6 +780,18 @@ now; a negotiation after PropCo runs on it.
    deprecations, or Cloudflare moving up-stack. Mitigation: adapter rule (§5.7) — contracts
    are pure interfaces, the pure-SQLite adapter stays green in CI, DO is an adapter not a
    dependency.
+10. **Key-person concentration (kernel)**: design, taste, both §4 checkpoints, and the
+    source assets resolve to the kernel owner — bus factor ≈ 1, spread across three
+    ventures. Escrow (§9) protects consumers, not the venture. Mitigation: the agent
+    artifacts double as onboarding (specs, skills, decision log, contract tests); a second
+    kernel-fluent person is a named milestone **before** the parallel-run test — once
+    PropCo runs on the kernel, bus factor 1 is a customer's problem.
+11. **Single-relationship demand**: all four cases — demand, validation, and network-wedge
+    distribution — route through one friendship. Distinct from risk 7 (friction): if the
+    relationship or the friend's businesses wobble, the entire market side disappears at
+    once. Mitigation: §9 framing (b) (auth-platform convergence) is a real second leg, not
+    a fallback; document-product re-platforming (decision 17) gives the kernel a consumer
+    outside the friendship.
 
 ## 11. Open questions
 
@@ -766,6 +838,7 @@ now; a negotiation after PropCo runs on it.
 | 18 | 2026-07-12 | Triage rule: kernel-owned (enforcement inputs + contracts) / adapter (infra the kernel consumes: billing rails, model providers, KMS, telemetry via OTel, notification transports, search backends) / connector (capabilities tenants use, in the hub) | One test decides every future "should X be swappable" debate; event spine, tenancy/permission model, entitlements, manifest are never adapters (§5.7) |
 | 19 | 2026-07-12 | Engine composition = star topology: engines talk only to the kernel (opaque refs, events, vertical-owned orchestration); chatty engine pairs merge into one engine | N kernel contracts instead of N² engine pairs (Odoo treadmill avoided); engines stay independently versionable and licensable (§3) |
 | 20 | 2026-07-12 | Platform billing/entitlements = kernel; vertical-facing invoicing = engine at most (fakturaunderlag); reskontra/ekonomisk förvaltning stays a connector boundary | Entitlements gate module loading — circular if engine-owned; §7.5 boundary holds (§6) |
+| 21 | 2026-07-12 | TypeScript end-to-end; runtime validation generated from specs at every trust boundary; portability via WinterTC standards surface + adapters, not WASM; pnpm/npm distribution, verticals on Workers for Platforms; WASM module slot kept open for hot paths | Team-independent case (§5.8): language is downstream of the runtime; the SDK boundary is the value; workload is I/O-bound and per-scope serialized; Go can't express the type thesis; agents are the primary users |
 
 ## 13. Next actions
 
