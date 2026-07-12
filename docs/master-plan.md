@@ -78,6 +78,17 @@ Verticals own everything with a user's fingerprints on it: vocabulary, extra sta
 fields, triggers, UI, pricing logic, branschprotokoll content. Design test: **if a vertical
 ever needs to fork an engine, the engine drew its line wrong.**
 
+Composition rule: **star topology — engines talk to the kernel, never to each other.**
+No engine imports or calls a sibling; composition happens through three kernel-mediated
+channels: opaque refs (attachment contracts bind to `(entity_type, entity_id)` without
+knowing what it is), events (an engine reacts to another's schema-versioned events on the
+spine — a contract, not a call), and vertical-owned orchestration (synchronous flows
+needing two engines are wired in the vertical, where the glue is visible and
+agent-editable). This keeps the semver matrix at N kernel contracts instead of N² engine
+pairs (the Odoo addon treadmill, avoided) and keeps each engine independently licensable.
+Corollary test: **if two engines need chatty synchronous communication, they are one
+engine drawn wrong** — which is why "work orders + time reporting" is one engine, not two.
+
 **Verticals**. The businesses. Branschmoduler, workflows, GTM, customer relationships.
 Owned by whoever builds and sells them (initially: the friend's companies). Built at AI
 speed on kernel + engines.
@@ -88,7 +99,11 @@ Every adjacent solution delivers guarantees as **conventions**: templates you co
 (MakerKit, ShipFast, Open SaaS), code generators that eject (Baseplate.dev — whose proudest
 feature is "zero lock-in, no runtime dependencies"), or a BaaS whose enforcement primitive
 is the very thing vibe coders misconfigure (Supabase RLS). Conventions erode with every
-LLM edit.
+LLM edit. The adjacent failure mode is **configuration**: even platforms that do enforce
+at runtime make the guarantee contingent on builder-declared rules — Supabase RLS,
+ServiceNow ACLs (2023 mass exposures from misconfigured public ACLs), Salesforce Apex
+defaulting to system mode. Chassis guarantees are defaults of the substrate, not
+configuration surfaces the builder — human or AI — can get wrong.
 
 Chassis inverts this. Generated vertical code **cannot**:
 
@@ -246,6 +261,36 @@ against Cloudflare pricing/product/deprecation risk that Iceberg-as-contract alo
 cover. The rule is testable and non-negotiable: **a module's contract tests must pass
 unchanged on both adapters, and the pure-SQLite adapter stays green in CI forever.**
 
+**The triage rule, generalized.** Three buckets, decided per capability: (1) **kernel-owned**
+— anything that is enforcement input or a contract (tenancy tree, directory, permission
+model, event schema, entitlements, attachment contracts, module manifest, the integrations
+hub itself); (2) **adapter** — infrastructure the kernel consumes, swappable behind a pure
+interface; (3) **connector** — third-party capability *tenants* use, living in the
+integrations hub (Fortnox, BankID-sign, EDI). The full adapter set beyond storage:
+
+- **Identity** and **permission evaluation** (decision 16).
+- **Billing provider** — the identity split repeated: entitlements are kernel-owned
+  (enforcement input); the payment rails are an adapter, Stripe default. Matters here
+  concretely: Swedish B2B often pays by invoice, so a Fortnox-invoicing rail must be
+  mountable without touching entitlements.
+- **Model providers (AI gateway)** — per-tenant swappable (Workers AI / Anthropic / OpenAI /
+  EU-hosted); the governance (metering, PII rules, audit) is kernel, the model is not.
+  Also the sovereignty answer for AI features.
+- **Key management** — crypto-shredding (§5.3) is kernel machinery; where keys live
+  (CF secrets / cloud KMS / local encrypted store) is an adapter. GDPR erasure claims are
+  only as credible as the key store's independence.
+- **Telemetry** — OpenTelemetry is the contract; the APM vendor (Datadog/Sentry/Better
+  Stack) is an adapter. Spec-first (§5.6) applied to ops.
+- **Notification transports** — dispatch, templates, preferences are kernel; the
+  email/SMS/push provider is an adapter, per-tenant selectable (enterprise tenants will
+  demand their own SMTP/SES).
+- **Search backends** — the search contract is kernel; FTS (SQLite FTS5 / D1) and vector
+  index (Vectorize / sqlite-vec) are adapters, already implied by the two-adapter rule.
+
+What must **never** become an adapter: the event spine, tenancy/permission model,
+entitlements, and the module manifest — those are the product. Swapping them out is
+called "not using Chassis."
+
 ## 6. Kernel components and build/buy
 
 Principle: **build contracts and control planes, buy engines.** Build what is the moat and
@@ -253,23 +298,30 @@ what nobody sells in the needed shape; adopt substrate everywhere else.
 
 | Component | Call | Notes |
 |---|---|---|
-| Identity / auth | **Have** | Our auth platform. Extend: end-user identity (boende, styrelse, consumers) as first-class, BankID-heavy. |
-| Permissions | **Build (small)** | Role @ node in tenancy tree + capability grants, in the auth platform's org layer. Check-API shaped so OpenFGA could swap in later. Decide model now — near-impossible to retrofit. |
+| Identity / auth | **Adapter (ours default)** | Authentication is a swappable identity adapter (OIDC-shaped); our auth platform is the reference implementation and default (dogfooding + §5.1 product synergy). The kernel owns the directory and tenancy tree — identity providers authenticate people, they never own org structure. Extend: end-user identity (boende, styrelse, consumers) as first-class, BankID-heavy. |
+| Permissions | **Build model, adapt engine** | Role @ node in tenancy tree + capability grants. The **model** is kernel-owned — it is enforcement input, never delegated to an auth provider. The **evaluation engine** is an adapter: small built-in default, OpenFGA-swappable behind the same check API. Decide model now — near-impossible to retrofit. |
 | Nested tenancy + provisioning | **Build** | The crown jewel. Directory/registry, per-scope storage, migration orchestration, reconciliation. Largely exists from the auth platform. |
 | Module system | **Build (thin)** | Manifest (migrations, permissions, events, extension points), entitlement flags, attachment contracts. Mostly conventions. |
 | Integrations framework | **Build** | Connection store + token refresh, connector interface, webhook ingress (signatures, replay protection), outbox with idempotent retries, per-tenant config + health. Steal Nango's interface design; own it for EU sovereignty. Connectors accrete per vertical need: Fortnox, Visma, BankID, Swish, Peppol, Kivra, fastAPI, EDI (Ahlsell/Rexel/Sonepar). |
-| Documents + metadata | **Build** | Our document product's engine promoted to a service: R2 + versioning + Vectorize search + retention policies + tenancy-tree permissions. |
+| Documents + metadata | **Extract, then re-platform the source** | Our document product's engine extracts into the kernel service (R2 + versioning + Vectorize search + retention + tenancy-tree permissions); the product then re-platforms onto the kernel piecemeal (the POSCo pattern) and becomes kernel consumer #2 — proving the contracts on a collaboration-shaped product and exercising Shape A, realtime, and search. Never the reverse: documents behind an external product's own permission regime would be a second enforcement system — the exact leak the kernel exists to prevent. |
 | Events / audit / reporting | **Build spine, buy engines** | Event contract (schema-versioned, tenant-tagged, PII-classified), Pipelines→Iceberg, query gateway. Audit log is a product feature, not just ops. |
 | Workflows | **Adopt + conventions** | Cloudflare Workflows for durable execution; kernel adds module-owned definitions, human-approval steps, event emission. **No visual BPMN builder — tarpit.** |
 | Jobs & scheduling | **Adopt + conventions** | Queues, cron; per-tenant scheduling conventions. |
-| Notifications | **Buy transport, build dispatch** | Resend/SES, Nordic SMS (46elks-class); per-tenant templates, preferences, delivery tracking. |
-| Billing & entitlements | **Buy billing, build entitlements** | Stripe; entitlements coupled to module system + orchestrator. |
+| Notifications | **Buy transport, build dispatch** | Transport is an adapter, per-tenant selectable (Resend/SES, Nordic SMS 46elks-class); kernel owns dispatch, templates, preferences, delivery tracking (§5.7). |
+| Billing & entitlements | **Buy billing, build entitlements** | Three billings, three layers: (1) platform billing = kernel — entitlements are enforcement input (they gate module loading; an engine can't gate the system that loads engines), billing rail is an adapter (Stripe default, Fortnox-invoice rail for Swedish B2B, §5.7); (2) verticals billing their customers = engine territory at most (fakturaunderlag engine per §8.4; reskontra/avisering stays out per §7.5 boundary — Fortnox/Visma connectors); (3) end-customer payments = vertical domain + payment connectors (Swish, cards). |
 | GDPR machinery | **Build** | DSAR export, crypto-shredding erasure, retention policies. Nobody sells it in this shape; a genuine selling point in these markets. |
 | Import / migration tooling | **Build** | Staging, mapping, validation, dry-run. Every förvaltar-OS sale is a migration out of Vitec/Fast2/the FSM vendor — turn the biggest sales barrier into onboarding. |
+| Search | **Build (thin)** | Tenant-scoped, cross-module: modules register searchable entities via the attachment contract; FTS in scope SQLite/D1 + Vectorize for semantic; permission filtering applied to results at the gateway. Table stakes in every B2B app; retrofit is ugly. |
+| Document generation + e-sign | **Build generation, buy signing** | Templated PDFs (protokoll, fakturaunderlag, styrelserapporter) as a service over the documents engine; e-signing via BankID-sign/Scrive-class connector; signed artifacts immutable, evidence stored. The verticals' *outputs are signed documents* — this is not optional. |
+| Mobile field capture (offline) | **Build (scoped hard)** | Offline-first for **append-only capture flows only** — time entries, checklist ticks, photos, notes — as a mutation queue of event-shaped writes replayed into the scope DO. No general offline CRUD (sync/conflict tarpit). Binds the data design day one: capture flows must be event-shaped. |
+| Inbound channels | **Build ingress, buy parsing** | Email-to-ärende (felanmälan), per-tenant/scope addresses, attachment capture; SMS later. Ticketing table stakes; notifications row is outbound-only without this. |
+| AI gateway | **Build gateway, buy models** | Verticals will ship AI features (summarize ärende history, draft replies, RAG over scope documents — Vectorize already there). Kernel provides the governed path: per-tenant metering, PII rules from the event classification, audited AI actions. The 2026 expectation (Retool Agents, Agentforce) and a natural §9 usage meter. |
+| Realtime | **Adopt (DO-native)** | Subscription contract (WebSocket/SSE) on scope DOs — portals and dispatch boards get live updates nearly free on this architecture; make it a contract, not an accident. |
+| Platform ops console | **Build (internal first)** | Registry/tenant health UI, migration + reconciliation status, billing state, consented **and audited** support impersonation (view-as-user, §7.8). Needed internally regardless; later it's the enterprise admin story. |
 | API surface | **Build (cheap early)** | Per-tenant keys, rate limits, signed outbound webhooks. Spec-first: TypeSpec→OAS; events ship AsyncAPI (§5.6). |
 | App shell + design system | **Build shell, buy components** | Login/SSO, org/scope switcher, permission-aware nav, settings, members, audit viewer, notifications, connector UI. **Not** a dashboard framework — that's Retool, a whole company. End-user dashboards: chart components over saved gateway queries; resist configurability until a customer pays for it. |
 | Localization | **Build day one** | sv/no/da/en. Retrofits are miserable; the FSM vendor ships three languages. |
-| Observability per tenant | **Convention** | tenant/scope IDs on every trace and error (Datadog/Sentry/Better Stack exist). |
+| Observability per tenant | **Convention + adapter** | OpenTelemetry is the contract; tenant/scope IDs on every trace and error; APM vendor swappable (Datadog/Sentry/Better Stack) (§5.7). |
 | Feature flags | **Adopt** | On entitlements, or GrowthBook. |
 
 Sequencing discipline: **kernel work is never more than one step ahead of a vertical that
@@ -290,10 +342,31 @@ buyers; only products built on it do. Hence: **Chassis is an internal architectu
 investment justified by owned verticals, with category optionality on top** — the auth-platform
 playbook.
 
+Stated against the strongest incumbents rather than the weakest: the market today forces a
+three-way choice — **governance without code** (LCAP: safe, but proprietary visual models,
+agent-hostile, internal-app-shaped, $36k+/yr entry), **code without governance**
+(BaaS/boilerplates/prompt-to-app: agent-friendly, but every catastrophic mistake is yours),
+or **both, at enterprise prices, inside a walled garden** (Salesforce/ServiceNow). Nobody
+sells governance as a runtime substrate **under code you own**, agent-first, shaped for
+multi-tenant vertical SaaS, in the EU. That intersection is the category.
+
 ### 7.2 Nearest neighbors and why they aren't this
 
-- **Prompt-to-app** (Lovable, Bolt, Replit, Base44, Emergent): generate the dangerous parts
-  instead of standing on hardened ones. The 70% problem is their structural ceiling.
+- **Prompt-to-app** (Lovable, Bolt, Replit, Emergent): generate the dangerous parts
+  instead of standing on hardened ones. The 70% problem is their structural ceiling — made
+  concrete by CVE-2025-48757: ~10% of analyzed Lovable apps had tables readable via the
+  public anon key, 170+ exposing PII
+  ([analysis](https://www.superblocks.com/blog/lovable-vulnerabilities)). Their remedy
+  (security *scanning*) checks that policies exist, not that they hold — convention-checking,
+  §4's point.
+- **Base44 (Wix)**: the partial exception among AI-natives — auth, roles, and row-level
+  security are **platform primitives enforced at runtime**, not generated code. Nearest
+  AI-native articulation of the Chassis model, and proof the idea is in the air. But:
+  single-app-shaped (no tenancy tree, no engines, no B2B SaaS shape), weakest portability
+  in the field (exported frontends die without the Base44 SDK), inside Wix — and the
+  platform's own auth was bypassed in 2025
+  ([Wiz](https://www.wiz.io/blog/critical-vulnerability-base44)). Validates the category;
+  doesn't occupy it.
 - **Templates/boilerplates** (MakerKit, ShipFast, Open SaaS, Bullet Train): closest
   articulation of "LLM-friendly foundation," but guarantees are conventions that erode with
   every edit; no nested tenancy, no provisioning, no engines; $199–649 one-time economics
@@ -303,6 +376,22 @@ playbook.
   and proudly **ejectable** ("no runtime dependencies"). The exact opposite pole: they
   generate the foundation and leave; we are the foundation and stay. Cleanest contrast for
   positioning.
+- **Enterprise low-code (LCAP)** (OutSystems, Mendix, Appian, Power Apps, ServiceNow App
+  Engine): the strongest existing answer — they genuinely solve permissions, audit,
+  governance, and compliance as a hosted platform, and their pricing proves the
+  willingness to pay ([OutSystems from ~$36k/yr entry, enterprise $100k+](https://www.outsystems.com/pricing-and-editions/);
+  [Mendix from ~€52.50/user/mo](https://www.mendix.com/pricing/);
+  [Power Apps $20/user/mo](https://www.microsoft.com/en-us/power-platform/products/power-apps/pricing)).
+  But all of it lives **inside a proprietary visual model**: agent-hostile (AI copilots
+  generate into the model, deepening lock-in), internal-app-shaped (no nested tenancy for
+  *selling* SaaS), US-owned clouds, and no code ownership. Their existence is demand
+  evidence for the kernel; their entry pricing is the ceiling anchor for kernel fees.
+  Even the best tenancy in the class — OutSystems O11's automatic per-tenant query
+  filtering — is single-level and absent from their strategic successor (ODC); and none
+  has a usable eject (OutSystems' one-way .NET detach yields code nobody maintains).
+- **Governed AI internal tools** (Superblocks "Clark", Retool AI): closest philosophical
+  neighbor — platform-level governance applied to AI-generated apps — but internal-tools
+  shaped, runtime-locked, US-hosted.
 - **BaaS** (Supabase, Convex): app-shaped, not vertical-SaaS-shaped; Supabase's enforcement
   primitive (RLS) is precisely the vibe-coding foot-gun.
 - **Salesforce / ServiceNow**: proof the category works at the top of the market — now with
@@ -315,8 +404,11 @@ playbook.
 
 Runtime enforcement instead of conventions · nested B2B tenancy as first-class · hardened
 domain engines (nobody ships a work-order engine as a platform module — platform companies
-lack the vertical operators to derive them from) · EU data sovereignty (a real purchasing
-criterion in our markets; unaddressed by US builders) · operator-anchored proof (others demo
+lack the vertical operators to derive them from) · EU data sovereignty at SME price points
+(a real purchasing criterion in our markets; the hyperscaler platforms now sell EU
+residency — Microsoft EU Data Boundary, Salesforce Hyperforce EU — but only at enterprise
+prices inside their runtimes; the developer/SME layer — Retool, Replit, the AI-natives —
+stays US-default) · operator-anchored proof (others demo
 todo apps; we demo a förvaltningsbolag running five offices).
 
 ### 7.4 Convergence risks
@@ -326,6 +418,16 @@ primitives from below; Salesforce descending downmarket with AI. Durable ground:
 architecture + compliance machinery + vertical depth is a **trust** moat, not a capability
 moat — model improvements don't erode it (same reason auth didn't stop being a product when
 LLMs learned OAuth).
+
+The convergence layer is also a **latent channel**: Chassis as the backend prompt-to-app
+tools generate against. Not as a general Supabase replacement — the median prompt-to-app
+app has no tenants, and unopinionated wins there — but for their B2B slice, whose failures
+(§2) are exactly what the kernel enforces. The option costs nothing to keep alive: the
+integration surface a Lovable-class tool needs is the same manifest + specs + MCP loop
+already being built for Claude Code (§5.6). Strictly post-operator-proof optionality, not
+a case; it would also require a self-serve tier and support surface the vertical play
+doesn't. The vibe-code-hardening consultancies may be the cheaper first channel ("migrate
+your Lovable app onto Chassis" as their remediation product).
 
 ### 7.5 Vertical market notes (gathered en route)
 
@@ -413,6 +515,55 @@ vertical's problem. Consequences:
 The portfolio statement of the same fact: **no single niche vertical can justify building
 the foundation; a portfolio of them can — but only if the foundation is shared.** That is
 the chassis business.
+
+### 7.8 Lessons worth stealing from the field
+
+Product mechanics to adopt:
+
+- **"View as user" everywhere** (Appian's security preview): permission trees are only
+  debuggable if an admin can render any screen as any role @ any node. Build into the app
+  shell and as an MCP tool ("show what boende X sees in scope Y") — also the single best
+  demo prop for the permission model.
+- **Ambient tenancy, zero-argument** (OutSystems O11): the vertical never passes
+  tenant/scope IDs — context is ambient in the RPC stub. O11 proves the ergonomics work;
+  its successor *dropping* the feature proves substrate tenancy can't be a bolt-on — it is
+  the kernel's reason to exist.
+- **One reviewable security surface** (Base44's dashboard, done right): the §4 human
+  checkpoint needs permission changes rendered as one human-readable diff — who gains
+  what, where in the tree — not a scattered code review.
+- **Agents never touch prod** (Replit's deleted-production-database incident): preview
+  scopes with seeded data as a kernel primitive; agents build and test there by default;
+  per-scope PITR (§5.2) makes rollback structural rather than heroic.
+- **Governance at generation time too** (Superblocks' Clark): runtime enforcement stays
+  the moat, but the scaffolder should inject security defaults, the design system, and
+  conventions at generation so agents *start* compliant instead of iterating against
+  rejections. Cheap for us — it's skills + templates (§5.6).
+
+Commercial lessons:
+
+- **Audit is default-on; compliance-grade audit is the SKU** (Salesforce Shield runs
+  ~10–30% of net spend): never charge for the audit log existing (§9's usage rule);
+  charge for long retention, field history, SIEM export, DSAR tooling.
+- **Never meter platform-native growth** (ServiceNow's custom-table true-up trap):
+  per-table/per-config pricing punishes exactly the adoption the platform wants.
+- **Anti-anchor for end-user pricing** (Power Pages at $200/site/mo per 100 authenticated
+  users): per-external-user metering is why enterprise portals stay unadopted; §9's
+  bundled-MAU stance is the counter-position.
+- **Trust page early** (trust.retool.com / trust.lovable.dev; Lovable shipped SOC 2 + ISO
+  27001 within a year of its CVE): publish the isolation test-suite results and a
+  certification trajectory before anyone asks — the trust moat (§7.4) needs visible
+  machinery, and the bar for "credible young platform" is now roughly one year to SOC 2.
+- **Eject stories are fake everywhere** (OutSystems' one-way detach, Base44 exports that
+  die without the SDK): the field has trained buyers to disbelieve portability claims —
+  which makes a demonstrably real exit (AGPL + pure-SQLite adapter, §5.7/§9) rare
+  positioning. Demo the eject the way we demo the tenant-boundary failure.
+
+Architecture, for later:
+
+- **Control-plane/data-plane split** (Superblocks' on-prem agent executing queries inside
+  the customer's VPC): a data plane in an EU-sovereign or customer environment under a
+  SaaS control plane is the eventual answer if "EU regions on US clouds" stops satisfying
+  buyers (§7.3). The adapter rule (§5.7) keeps this reachable without redesign.
 
 ## 8. Concrete cases and sequencing
 
@@ -581,6 +732,15 @@ now; a negotiation after PropCo runs on it.
 - Which Nordic SMS + email providers (transport buy list).
 - Techy friend: advisor, collaborator, or competitor? Decide what role the RFC recruits for.
 - Public brand trademark/domain pass for "Chassis" before launch (Groundplane as fallback).
+- Prompt-to-app channel (§7.4): if/when the demo exists, which entry first — a builder
+  integration (Lovable/Bolt-class), Claude Code templates, or hardening consultancies as
+  resellers? What would a self-serve tier have to cost?
+- Offline scope for fältpersonal (case 1): which flows must actually work offline
+  (basements, machine rooms), and is append-only capture sufficient? Binds the
+  event-shaped write design — decide with PropCo's field staff, not in the abstract.
+- Document-product re-platforming (decision 17): when does it start, and who owns it given
+  team spread (risk 4)? Extraction is case-1-timed; the re-platform must not become a
+  third greenfield.
 
 ## 12. Decision log
 
@@ -601,6 +761,11 @@ now; a negotiation after PropCo runs on it.
 | 13 | 2026-07-12 | Master doc = canonical; PDFs/decks are dated exports | Single source of truth (§0) |
 | 14 | 2026-07-12 | Every kernel contract ships a Cloudflare adapter **and** a pure SQLite adapter; contract tests pass on both | Auth-platform pattern; makes escrow/self-host real, hedges vendor risk, enables local dev/CI (§5.7) |
 | 15 | 2026-07-12 | Spec-first contracts: TypeSpec→OAS (HTTP), AsyncAPI (events), JSON Schema (RPC); Arazzo later; SDKs/MCP/conformance tests derived from specs | Machine-readable surface is the product interface for agent builders; principle cheap now, retrofit costly; tooling deferred per one-step-ahead rule (§5.6) |
+| 16 | 2026-07-12 | Identity = swappable adapter (our auth platform as default); tenancy tree, directory, and permission **model** are kernel-owned, never delegated; permission **evaluation** is an adapter (built-in default, OpenFGA-swappable) | Enforcement inputs must be kernel-owned or "swappable auth" is fiction; auth providers authenticate, they don't own org structure (§6) |
+| 17 | 2026-07-12 | Document product's engine **extracts into** the kernel; the product re-platforms onto the kernel piecemeal as consumer #2 — not integrated as an external document service | One permission regime over documents (two = the leak §4 prevents); proves contracts on a second shape; extraction timed by case-1 need, re-platforming opportunistic to avoid a third greenfield (§6, risk 4) |
+| 18 | 2026-07-12 | Triage rule: kernel-owned (enforcement inputs + contracts) / adapter (infra the kernel consumes: billing rails, model providers, KMS, telemetry via OTel, notification transports, search backends) / connector (capabilities tenants use, in the hub) | One test decides every future "should X be swappable" debate; event spine, tenancy/permission model, entitlements, manifest are never adapters (§5.7) |
+| 19 | 2026-07-12 | Engine composition = star topology: engines talk only to the kernel (opaque refs, events, vertical-owned orchestration); chatty engine pairs merge into one engine | N kernel contracts instead of N² engine pairs (Odoo treadmill avoided); engines stay independently versionable and licensable (§3) |
+| 20 | 2026-07-12 | Platform billing/entitlements = kernel; vertical-facing invoicing = engine at most (fakturaunderlag); reskontra/ekonomisk förvaltning stays a connector boundary | Entitlements gate module loading — circular if engine-owned; §7.5 boundary holds (§6) |
 
 ## 13. Next actions
 
