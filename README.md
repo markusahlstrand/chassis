@@ -1,5 +1,7 @@
 # Substrat
 
+[![CI](https://github.com/substrat-run/substrat/actions/workflows/ci.yml/badge.svg)](https://github.com/substrat-run/substrat/actions/workflows/ci.yml)
+
 **The hard parts, hosted.**
 
 AI made building vertical B2B software fast — except for the parts that were never about
