@@ -9,9 +9,13 @@
     "docs:dev": "pnpm --filter @chassis/docs dev",
     "docs:build": "pnpm --filter @chassis/docs build",
     "docs:preview": "pnpm --filter @chassis/docs preview",
-    "fsm-demo": "pnpm --filter @chassis-demos/fsm"
+    "fsm-demo": "pnpm --filter @chassis-demos/fsm",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm -r build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "typescript": "^5.6.0"
   },
   "pnpm": {
