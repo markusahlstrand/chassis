@@ -32,19 +32,19 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.0
         version: 1.19.14(hono@4.12.30)
-      '@substrat/adapter-sqlite':
+      '@substrat-run/adapter-sqlite':
         specifier: workspace:^
         version: link:../../packages/adapter-sqlite
-      '@substrat/contracts':
+      '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts
-      '@substrat/engine-invoicing':
+      '@substrat-run/engine-invoicing':
         specifier: workspace:^
         version: link:../../engines/invoicing
-      '@substrat/engine-workorder':
+      '@substrat-run/engine-workorder':
         specifier: workspace:^
         version: link:../../engines/workorder
-      '@substrat/kernel':
+      '@substrat-run/kernel':
         specifier: workspace:^
         version: link:../../packages/kernel
       better-sqlite3:
@@ -100,10 +100,10 @@ importers:
 
   engines/invoicing:
     dependencies:
-      '@substrat/contracts':
+      '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts
-      '@substrat/kernel':
+      '@substrat-run/kernel':
         specifier: workspace:^
         version: link:../../packages/kernel
       zod:
@@ -116,10 +116,10 @@ importers:
 
   engines/workorder:
     dependencies:
-      '@substrat/contracts':
+      '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts
-      '@substrat/kernel':
+      '@substrat-run/kernel':
         specifier: workspace:^
         version: link:../../packages/kernel
       zod:
@@ -132,17 +132,17 @@ importers:
 
   packages/adapter-sqlite:
     dependencies:
-      '@substrat/contracts':
+      '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../contracts
-      '@substrat/kernel':
+      '@substrat-run/kernel':
         specifier: workspace:^
         version: link:../kernel
       better-sqlite3:
         specifier: ^12.0.0
         version: 12.11.1
     devDependencies:
-      '@substrat/contract-tests':
+      '@substrat-run/contract-tests':
         specifier: workspace:^
         version: link:../contract-tests
       '@types/better-sqlite3':
@@ -157,10 +157,10 @@ importers:
 
   packages/contract-tests:
     dependencies:
-      '@substrat/contracts':
+      '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../contracts
-      '@substrat/kernel':
+      '@substrat-run/kernel':
         specifier: workspace:^
         version: link:../kernel
       vitest:
@@ -183,7 +183,7 @@ importers:
 
   packages/kernel:
     dependencies:
-      '@substrat/contracts':
+      '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../contracts
     devDependencies:

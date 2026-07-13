@@ -1,4 +1,4 @@
-# @substrat/adapter-sqlite
+# @substrat-run/adapter-sqlite
 
 Pure-SQLite scope host for [Substrat](https://github.com/markusahlstrand/chassis) — real
 kernel semantics with **no Cloudflare dependency**.
@@ -11,8 +11,8 @@ self-host/escrow story is literally true (single-node, but runnable).
 ## Usage
 
 ```ts
-import { SqliteScopeHost } from '@substrat/adapter-sqlite';
-import { UNSAFE_allowAllChecker } from '@substrat/kernel';
+import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
+import { UNSAFE_allowAllChecker } from '@substrat-run/kernel';
 
 const host = new SqliteScopeHost({
   dir: './data',                    // one .sqlite file per scope + _directory.sqlite
@@ -28,7 +28,7 @@ await host.close();
 ## Guarantees
 
 This adapter passes the full
-[`@substrat/contract-tests`](https://npmjs.com/package/@substrat/contract-tests) suite —
+[`@substrat-run/contract-tests`](https://npmjs.com/package/@substrat-run/contract-tests) suite —
 the same suite the Cloudflare adapter (Durable Objects) must pass unchanged:
 
 - strict per-scope serialization (concurrent read-modify-writes cannot interleave)

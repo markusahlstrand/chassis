@@ -1,4 +1,4 @@
-# @substrat/contract-tests
+# @substrat-run/contract-tests
 
 The conformance suite for [Substrat](https://github.com/markusahlstrand/chassis)
 scope-host adapters. Every adapter — pure SQLite, Cloudflare Durable Objects, and any
@@ -12,7 +12,7 @@ nothing itself. Each adapter runs the suite from its own `test/` folder.
 
 ```ts
 // packages/adapter-yours/test/contract.test.ts
-import { scopeHostContractSuite } from '@substrat/contract-tests';
+import { scopeHostContractSuite } from '@substrat-run/contract-tests';
 import { YourScopeHost } from '../src/index.js';
 
 scopeHostContractSuite('adapter-yours', async () => {

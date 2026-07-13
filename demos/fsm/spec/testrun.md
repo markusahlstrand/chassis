@@ -6,7 +6,7 @@ Status: draft v0.1 · Last updated: 2026-07-13
 > [kernel-design.md](../../../docs/design/kernel-design.md) (the contracts). This document is the
 > implementation-level spec: concrete schemas, operations, events, permissions, and the
 > scenario script — detailed enough to build and run end-to-end on
-> `@substrat/adapter-sqlite` with **no UI, no HTTP, no Cloudflare** — and to derive the
+> `@substrat-run/adapter-sqlite` with **no UI, no HTTP, no Cloudflare** — and to derive the
 > **minimum kernel API surface** (§9) the run requires.
 
 ## 1. Goal and non-goals
@@ -35,7 +35,7 @@ notifications, documents, custom fields, offline, Cloudflare adapter.
 |---|---|---|
 | `engines/workorder` | orders + time + material (one engine, D-19) | `workorder_*`, ops `workorder/*` |
 | `engines/invoicing` | fakturaunderlag | `invoicing_*`, ops `invoicing/*` |
-| `demos/fsm` (`@substrat-demos/fsm`, private) | customers, facilities, price list, orchestration | `serviceco_*`, ops `serviceco/*` |
+| `demos/fsm` (`@substrat-run/demo-fsm`, private) | customers, facilities, price list, orchestration | `serviceco_*`, ops `serviceco/*` |
 
 Workspace: `demos/*` in `pnpm-workspace.yaml`. Demo verticals live under `demos/`
 (one folder per demo, more over time — `demos/bikeshop` is next); the engines stay
@@ -282,7 +282,7 @@ that chain as the proof**. Same check against styrbjörn's order → deny.
    asserted here as "tables exist and are readable read-only".
 
 Every assertion above that touches kernel behavior (journal, delivery, proof paths,
-fail-closed) graduates into `@substrat/contract-tests` as a generic harness; the
+fail-closed) graduates into `@substrat-run/contract-tests` as a generic harness; the
 FSM-specific ones stay in the vertical's own `test/`.
 
 ## 9. Minimum kernel surface — the deliverable
@@ -339,7 +339,7 @@ distance between today's green scaffold and a running FSM.**
 2. `engines/workorder` (schemas → migrations → functions/ops → own tests).
 3. `engines/invoicing` (+ consumer; redelivery test).
 4. `demos/fsm` (+ the §8 scenario as its test suite).
-5. Promote generic assertions into `@substrat/contract-tests`.
+5. Promote generic assertions into `@substrat-run/contract-tests`.
 
 ## 11. Open items surfaced by this spec
 

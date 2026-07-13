@@ -1,5 +1,5 @@
 {
-  "name": "@substrat/kernel",
+  "name": "@substrat-run/kernel",
   "version": "0.0.1",
   "description": "Substrat kernel contracts and services — pure TypeScript, no platform imports (D-14)",
   "type": "module",
@@ -19,7 +19,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@substrat/contracts": "workspace:^"
+    "@substrat-run/contracts": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

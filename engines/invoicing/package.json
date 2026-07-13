@@ -1,5 +1,5 @@
 {
-  "name": "@substrat/engine-invoicing",
+  "name": "@substrat-run/engine-invoicing",
   "version": "0.0.1",
   "description": "Substrat engine: fakturaunderlag — consumes billable events, snapshots lines with provenance, immutable once exported",
   "type": "module",
@@ -20,8 +20,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@substrat/contracts": "workspace:^",
-    "@substrat/kernel": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
     "zod": "^3.25.0"
   },
   "devDependencies": {

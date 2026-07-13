@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { UNSAFE_allowAllChecker } from '@substrat/kernel';
-import { permissionContractSuite, scopeHostContractSuite } from '@substrat/contract-tests';
+import { UNSAFE_allowAllChecker } from '@substrat-run/kernel';
+import { permissionContractSuite, scopeHostContractSuite } from '@substrat-run/contract-tests';
 import { SqliteScopeHost } from '../src/index.js';
 
 scopeHostContractSuite('adapter-sqlite', async () => {

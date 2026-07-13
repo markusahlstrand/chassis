@@ -1,5 +1,5 @@
 {
-  "name": "@substrat/contract-tests",
+  "name": "@substrat-run/contract-tests",
   "version": "0.0.1",
   "description": "The suite every scope-host adapter must pass, forever (D-14)",
   "type": "module",
@@ -19,8 +19,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@substrat/kernel": "workspace:^",
-    "@substrat/contracts": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
     "vitest": "^3.0.0"
   },
   "devDependencies": {

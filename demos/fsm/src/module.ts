@@ -8,14 +8,14 @@ import {
   permissionKey,
   type EntityRef,
   type Money,
-} from '@substrat/contracts';
+} from '@substrat-run/contracts';
 import {
   assertAllowed,
   ulid,
   type ModuleRegistration,
   type OperationContext,
   type OperationHandler,
-} from '@substrat/kernel';
+} from '@substrat-run/kernel';
 import {
   completeWorkOrder,
   createWorkOrder,
@@ -24,7 +24,7 @@ import {
   PERM as WO,
   type BillableLine,
   type WorkOrder,
-} from '@substrat/engine-workorder';
+} from '@substrat-run/engine-workorder';
 
 // ============================================================================
 // The ServiceCo vertical (spec/testrun.md §5.1): customers, facilities, the
@@ -38,7 +38,7 @@ export const SC_PERM = {
 };
 
 export const servicecoManifest = moduleManifest.parse({
-  id: '@substrat-demos/fsm',
+  id: '@substrat-run/demo-fsm',
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [

@@ -9,14 +9,14 @@ import {
   permissionKey,
   type EntityRef,
   type Money,
-} from '@substrat/contracts';
+} from '@substrat-run/contracts';
 import {
   assertAllowed,
   ulid,
   type ModuleRegistration,
   type OperationContext,
   type OperationHandler,
-} from '@substrat/kernel';
+} from '@substrat-run/kernel';
 
 // ============================================================================
 // The work-order engine (demos/fsm/spec/testrun.md §4.2/§5.2). Owns the state
@@ -34,7 +34,7 @@ export const PERM = {
 };
 
 export const workorderManifest = moduleManifest.parse({
-  id: '@substrat/engine-workorder',
+  id: '@substrat-run/engine-workorder',
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [

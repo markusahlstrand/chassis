@@ -35,7 +35,7 @@ that's the escrow story, live. Delete `.data/` to reseed.
   [spec/testrun.md](spec/testrun.md)
 - **View specifications:** [spec/views.md](spec/views.md)
 
-`pnpm --filter @substrat-demos/fsm test` runs the headless nine-step scenario from
+`pnpm --filter @substrat-run/demo-fsm test` runs the headless nine-step scenario from
 spec/testrun.md §8.
 
 Demo verticals under `demos/` are private and never published. The engines they consume

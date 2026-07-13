@@ -12,7 +12,7 @@ to retrofit — which is why it's kernel-owned and first-class rather than a con
 ## The entities
 
 ```ts
-import { tenant, scope } from '@substrat/contracts';
+import { tenant, scope } from '@substrat-run/contracts';
 
 type Tenant = {
   id: TenantId;          // branded ULID

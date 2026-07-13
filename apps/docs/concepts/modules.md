@@ -4,7 +4,7 @@ Engines and verticals join a scope host the same way: as **modules**. A module i
 registration object bundling a manifest, migrations, operations, and event consumers:
 
 ```ts
-import type { ModuleRegistration } from '@substrat/kernel';
+import type { ModuleRegistration } from '@substrat-run/kernel';
 
 const registration: ModuleRegistration = {
   manifest,      // self-describing metadata (validated Zod document)
@@ -20,11 +20,11 @@ host.registerModule(registration);
 
 The manifest is what makes a module **self-describing** — to the kernel that loads it,
 to the app shell that renders it, and to the agents that build on it. It's a Zod-validated
-document (`moduleManifest` in `@substrat/contracts`):
+document (`moduleManifest` in `@substrat-run/contracts`):
 
 ```ts
 export const workorderManifest = moduleManifest.parse({
-  id: '@substrat/engine-workorder',
+  id: '@substrat-run/engine-workorder',
   version: '0.0.1',
   kernelContract: '^0.0.1',          // semver range of the kernel API it targets
   permissions: [

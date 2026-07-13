@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import type { ScopeStub } from '@substrat/kernel';
-import type { WorkOrder, BillableLine } from '@substrat/engine-workorder';
+import type { ScopeStub } from '@substrat-run/kernel';
+import type { WorkOrder, BillableLine } from '@substrat-run/engine-workorder';
 import { buildDemoHost, seedDemo, type DemoWorld } from '../src/index.js';
-import type { SqliteScopeHost } from '@substrat/adapter-sqlite';
+import type { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 
 /**
  * The nine-step scenario from spec/testrun.md §8 — the headless end-to-end
@@ -41,9 +41,9 @@ describe('FSM demo scenario (spec §8)', () => {
       .all() as { module_id: string }[];
     db.close();
     expect(rows.map((r) => r.module_id)).toEqual([
-      '@substrat-demos/fsm',
-      '@substrat/engine-invoicing',
-      '@substrat/engine-workorder',
+      '@substrat-run/demo-fsm',
+      '@substrat-run/engine-invoicing',
+      '@substrat-run/engine-workorder',
     ]);
   });
 

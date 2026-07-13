@@ -93,7 +93,7 @@ fields, the price-list + avtal tables and the pricing hook, role *definitions* f
 personas (office-admin, technician, customer), screens (dispatch list, technician
 mobile capture form, customer portal page, fakturaunderlag review), and the manifest
 wiring both engines + Fortnox stub. Screens compose via the manifest `ui` contributions
-into `@substrat/shell` (shadcn-admin seed) per kernel-design §7.4 — the engines ship
+into `@substrat-run/shell` (shadcn-admin seed) per kernel-design §7.4 — the engines ship
 default headless-first screens; the demo vertical uses them copy-and-own. **No raw DB, no fetch, no event forging — lint and
 the contract surface make the vertical boring by construction.** The v2 bike-shop skin
 replaces vocabulary, price list, and screens only.

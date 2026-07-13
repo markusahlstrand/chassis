@@ -68,10 +68,10 @@ function guideSidebar() {
     {
       text: 'Package reference',
       items: [
-        { text: '@substrat/contracts', link: '/reference/contracts' },
-        { text: '@substrat/kernel', link: '/reference/kernel' },
-        { text: '@substrat/adapter-sqlite', link: '/reference/adapter-sqlite' },
-        { text: '@substrat/contract-tests', link: '/reference/contract-tests' },
+        { text: '@substrat-run/contracts', link: '/reference/contracts' },
+        { text: '@substrat-run/kernel', link: '/reference/kernel' },
+        { text: '@substrat-run/adapter-sqlite', link: '/reference/adapter-sqlite' },
+        { text: '@substrat-run/contract-tests', link: '/reference/contract-tests' },
       ],
     },
   ];

@@ -1,5 +1,5 @@
 {
-  "name": "@substrat/contracts",
+  "name": "@substrat-run/contracts",
   "version": "0.0.1",
   "description": "Substrat kernel contract schemas — Zod is the source of truth (master plan D-22); OAS/JSON Schema are emitted artifacts",
   "type": "module",

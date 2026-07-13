@@ -14,7 +14,7 @@ import type {
   ScopeId,
   StorageShape,
   TenantId,
-} from '@substrat/contracts';
+} from '@substrat-run/contracts';
 
 /**
  * The scope-host contract — the adapter seam (§5.1 of the design doc).

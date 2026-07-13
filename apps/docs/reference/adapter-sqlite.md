@@ -1,4 +1,4 @@
-# @substrat/adapter-sqlite
+# @substrat-run/adapter-sqlite
 
 The **pure-SQLite scope host** — real kernel semantics with no Cloudflare dependency.
 One SQLite file per scope, a per-scope actor for strict serialization, a directory
@@ -8,14 +8,14 @@ It is **not a mock**: it is the adapter local development and CI run on, and the
 the self-host/escrow story is literally true (single-node, but runnable).
 
 ```sh
-pnpm add @substrat/adapter-sqlite
+pnpm add @substrat-run/adapter-sqlite
 ```
 
 ## Usage
 
 ```ts
-import { SqliteScopeHost } from '@substrat/adapter-sqlite';
-import { UNSAFE_allowAllChecker } from '@substrat/kernel';
+import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
+import { UNSAFE_allowAllChecker } from '@substrat-run/kernel';
 
 const host = new SqliteScopeHost({
   dir: './data',                    // one .sqlite file per scope + _directory.sqlite
@@ -39,7 +39,7 @@ await host.close();
 | stamped event envelopes | outbox table written in the same transaction | same, drained to the event spine |
 
 This adapter passes the full
-[`@substrat/contract-tests`](/reference/contract-tests) suite — the same suite the
+[`@substrat-run/contract-tests`](/reference/contract-tests) suite — the same suite the
 Cloudflare adapter must pass unchanged.
 
 ## Debugging is opening a file

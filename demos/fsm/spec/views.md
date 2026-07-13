@@ -34,7 +34,7 @@ Cross-cutting improvements applied to *every* view, then not repeated:
   `ProofPopover` shows the tuple chain. "View as user" is a shell toggle (§7.8).
 - **i18n keys day one** (sv/en for the demo); dark mode via theme tokens.
 
-## 1. Office shell (desktop, `@substrat/shell`)
+## 1. Office shell (desktop, `@substrat-run/shell`)
 
 ### 1.1 Work order list — `/workorders` · `workorder:read` · **v0**
 

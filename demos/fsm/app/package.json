@@ -1,5 +1,5 @@
 {
-  "name": "@substrat-demos/fsm-app",
+  "name": "@substrat-run/demo-fsm-app",
   "version": "0.0.1",
   "private": true,
   "type": "module",

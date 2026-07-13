@@ -1,4 +1,4 @@
-# @substrat/contracts
+# @substrat-run/contracts
 
 Contract schemas for the [Substrat](https://github.com/markusahlstrand/chassis) kernel —
 the hard parts of vertical B2B SaaS (tenancy, permissions, audit, GDPR), hosted and
@@ -26,7 +26,7 @@ package, never hand-maintained beside it.
 ## Usage
 
 ```ts
-import { scope, domainEventInput, tenantId } from '@substrat/contracts';
+import { scope, domainEventInput, tenantId } from '@substrat-run/contracts';
 
 const s = scope.parse(row);            // validated, branded Scope
 const t: TenantId = tenantId.parse(x); // a ScopeId will not typecheck here
@@ -42,11 +42,11 @@ domainEventInput.parse({
 
 ## Related packages
 
-- [`@substrat/kernel`](https://npmjs.com/package/@substrat/kernel) — the behavioral
+- [`@substrat-run/kernel`](https://npmjs.com/package/@substrat-run/kernel) — the behavioral
   interfaces (`ScopeHost`, `OperationContext`) built on these shapes
-- [`@substrat/adapter-sqlite`](https://npmjs.com/package/@substrat/adapter-sqlite) — the
+- [`@substrat-run/adapter-sqlite`](https://npmjs.com/package/@substrat-run/adapter-sqlite) — the
   pure-SQLite reference implementation
-- [`@substrat/contract-tests`](https://npmjs.com/package/@substrat/contract-tests) — the
+- [`@substrat-run/contract-tests`](https://npmjs.com/package/@substrat-run/contract-tests) — the
   conformance suite every adapter must pass
 
 ## Status

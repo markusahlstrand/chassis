@@ -1,10 +1,10 @@
 ---
-'@substrat/contracts': minor
-'@substrat/kernel': minor
-'@substrat/adapter-sqlite': minor
-'@substrat/contract-tests': minor
-'@substrat/engine-workorder': minor
-'@substrat/engine-invoicing': minor
+'@substrat-run/contracts': minor
+'@substrat-run/kernel': minor
+'@substrat-run/adapter-sqlite': minor
+'@substrat-run/contract-tests': minor
+'@substrat-run/engine-workorder': minor
+'@substrat-run/engine-invoicing': minor
 ---
 
 First end-to-end feature set: the kernel deltas that carry a running vertical.
@@ -23,6 +23,6 @@ First end-to-end feature set: the kernel deltas that carry a running vertical.
   delivery journal and system-actor consumer contexts.
 - **contract-tests**: atomicity, migration-journal, dispatch exactly-once, and tuple
   permission suites — every adapter must pass all of them unchanged.
-- **Engines**: first releases of `@substrat/engine-workorder` (state machine, append-only
-  time/material, fat completion events) and `@substrat/engine-invoicing` (event-consuming
+- **Engines**: first releases of `@substrat-run/engine-workorder` (state machine, append-only
+  time/material, fat completion events) and `@substrat-run/engine-invoicing` (event-consuming
   snapshot fakturaunderlag with provenance, immutable once exported).

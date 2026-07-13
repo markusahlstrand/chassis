@@ -1,5 +1,5 @@
 {
-  "name": "@substrat/engine-workorder",
+  "name": "@substrat-run/engine-workorder",
   "version": "0.0.1",
   "description": "Substrat engine: work orders + time + material — one engine, one state machine, append-only reporting",
   "type": "module",
@@ -20,8 +20,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@substrat/contracts": "workspace:^",
-    "@substrat/kernel": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
     "zod": "^3.25.0"
   },
   "devDependencies": {

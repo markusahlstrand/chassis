@@ -1,6 +1,6 @@
 # Work-order engine
 
-`@substrat/engine-workorder` — one engine covering **work orders, time reporting, and
+`@substrat-run/engine-workorder` — one engine covering **work orders, time reporting, and
 material reporting**. One state machine, append-only reporting, and a billable snapshot
 at completion. It deliberately knows nothing about pricing (the vertical's job) or
 invoicing (a sibling engine, reached only via events).
@@ -119,7 +119,7 @@ in-scope functions — `createWorkOrder`, `completeWorkOrder`, `listOrders`,
 permission check):
 
 ```ts
-import { createWorkOrder, PERM } from '@substrat/engine-workorder';
+import { createWorkOrder, PERM } from '@substrat-run/engine-workorder';
 
 host.defineOperation('acme/felanmalan-to-order', async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.create));

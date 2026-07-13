@@ -98,7 +98,7 @@ unrepresentable. This powers:
 The standard first line of every operation:
 
 ```ts
-import { assertAllowed } from '@substrat/kernel';
+import { assertAllowed } from '@substrat-run/kernel';
 
 const handler: OperationHandler<Input, Output> = async (ctx, input) => {
   assertAllowed(await ctx.check('workorder:read', orderRef(input.orderId)));

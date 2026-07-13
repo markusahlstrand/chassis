@@ -8,8 +8,8 @@ import {
   type PrincipalId,
   type RelationTuple,
   type RoleDefinition,
-} from '@substrat/contracts';
-import type { PermissionChecker } from '@substrat/kernel';
+} from '@substrat-run/contracts';
+import type { PermissionChecker } from '@substrat-run/kernel';
 
 /**
  * The built-in constrained relationship-tuple evaluator (design doc §4.2,

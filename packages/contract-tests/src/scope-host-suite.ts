@@ -8,8 +8,8 @@ import {
   type PrincipalId,
   type ScopeId,
   type TenantId,
-} from '@substrat/contracts';
-import { ulid, type OperationHandler, type ScopeHost } from '@substrat/kernel';
+} from '@substrat-run/contracts';
+import { ulid, type OperationHandler, type ScopeHost } from '@substrat-run/kernel';
 
 const testModManifest = moduleManifest.parse({
   id: '@test/mod',

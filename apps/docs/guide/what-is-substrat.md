@@ -78,12 +78,12 @@ Substrat is pre-release (0.x). What exists today:
 
 | Piece | Package | Status |
 |---|---|---|
-| Contract schemas (Zod, source of truth) | [`@substrat/contracts`](/reference/contracts) | Working |
-| Kernel interfaces (scope host, permission checker) | [`@substrat/kernel`](/reference/kernel) | Working |
-| Pure-SQLite scope host (local dev, CI, self-host) | [`@substrat/adapter-sqlite`](/reference/adapter-sqlite) | Working |
-| Adapter conformance suite | [`@substrat/contract-tests`](/reference/contract-tests) | Working |
-| Work-order engine | [`@substrat/engine-workorder`](/engines/workorder) | Seed |
-| Invoicing engine | [`@substrat/engine-invoicing`](/engines/invoicing) | Seed |
+| Contract schemas (Zod, source of truth) | [`@substrat-run/contracts`](/reference/contracts) | Working |
+| Kernel interfaces (scope host, permission checker) | [`@substrat-run/kernel`](/reference/kernel) | Working |
+| Pure-SQLite scope host (local dev, CI, self-host) | [`@substrat-run/adapter-sqlite`](/reference/adapter-sqlite) | Working |
+| Adapter conformance suite | [`@substrat-run/contract-tests`](/reference/contract-tests) | Working |
+| Work-order engine | [`@substrat-run/engine-workorder`](/engines/workorder) | Seed |
+| Invoicing engine | [`@substrat-run/engine-invoicing`](/engines/invoicing) | Seed |
 | Cloudflare adapter (Durable Objects, production) | — | Planned |
 
 Interfaces change without notice until the first vertical ships.

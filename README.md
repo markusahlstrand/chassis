@@ -23,9 +23,9 @@ We build the substrate. You build the verticals.
 
 ## Status
 
-Kernel scaffold under way: `@substrat/contracts` (Zod contracts — the source of truth),
-`@substrat/kernel` (contract interfaces), `@substrat/adapter-sqlite` (pure-SQLite scope
-host), and `@substrat/contract-tests` (the suite every adapter must pass). Run
+Kernel scaffold under way: `@substrat-run/contracts` (Zod contracts — the source of truth),
+`@substrat-run/kernel` (contract interfaces), `@substrat-run/adapter-sqlite` (pure-SQLite scope
+host), and `@substrat-run/contract-tests` (the suite every adapter must pass). Run
 `pnpm install && pnpm test`.
 
 The canonical planning document is [docs/master-plan.md](docs/master-plan.md) —

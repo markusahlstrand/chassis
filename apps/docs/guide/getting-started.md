@@ -13,10 +13,10 @@ without notice until the first vertical ships.
 ## Install
 
 ```sh
-pnpm add @substrat/kernel @substrat/contracts @substrat/adapter-sqlite zod
+pnpm add @substrat-run/kernel @substrat-run/contracts @substrat-run/adapter-sqlite zod
 ```
 
-`@substrat/adapter-sqlite` uses [better-sqlite3](https://www.npmjs.com/package/better-sqlite3),
+`@substrat-run/adapter-sqlite` uses [better-sqlite3](https://www.npmjs.com/package/better-sqlite3),
 a native module. With pnpm 10+, allow its build script:
 
 ```jsonc
@@ -31,9 +31,9 @@ a native module. With pnpm 10+, allow its build script:
 ## 1. Create a host and provision a scope
 
 ```ts
-import { SqliteScopeHost } from '@substrat/adapter-sqlite';
-import { UNSAFE_allowAllChecker } from '@substrat/kernel';
-import { tenantId, scopeId, principalId } from '@substrat/contracts';
+import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
+import { UNSAFE_allowAllChecker } from '@substrat-run/kernel';
+import { tenantId, scopeId, principalId } from '@substrat-run/contracts';
 
 const host = new SqliteScopeHost({
   dir: './data', // one .sqlite file per scope + _directory.sqlite
@@ -63,8 +63,8 @@ this structure for you — see [What is an engine?](/engines/)):
 
 ```ts
 import { z } from 'zod';
-import { moduleManifest } from '@substrat/contracts';
-import { assertAllowed, ulid, type ModuleRegistration } from '@substrat/kernel';
+import { moduleManifest } from '@substrat-run/contracts';
+import { assertAllowed, ulid, type ModuleRegistration } from '@substrat-run/kernel';
 
 const noteInput = z.object({ text: z.string().min(1) });
 
@@ -170,5 +170,5 @@ log.
 - [Events & audit](/concepts/events) — the envelope, PII classes, and consumers.
 - [What is an engine?](/engines/) — using the work-order and invoicing engines instead
   of writing your own machinery.
-- [@substrat/contract-tests](/reference/contract-tests) — if you're writing an adapter
+- [@substrat-run/contract-tests](/reference/contract-tests) — if you're writing an adapter
   rather than a vertical.

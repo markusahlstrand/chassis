@@ -21,7 +21,7 @@ import {
   type RoleDefinition,
   type ScopeId,
   type TenantId,
-} from '@substrat/contracts';
+} from '@substrat-run/contracts';
 import {
   ulid,
   type ConsumerHandler,
@@ -36,7 +36,7 @@ import {
   type ScopeStub,
   type SqlMigration,
   type SqlValue,
-} from '@substrat/kernel';
+} from '@substrat-run/kernel';
 import { ScopeActor } from './actor.js';
 import { createTupleChecker } from './checker.js';
 

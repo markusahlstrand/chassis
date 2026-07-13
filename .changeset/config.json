@@ -4,10 +4,10 @@
   "commit": false,
   "fixed": [
     [
-      "@substrat/contracts",
-      "@substrat/kernel",
-      "@substrat/adapter-sqlite",
-      "@substrat/contract-tests"
+      "@substrat-run/contracts",
+      "@substrat-run/kernel",
+      "@substrat-run/adapter-sqlite",
+      "@substrat-run/contract-tests"
     ]
   ],
   "linked": [],

@@ -85,7 +85,7 @@ moment the event happened — which is exactly what an invoice wants.
 ## Delivery semantics
 
 - Consumers run as ordinary in-scope operations under a **system actor**
-  (`{ system: '@substrat/engine-invoicing' }` — visible as such in the audit trail).
+  (`{ system: '@substrat-run/engine-invoicing' }` — visible as such in the audit trail).
 - Delivery is **at-least-once**, tracked in a kernel delivery journal — consumers must
   be idempotent; the event `id` is the idempotency key.
 - Ordering is guaranteed only within one (scope, module) pair.

@@ -4,8 +4,8 @@ import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { principalId, type PrincipalId } from '@substrat/contracts';
-import { PermissionDenied, type ScopeStub } from '@substrat/kernel';
+import { principalId, type PrincipalId } from '@substrat-run/contracts';
+import { PermissionDenied, type ScopeStub } from '@substrat-run/kernel';
 import { buildDemoHost, seedDemo, type DemoWorld } from './index.js';
 
 /**
