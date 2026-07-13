@@ -1,6 +1,6 @@
 # @substrat-run/adapter-sqlite
 
-Pure-SQLite scope host for [Substrat](https://github.com/markusahlstrand/chassis) — real
+Pure-SQLite scope host for [Substrat](https://github.com/substrat-run/substrat) — real
 kernel semantics with **no Cloudflare dependency**.
 
 One SQLite file per scope, a per-scope actor for strict serialization, a directory

@@ -1,7 +1,14 @@
 {
   "name": "@substrat-run/kernel",
   "version": "0.0.1",
-  "description": "Substrat kernel contracts and services — pure TypeScript, no platform imports (D-14)",
+  "description": "Substrat kernel contracts and services \u2014 pure TypeScript, no platform imports (D-14)",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "packages/kernel"
+  },
+  "homepage": "https://github.com/substrat-run/substrat",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

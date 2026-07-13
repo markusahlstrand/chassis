@@ -1,6 +1,6 @@
 # @substrat-run/contract-tests
 
-The conformance suite for [Substrat](https://github.com/markusahlstrand/chassis)
+The conformance suite for [Substrat](https://github.com/substrat-run/substrat)
 scope-host adapters. Every adapter — pure SQLite, Cloudflare Durable Objects, and any
 future one — must pass this suite **unchanged**, forever. If an adapter needs the suite
 modified, the contract changed, and that is a decision, not a patch.

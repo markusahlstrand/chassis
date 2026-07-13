@@ -1,6 +1,6 @@
 # @substrat-run/kernel
 
-Kernel contracts and services for [Substrat](https://github.com/markusahlstrand/chassis) —
+Kernel contracts and services for [Substrat](https://github.com/substrat-run/substrat) —
 the hard parts of vertical B2B SaaS (tenancy, permissions, audit, GDPR), hosted and
 enforced at runtime.
 

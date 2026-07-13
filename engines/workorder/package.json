@@ -1,7 +1,14 @@
 {
   "name": "@substrat-run/engine-workorder",
   "version": "0.0.1",
-  "description": "Substrat engine: work orders + time + material — one engine, one state machine, append-only reporting",
+  "description": "Substrat engine: work orders + time + material \u2014 one engine, one state machine, append-only reporting",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "engines/workorder"
+  },
+  "homepage": "https://github.com/substrat-run/substrat",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,7 +18,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },

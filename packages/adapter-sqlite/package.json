@@ -1,7 +1,14 @@
 {
   "name": "@substrat-run/adapter-sqlite",
   "version": "0.0.1",
-  "description": "Pure-SQLite scope host — real kernel semantics with no Cloudflare dependency (D-14): local dev, CI, self-host/escrow",
+  "description": "Pure-SQLite scope host \u2014 real kernel semantics with no Cloudflare dependency (D-14): local dev, CI, self-host/escrow",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "packages/adapter-sqlite"
+  },
+  "homepage": "https://github.com/substrat-run/substrat",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

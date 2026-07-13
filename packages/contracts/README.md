@@ -1,6 +1,6 @@
 # @substrat-run/contracts
 
-Contract schemas for the [Substrat](https://github.com/markusahlstrand/chassis) kernel —
+Contract schemas for the [Substrat](https://github.com/substrat-run/substrat) kernel —
 the hard parts of vertical B2B SaaS (tenancy, permissions, audit, GDPR), hosted and
 enforced at runtime.
 

@@ -1,7 +1,14 @@
 {
   "name": "@substrat-run/contracts",
   "version": "0.0.1",
-  "description": "Substrat kernel contract schemas — Zod is the source of truth (master plan D-22); OAS/JSON Schema are emitted artifacts",
+  "description": "Substrat kernel contract schemas \u2014 Zod is the source of truth (master plan D-22); OAS/JSON Schema are emitted artifacts",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "packages/contracts"
+  },
+  "homepage": "https://github.com/substrat-run/substrat",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
