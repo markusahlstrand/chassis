@@ -23,6 +23,14 @@ We build the chassis. You build the vehicle.
 
 ## Status
 
-Pre-code. The canonical planning document is [docs/master-plan.md](docs/master-plan.md) —
+Kernel scaffold under way: `@chassis/contracts` (Zod contracts — the source of truth),
+`@chassis/kernel` (contract interfaces), `@chassis/adapter-sqlite` (pure-SQLite scope
+host), and `@chassis/contract-tests` (the suite every adapter must pass). Run
+`pnpm install && pnpm test`.
+
+The canonical planning document is [docs/master-plan.md](docs/master-plan.md) —
 thesis, architecture decisions, market landscape, concrete cases, commercial structure,
 risks, open questions, and the decision log. Everything else derives from it.
+
+The technical shape of those decisions — contracts, data models, lifecycles — lives in
+[docs/design/kernel-design.md](docs/design/kernel-design.md).

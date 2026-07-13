@@ -1,0 +1,17 @@
+{
+  "name": "@chassis-demos/fsm",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FSM demo vertical (ServiceCo) — see docs/design/fsm-testrun-spec.md",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@chassis/contracts": "workspace:^",
+    "@chassis/kernel": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

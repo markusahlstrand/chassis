@@ -216,17 +216,21 @@ conventions. An MCP server for the platform itself (scaffold a module, inspect a
 schema, dry-run a migration, tail events). Reference verticals as few-shot material.
 CI guardrails: lint rules banning raw DB/fetch access; contract tests every module must pass.
 
-**Spec-first contracts.** Every kernel contract has a machine-readable spec as its source
-of truth: TypeSpec as the authoring layer, emitting OAS for the HTTP surface and JSON
-Schema throughout; AsyncAPI for the event contract (§5.3); Arazzo opportunistically for
-connector/workflow flows once it matures. One deliberate exception: capability-scoped RPC
-into DOs stays TypeScript-native (typed interfaces + generated JSON Schema) — forcing it
-through OAS would fight the architecture. Skills, generated SDKs, the MCP server's tools,
-and the §5.7 adapter-conformance tests are all **derived from the specs**, never
-hand-maintained beside them; a module manifest that declares its API and events in spec
-form is what makes an engine self-describing — to agents now, to strangers buying it
-later. Spec *tooling* (registries, portals, pipelines) is deferred per the one-step-ahead
-rule (§6).
+**Contract-first, code-native** (amended 2026-07-12, decision 22 — supersedes the
+TypeSpec plan). Every kernel contract has a machine-readable schema as its source of
+truth, authored in its native form: Zod schemas in a dedicated semver'd contracts
+package — the same artifact that validates at runtime (parse, don't trust; §5.8). The
+HTTP surface is served via zod-openapi on Hono and **emits** OAS; RPC and event payloads
+emit JSON Schema; emitted documents are checked in and CI-diffed with breaking-change
+linting — the emitted diff is what the human checkpoint reviews. AsyncAPI and Arazzo are
+deferred until an external consumer needs them. Inbound vendor APIs run the opposite
+direction: validators are **generated from** the vendor's published OAS — whoever owns a
+contract authors it in their native form; everything else is derived. Skills, generated
+SDKs, the MCP server's tools, and the §5.7 adapter-conformance tests are all **derived
+from the contracts package**, never hand-maintained beside it; a module manifest that
+declares its API and events in schema form is what makes an engine self-describing — to
+agents now, to strangers buying it later. Spec *tooling* (registries, portals, pipelines)
+is deferred per the one-step-ahead rule (§6).
 
 **The agent loop is the acceptance test.** The measure of everything above: Claude Code,
 pointed at the module manifest, the specs, and one reference vertical, scaffolds a
@@ -359,7 +363,7 @@ what nobody sells in the needed shape; adopt substrate everywhere else.
 | Component | Call | Notes |
 |---|---|---|
 | Identity / auth | **Adapter (ours default)** | Authentication is a swappable identity adapter (OIDC-shaped); our auth platform is the reference implementation and default (dogfooding + §5.1 product synergy). The kernel owns the directory and tenancy tree — identity providers authenticate people, they never own org structure. Extend: end-user identity (boende, styrelse, consumers) as first-class, BankID-heavy. |
-| Permissions | **Build model, adapt engine** | Role @ node in tenancy tree + capability grants. The **model** is kernel-owned — it is enforcement input, never delegated to an auth provider. The **evaluation engine** is an adapter: small built-in default, OpenFGA-swappable behind the same check API. Decide model now — near-impossible to retrofit. |
+| Permissions | **Build model, adapt engine** | Role @ node in tenancy tree + capability grants (entity-narrowable for portal users). The **model** is kernel-owned — it is enforcement input, never delegated to an auth provider. The **evaluation engine** is an adapter behind the same check API: built-in constrained relationship-tuple engine (FGA-shaped, decision 23), OpenFGA-swappable. |
 | Nested tenancy + provisioning | **Build** | The crown jewel. Directory/registry, per-scope storage, migration orchestration, reconciliation. Largely exists from the auth platform. |
 | Module system | **Build (thin)** | Manifest (migrations, permissions, events, extension points), entitlement flags, attachment contracts. Mostly conventions. |
 | Integrations framework | **Build** | Connection store + token refresh, connector interface, webhook ingress (signatures, replay protection), outbox with idempotent retries, per-tenant config + health. Steal Nango's interface design; own it for EU sovereignty. Connectors accrete per vertical need: Fortnox, Visma, BankID, Swish, Peppol, Kivra, fastAPI, EDI (Ahlsell/Rexel/Sonepar). |
@@ -378,7 +382,7 @@ what nobody sells in the needed shape; adopt substrate everywhere else.
 | AI gateway | **Build gateway, buy models** | Verticals will ship AI features (summarize ärende history, draft replies, RAG over scope documents — Vectorize already there). Kernel provides the governed path: per-tenant metering, PII rules from the event classification, audited AI actions. The 2026 expectation (Retool Agents, Agentforce) and a natural §9 usage meter. |
 | Realtime | **Adopt (DO-native)** | Subscription contract (WebSocket/SSE) on scope DOs — portals and dispatch boards get live updates nearly free on this architecture; make it a contract, not an accident. |
 | Platform ops console | **Build (internal first)** | Registry/tenant health UI, migration + reconciliation status, billing state, consented **and audited** support impersonation (view-as-user, §7.8). Needed internally regardless; later it's the enterprise admin story. |
-| API surface | **Build (cheap early)** | Per-tenant keys, rate limits, signed outbound webhooks. Spec-first: TypeSpec→OAS; events ship AsyncAPI (§5.6). |
+| API surface | **Build (cheap early)** | Per-tenant keys, rate limits, signed outbound webhooks. Contract-first: zod-openapi→OAS, emitted + CI-diffed (§5.6, decision 22). |
 | App shell + design system | **Build shell, buy components** | Login/SSO, org/scope switcher, permission-aware nav, settings, members, audit viewer, notifications, connector UI. **Not** a dashboard framework — that's Retool, a whole company. End-user dashboards: chart components over saved gateway queries; resist configurability until a customer pays for it. |
 | Localization | **Build day one** | sv/no/da/en. Retrofits are miserable; the FSM vendor ships three languages. |
 | Observability per tenant | **Convention + adapter** | OpenTelemetry is the contract; tenant/scope IDs on every trace and error; APM vendor swappable (Datadog/Sentry/Better Stack) (§5.7). |
@@ -798,7 +802,6 @@ now; a negotiation after PropCo runs on it.
 - Does "buy the FSM vendor" mean subscribing or acquiring the company outright? (Changes case 4 entirely.)
 - Who, concretely, are the friend's builders? Names, hours, stack fluency.
 - Kernel legal home: new entity, the auth platform's umbrella, or the existing holding company?
-- Permission engine: small built-in model vs embedded OpenFGA — decide before case 1 schema.
 - Storage shape for förvaltar-OS confirmed as Shape B? Benchmark DO-SQLite limits first.
 - R2 SQL benchmark (≈50M events / 500 scopes) — pass/fail criteria and date.
 - Which Nordic SMS + email providers (transport buy list).
@@ -832,13 +835,15 @@ now; a negotiation after PropCo runs on it.
 | 12 | 2026-07-12 | Name: **Chassis**. Tagline: **The hard parts, hosted.** | Structure+engines+wiring in one word; only dead squatters; Swedish-native pronunciation. Groundplane = fallback |
 | 13 | 2026-07-12 | Master doc = canonical; PDFs/decks are dated exports | Single source of truth (§0) |
 | 14 | 2026-07-12 | Every kernel contract ships a Cloudflare adapter **and** a pure SQLite adapter; contract tests pass on both | Auth-platform pattern; makes escrow/self-host real, hedges vendor risk, enables local dev/CI (§5.7) |
-| 15 | 2026-07-12 | Spec-first contracts: TypeSpec→OAS (HTTP), AsyncAPI (events), JSON Schema (RPC); Arazzo later; SDKs/MCP/conformance tests derived from specs | Machine-readable surface is the product interface for agent builders; principle cheap now, retrofit costly; tooling deferred per one-step-ahead rule (§5.6) |
+| 15 | 2026-07-12 | Spec-first contracts: TypeSpec→OAS (HTTP), AsyncAPI (events), JSON Schema (RPC); Arazzo later; SDKs/MCP/conformance tests derived from specs | Machine-readable surface is the product interface for agent builders; principle cheap now, retrofit costly; tooling deferred per one-step-ahead rule (§5.6). **Amended by 22** |
 | 16 | 2026-07-12 | Identity = swappable adapter (our auth platform as default); tenancy tree, directory, and permission **model** are kernel-owned, never delegated; permission **evaluation** is an adapter (built-in default, OpenFGA-swappable) | Enforcement inputs must be kernel-owned or "swappable auth" is fiction; auth providers authenticate, they don't own org structure (§6) |
 | 17 | 2026-07-12 | Document product's engine **extracts into** the kernel; the product re-platforms onto the kernel piecemeal as consumer #2 — not integrated as an external document service | One permission regime over documents (two = the leak §4 prevents); proves contracts on a second shape; extraction timed by case-1 need, re-platforming opportunistic to avoid a third greenfield (§6, risk 4) |
 | 18 | 2026-07-12 | Triage rule: kernel-owned (enforcement inputs + contracts) / adapter (infra the kernel consumes: billing rails, model providers, KMS, telemetry via OTel, notification transports, search backends) / connector (capabilities tenants use, in the hub) | One test decides every future "should X be swappable" debate; event spine, tenancy/permission model, entitlements, manifest are never adapters (§5.7) |
 | 19 | 2026-07-12 | Engine composition = star topology: engines talk only to the kernel (opaque refs, events, vertical-owned orchestration); chatty engine pairs merge into one engine | N kernel contracts instead of N² engine pairs (Odoo treadmill avoided); engines stay independently versionable and licensable (§3) |
 | 20 | 2026-07-12 | Platform billing/entitlements = kernel; vertical-facing invoicing = engine at most (fakturaunderlag); reskontra/ekonomisk förvaltning stays a connector boundary | Entitlements gate module loading — circular if engine-owned; §7.5 boundary holds (§6) |
 | 21 | 2026-07-12 | TypeScript end-to-end; runtime validation generated from specs at every trust boundary; portability via WinterTC standards surface + adapters, not WASM; pnpm/npm distribution, verticals on Workers for Platforms; WASM module slot kept open for hot paths | Team-independent case (§5.8): language is downstream of the runtime; the SDK boundary is the value; workload is I/O-bound and per-scope serialized; Go can't express the type thesis; agents are the primary users |
+| 22 | 2026-07-12 | Contracts are Zod-first (zod-openapi on Hono): Zod schemas in a semver'd package are both source of truth and runtime validators; OAS/JSON Schema emitted, checked in, CI-diffed with breaking-change linting; AsyncAPI deferred; TypeSpec/Arazzo dropped until polyglot consumers exist; connectors generate validators from vendor OAS | One source of truth at the enforcement boundary — the reviewed artifact is the running validator; TS end-to-end (21) removes TypeSpec's polyglot payoff; auth-platform Hono muscle. Amends 15 (§5.6) |
+| 23 | 2026-07-13 | Permission evaluation = built-in **constrained relationship-tuple engine** (FGA-shaped): fixed four-rule derivation algebra (role expansion; tenancy-tree inheritance; manifest-declared entity parent edges, depth-capped; org/group membership); no negation, no configurable rewrites; tuples scope-local, evaluated inside the scope's serialization domain; checks return tuple **proof paths**. Roles/grants stay the authored surface; verticals never see tuples; OpenFGA remains the swap target | Resolves the §11 open question (built-in vs OpenFGA) with both: DO-per-scope serialization removes Zanzibar's consistency problem (no zookies), so the mini-engine is genuinely small; entity-level portal access (the FSM shape: end customers within a filial scope) needs graph resolution the identity layer cannot do; proof paths power explain / view-as / the reviewable permission diff (§7.8). Implements 16 |
 
 ## 13. Next actions
 

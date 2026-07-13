@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:sv.fieldly.com)",
+      "WebFetch(domain:minuba.com)",
+      "WebFetch(domain:www.smartdok.no)",
+      "WebFetch(domain:www.hantverksdata.se)",
+      "WebFetch(domain:www.baseplate.dev)"
+    ]
+  }
+}
