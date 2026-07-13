@@ -2,16 +2,30 @@
   "name": "@chassis-demos/fsm",
   "version": "0.0.1",
   "private": true,
-  "description": "FSM demo vertical (ServiceCo) — see docs/design/fsm-testrun-spec.md",
+  "description": "FSM demo vertical (ServiceCo) — see spec/testrun.md",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "server": "tsx src/server.ts",
+    "demo": "concurrently -n api,web -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\""
   },
   "dependencies": {
+    "@chassis/adapter-sqlite": "workspace:^",
     "@chassis/contracts": "workspace:^",
-    "@chassis/kernel": "workspace:^"
+    "@chassis/engine-invoicing": "workspace:^",
+    "@chassis/engine-workorder": "workspace:^",
+    "@chassis/kernel": "workspace:^",
+    "@hono/node-server": "^1.13.0",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.6.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.0"
+    "@types/better-sqlite3": "^7.6.0",
+    "concurrently": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
   }
 }

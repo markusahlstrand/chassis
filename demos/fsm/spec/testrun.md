@@ -260,9 +260,11 @@ that chain as the proof**. Same check against styrbjörn's order → deny.
    `planned`, parent tuple written. Anna assigns harald; harald starts; harald reports
    1.0 h (+ later 0.75 h) and one fan motor.
 4. **Denials that must hold**: harald tries `assign` → deny (proof-less); mallory
-   (t2 admin) calls `getScope(t1, s1)` → **throws** (K-3); berit tries
-   `workorder/report` → deny; anna reports time on a *closed* order later → engine
-   throws.
+   (t2 admin) calls `getScope(t2, s1)` → **throws** (K-3 pair check), and with the
+   correct pair `(t1, s1)` she mints a stub but holds no tuples in t1 — every
+   operation denies at the owning scope's evaluation (enforcement is per-operation,
+   not stub possession); berit tries `workorder/report` → deny; anna reports time on
+   a *completed* order later → engine throws.
 5. **Priced completion**: anna runs `serviceco/complete-workorder` → labor billed at
    min-qty 1.75 h? no — 1.75 > 1.5 min ⇒ 1.75 × 515; travel dropped (internal);
    material 1 × 1150. Assert `workorder.completed` payload totals; order immutable

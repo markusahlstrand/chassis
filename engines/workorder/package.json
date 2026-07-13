@@ -1,0 +1,30 @@
+{
+  "name": "@chassis/engine-workorder",
+  "version": "0.0.1",
+  "description": "Chassis engine: work orders + time + material — one engine, one state machine, append-only reporting",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@chassis/contracts": "workspace:^",
+    "@chassis/kernel": "workspace:^",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

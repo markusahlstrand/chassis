@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   dataSubjectId,
+  moduleManifest,
   principalId,
   scopeId,
   tenantId,
@@ -8,7 +9,70 @@ import {
   type ScopeId,
   type TenantId,
 } from '@chassis/contracts';
-import { ulid, type ScopeHost } from '@chassis/kernel';
+import { ulid, type OperationHandler, type ScopeHost } from '@chassis/kernel';
+
+const testModManifest = moduleManifest.parse({
+  id: '@test/mod',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'testmod:use', description: 'test permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entityRelations: [{ entityType: 'item', parentType: 'box' }],
+  entitlementKey: 'testmod',
+});
+
+const flowModManifest = moduleManifest.parse({
+  id: '@test/flow',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'flow:use', description: 'flow permission' }],
+  events: {
+    emits: [
+      { type: 'flow.step1', schemaVersion: 1 },
+      { type: 'flow.step2', schemaVersion: 1 },
+    ],
+    consumes: [
+      { type: 'flow.step1', schemaVersion: 1 },
+      { type: 'flow.step2', schemaVersion: 1 },
+    ],
+  },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'flow',
+});
+
+const lateModManifest = moduleManifest.parse({
+  id: '@test/late',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'late:use', description: 'late module permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'late',
+});
+
+const addItem: OperationHandler<{ id: string; box: string }, void> = (ctx, input) => {
+  ctx.sql.exec('INSERT INTO testmod_items (id, box) VALUES (?, ?)', [input.id, input.box]);
+  ctx.link({ entityType: 'item', entityId: input.id }, { entityType: 'box', entityId: input.box });
+};
+
+const relinkItem: OperationHandler<{ id: string; box: string }, void> = (ctx, input) => {
+  ctx.link({ entityType: 'item', entityId: input.id }, { entityType: 'box', entityId: input.box });
+};
+
+const linkUndeclared: OperationHandler<undefined, void> = (ctx) => {
+  ctx.link({ entityType: 'box', entityId: 'b1' }, { entityType: 'item', entityId: 'i1' });
+};
+
+const readJournal: OperationHandler<undefined, { module_id: string; version: string }[]> = (
+  ctx,
+) => ctx.sql.query('SELECT module_id, version FROM _chassis_migrations ORDER BY module_id');
+
+const readTuples: OperationHandler<undefined, { subject: string; relation: string; object: string }[]> =
+  (ctx) => ctx.sql.query('SELECT subject, relation, object FROM _chassis_tuples ORDER BY subject');
 
 export interface ScopeHostFixture {
   host: ScopeHost;
@@ -110,6 +174,101 @@ export function scopeHostContractSuite(
         return ctx.sql.query<{ v: string }>('SELECT v FROM marker').map((r) => r.v);
       });
 
+      host.defineOperation<undefined, void>('test/atomic-init', (ctx) => {
+        ctx.sql.exec('CREATE TABLE IF NOT EXISTS atomic_t (n INTEGER NOT NULL)');
+      });
+      host.defineOperation<undefined, void>('test/atomic-fail', (ctx) => {
+        ctx.sql.exec('INSERT INTO atomic_t (n) VALUES (1)');
+        ctx.emit({
+          type: 'test.atomic',
+          schemaVersion: 1,
+          entity: { entityType: 'test-thing', entityId: 'x9' },
+          piiClass: 'none',
+          payload: {},
+        });
+        throw new Error('boom');
+      });
+      host.defineOperation<undefined, { rows: number; events: number }>(
+        'test/atomic-read',
+        (ctx) => ({
+          rows: ctx.sql.query<{ n: number }>('SELECT n FROM atomic_t').length,
+          events: ctx.sql.query('SELECT id FROM _chassis_outbox WHERE type = ?', ['test.atomic'])
+            .length,
+        }),
+      );
+
+      host.registerModule({
+        manifest: testModManifest,
+        migrations: [
+          {
+            version: '0001-init',
+            sql: 'CREATE TABLE testmod_items (id TEXT PRIMARY KEY, box TEXT NOT NULL)',
+          },
+        ],
+        operations: {
+          'testmod/add': addItem,
+          'testmod/relink': relinkItem,
+          'testmod/link-undeclared': linkUndeclared,
+          'testmod/read-journal': readJournal,
+          'testmod/read-tuples': readTuples,
+        },
+      });
+
+      host.registerModule({
+        manifest: flowModManifest,
+        migrations: [
+          {
+            version: '0001-init',
+            sql: 'CREATE TABLE flow_log (event_id TEXT PRIMARY KEY, type TEXT NOT NULL)',
+          },
+        ],
+        operations: {
+          'flow/produce': ((ctx) => {
+            ctx.emit({
+              type: 'flow.step1',
+              schemaVersion: 1,
+              entity: { entityType: 'flow-thing', entityId: 'f1' },
+              piiClass: 'none',
+              payload: {},
+            });
+          }) as OperationHandler<never, unknown>,
+          'flow/log': ((ctx) =>
+            ctx.sql.query(
+              'SELECT event_id, type FROM flow_log ORDER BY event_id',
+            )) as OperationHandler<never, unknown>,
+          'flow/deliveries': ((ctx) =>
+            ctx.sql.query(
+              `SELECT event_id, consumer_module, error FROM _chassis_deliveries
+               WHERE consumer_module = '@test/flow' ORDER BY event_id`,
+            )) as OperationHandler<never, unknown>,
+          'flow/step2-actors': ((ctx) =>
+            ctx.sql.query(
+              `SELECT actor FROM _chassis_outbox WHERE type = 'flow.step2'`,
+            )) as OperationHandler<never, unknown>,
+        },
+        consumers: {
+          'flow.step1': (ctx, event) => {
+            ctx.sql.exec('INSERT INTO flow_log (event_id, type) VALUES (?, ?)', [
+              event.id,
+              event.type,
+            ]);
+            ctx.emit({
+              type: 'flow.step2',
+              schemaVersion: 1,
+              entity: event.entity,
+              piiClass: 'none',
+              payload: {},
+            });
+          },
+          'flow.step2': (ctx, event) => {
+            ctx.sql.exec('INSERT INTO flow_log (event_id, type) VALUES (?, ?)', [
+              event.id,
+              event.type,
+            ]);
+          },
+        },
+      });
+
       await host.provisionScope({ tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
       await host.provisionScope({ tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
     });
@@ -188,6 +347,99 @@ export function scopeHostContractSuite(
     it('rejects unknown operations', async () => {
       const stub = await host.getScope(alice, t1, s1);
       await expect(stub.invoke('test/does-not-exist')).rejects.toThrow(/unknown operation/);
+    });
+
+    it('rolls back the entire operation when the handler throws (K-4)', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      await stub.invoke('test/atomic-init');
+      await expect(stub.invoke('test/atomic-fail')).rejects.toThrow('boom');
+      // Neither the write NOR its emitted event survive — one transaction.
+      await expect(stub.invoke('test/atomic-read')).resolves.toEqual({ rows: 0, events: 0 });
+    });
+
+    it('applies module migrations lazily and journals them per (module, version)', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      const journal = await stub.invoke<{ module_id: string; version: string }[]>(
+        'testmod/read-journal',
+      );
+      expect(journal).toContainEqual({ module_id: '@test/mod', version: '0001-init' });
+      // Idempotent: another wake applies nothing twice.
+      const again = await host.getScope(alice, t1, s1);
+      const journal2 = await again.invoke<{ module_id: string; version: string }[]>(
+        'testmod/read-journal',
+      );
+      expect(journal2.filter((r) => r.module_id === '@test/mod')).toHaveLength(1);
+    });
+
+    it('applies migrations of modules registered after a scope was first accessed', async () => {
+      host.registerModule({
+        manifest: lateModManifest,
+        migrations: [
+          { version: '0001-init', sql: 'CREATE TABLE late_t (id TEXT PRIMARY KEY)' },
+        ],
+        operations: {
+          'late/check': ((ctx) =>
+            ctx.sql.query(`SELECT name FROM sqlite_master WHERE name = 'late_t'`)
+              .length) as OperationHandler<never, unknown>,
+        },
+      });
+      const stub = await host.getScope(alice, t1, s1);
+      await expect(stub.invoke('late/check')).resolves.toBe(1);
+      const journal = await stub.invoke<{ module_id: string; version: string }[]>(
+        'testmod/read-journal',
+      );
+      expect(journal).toContainEqual({ module_id: '@test/late', version: '0001-init' });
+    });
+
+    it('rejects duplicate module registration', () => {
+      expect(() => host.registerModule({ manifest: testModManifest })).toThrow(
+        /already registered/,
+      );
+    });
+
+    it('links declared entity relations, idempotently (K-16)', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      await stub.invoke('testmod/add', { id: 'i1', box: 'b1' });
+      await stub.invoke('testmod/relink', { id: 'i1', box: 'b1' }); // no duplicate
+      const tuples = await stub.invoke<{ subject: string; relation: string; object: string }[]>(
+        'testmod/read-tuples',
+      );
+      expect(tuples.filter((t) => t.subject === 'item:i1')).toEqual([
+        { subject: 'item:i1', relation: 'parent', object: 'box:b1' },
+      ]);
+    });
+
+    it('rejects links for undeclared entity relations', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      await expect(stub.invoke('testmod/link-undeclared')).rejects.toThrow(
+        /undeclared entity relation/,
+      );
+    });
+
+    it('dispatches events to consumers, cascading, exactly once per (event, consumer)', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      await stub.invoke('flow/produce');
+      const log = await stub.invoke<{ event_id: string; type: string }[]>('flow/log');
+      expect(log.map((r) => r.type).sort()).toEqual(['flow.step1', 'flow.step2']);
+      const deliveries = await stub.invoke<{ event_id: string; error: string | null }[]>(
+        'flow/deliveries',
+      );
+      expect(deliveries).toHaveLength(2);
+      expect(deliveries.every((d) => d.error === null)).toBe(true);
+
+      await stub.invoke('flow/produce');
+      const log2 = await stub.invoke<{ event_id: string; type: string }[]>('flow/log');
+      expect(log2).toHaveLength(4); // two new, none duplicated
+      await expect(stub.invoke('flow/deliveries')).resolves.toHaveLength(4);
+    });
+
+    it('runs consumers under a system actor — consumer-emitted events carry it', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      const actors = await stub.invoke<{ actor: string }[]>('flow/step2-actors');
+      expect(actors.length).toBeGreaterThan(0);
+      for (const row of actors) {
+        expect(JSON.parse(row.actor)).toEqual({ system: '@test/flow' });
+      }
     });
   });
 }

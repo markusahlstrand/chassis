@@ -1,9 +1,16 @@
 import type {
+  CapabilityGrant,
   Decision,
+  DomainEvent,
   DomainEventInput,
+  EntityRef,
   Jurisdiction,
+  ModuleManifest,
+  Node,
   PermissionKey,
   PrincipalId,
+  RoleAssignment,
+  RoleDefinition,
   ScopeId,
   StorageShape,
   TenantId,
@@ -40,7 +47,15 @@ export interface OperationContext {
   readonly sql: ScopedSql;
   /** Envelope is stamped kernel-side (id, occurredAt, tenant, scope, actor); input is validated. */
   emit(event: DomainEventInput): void;
-  check(permission: PermissionKey): Promise<Decision>;
+  /** Node-level check; pass `entity` for per-entity checks (portal access, §4.2 rule 3). */
+  check(permission: PermissionKey, entity?: EntityRef): Promise<Decision>;
+  /**
+   * Record a relation tuple child→parent (K-16) — the write path for the
+   * permission evaluator's entity-edge rule (design doc §4.2 rule 3). The
+   * relation must be declared in some registered module's `entityRelations`.
+   * Idempotent.
+   */
+  link(child: EntityRef, parent: EntityRef): void;
 }
 
 export type OperationHandler<I = unknown, O = unknown> = (
@@ -53,6 +68,48 @@ export interface ScopeStub {
   readonly tenantId: TenantId;
   readonly scopeId: ScopeId;
   invoke<O = unknown, I = unknown>(operation: string, input?: I): Promise<O>;
+}
+
+export interface SqlMigration {
+  /** Ordered, unique per module, e.g. '0001-init'. Journaled per (module, version). */
+  version: string;
+  sql: string;
+}
+
+/**
+ * How a module (engine or vertical) joins a host: manifest + migrations +
+ * operations in one registration. Migrations apply lazily per scope, inside
+ * the scope's serialization domain, journaled in `_chassis_migrations`
+ * (design doc §5.3 in miniature). Operations are the module's default
+ * bindings (K-16); in-scope functions need no registration — they are plain
+ * exports called by other modules' handlers.
+ */
+/**
+ * Event consumers run as ordinary in-scope operations under a system actor,
+ * delivered at-least-once (kernel delivery journal); handlers must be
+ * idempotent. Ordering is guaranteed only within (scope, module) — K-11.
+ */
+export type ConsumerHandler = (ctx: OperationContext, event: DomainEvent) => void | Promise<void>;
+
+export interface ModuleRegistration {
+  manifest: ModuleManifest;
+  migrations?: SqlMigration[];
+  operations?: Record<string, OperationHandler<never, unknown>>;
+  /** eventType → handler; the types must appear in manifest.events.consumes. */
+  consumers?: Record<string, ConsumerHandler>;
+}
+
+/**
+ * Admin surface for enforcement input (design doc §4; testrun spec §9.2.5).
+ * v0 is host-level; the human-checkpoint review workflow wraps this later.
+ */
+export interface HostAdmin {
+  defineRole(tenantId: TenantId, role: RoleDefinition): void;
+  assignRole(assignment: RoleAssignment): void;
+  grant(grant: CapabilityGrant): void;
+  /** Grant to an organization (portal customers); members reach it via membership tuples. */
+  grantToOrg(orgId: string, permission: PermissionKey, node: Node, entity?: EntityRef): void;
+  addMember(tenantId: TenantId, principal: PrincipalId, orgId: string): void;
 }
 
 export interface ProvisionScopeInput {
@@ -73,7 +130,13 @@ export interface ScopeHost {
   /** Idempotent; journaled. Jurisdiction is fixed here forever (K-7). */
   provisionScope(input: ProvisionScopeInput): Promise<void>;
 
-  /** Module registration: operation names are module-namespaced, e.g. 'workorder/create'. */
+  /** Enforcement-input writes: roles, assignments, grants, membership. */
+  readonly admin: HostAdmin;
+
+  /** Register a module: validates the manifest, applies migrations lazily per scope. */
+  registerModule(registration: ModuleRegistration): void;
+
+  /** Bare operation registration (tests, glue). Names are module-namespaced: 'workorder/create'. */
   defineOperation<I, O>(name: string, handler: OperationHandler<I, O>): void;
 
   close(): Promise<void>;

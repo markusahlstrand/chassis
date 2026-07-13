@@ -1,0 +1,86 @@
+# @chassis/contracts
+
+The **source of truth** for every data shape that crosses a Chassis boundary. Schemas
+are written in [Zod](https://zod.dev), so the reviewed artifact *is* the runtime
+validator — OpenAPI and JSON Schema documents are emitted from this package, never
+hand-maintained beside it.
+
+```sh
+pnpm add @chassis/contracts zod
+```
+
+## IDs (`ids.ts`)
+
+Branded ULID types — opaque, sortable, no PII, and unmixable at compile time:
+
+| Schema | Type | Notes |
+|---|---|---|
+| `tenantId` | `TenantId` | |
+| `scopeId` | `ScopeId` | a `ScopeId` won't typecheck as a `TenantId` |
+| `principalId` | `PrincipalId` | |
+| `eventId` | `EventId` | |
+| `dataSubjectId` | `DataSubjectId` | keys crypto-shredding erasure |
+| `moduleId` | `ModuleId` | npm-package-shaped: `@chassis/engine-workorder` |
+| `instant` | `Instant` | ISO 8601 with timezone; stamped kernel-side |
+| `permissionKey` | `PermissionKey` | module-namespaced: `workorder:create` |
+| `slug` | — | URL-safe identifier |
+
+```ts
+import { tenantId, type TenantId } from '@chassis/contracts';
+
+const t: TenantId = tenantId.parse(input); // validated + branded
+```
+
+IDs are deliberately meaning-free: they appear in logs and billing systems outside any
+jurisdiction, so they must never encode anything.
+
+## Tenancy (`tenancy.ts`)
+
+`tenant` / `Tenant`, `scope` / `Scope`, plus `tenantStatus`, `scopeStatus`,
+`storageShape` (`'A' | 'B'`) and `jurisdiction` (`'eu' | null`). See
+[Tenants & scopes](/concepts/tenancy) for the semantics.
+
+## Events (`events.ts`)
+
+- `entityRef` / `EntityRef` — the opaque `(entityType, entityId)` reference everything
+  generic binds to.
+- `piiClass` — `'none' | 'pseudonymous' | 'direct'`, required on every event.
+- `domainEventInput` — what module code passes to `emit()`; origin fields deliberately
+  absent.
+- `domainEvent` — the full kernel-stamped envelope.
+- `actor` — a `PrincipalId` or `{ system: ModuleId }`.
+
+The schema enforces the crypto-shredding invariant: a PII-classed event without a
+`subjectId` fails validation. See [Events & audit](/concepts/events).
+
+## Permissions (`permission.ts`)
+
+The authored surface: `node`, `roleDefinition`, `roleAssignment`, `capabilityGrant`.
+The evaluation representation: `objectRef`, `relationTuple` (internal to checkers).
+The results: `decision` / `Decision` (proof-carrying discriminated union) and
+`effectivePermissions`. See [Permissions](/concepts/permissions).
+
+## Module manifest (`manifest.ts`)
+
+`moduleManifest` / `ModuleManifest` — the self-description every module ships:
+permissions, events (emits/consumes), migrations + skew window, attachment targets,
+entity relations, entitlement key, searchables, UI contributions. Field-by-field
+walkthrough in [Modules & the manifest](/concepts/modules).
+
+## Money (`money.ts`)
+
+`money` / `Money` (decimal-string amount + ISO 4217 currency, both branded) and the
+sanctioned arithmetic: `addMoney`, `mulMoney`, `moneyOf`, `addDecimal`, `mulDecimal`,
+`compareDecimal` — exact micro-unit (6 dp) bigint arithmetic, half-up rounding. See
+[Money](/concepts/money).
+
+## Attachments (`attachments.ts`)
+
+`visibility` — `'internal' | 'customer'`, the mandatory classification on every
+attachment item that could reach a customer portal.
+
+## Versioning
+
+The package is semver'd and every event and manifest carries explicit schema versions.
+Pre-1.0, shapes change without notice; from the first shipped vertical onward, breaking
+changes to emitted schemas are CI-diffed and linted.
