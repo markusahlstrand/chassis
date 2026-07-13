@@ -9,8 +9,11 @@ enforcing every call.
 
 ```bash
 pnpm install
-pnpm --filter @chassis-demos/fsm demo   # starts API (:8787) + web app (:5173)
+pnpm fsm-demo dev   # from anywhere in the repo — starts API (:8787) + web app (:5173)
 ```
+
+(`pnpm fsm-demo <script>` is a root-level pass-through to this package: `dev`,
+`server`, `test`, `typecheck` all work.)
 
 Open http://localhost:5173 and switch cast members in the top-right corner:
 
