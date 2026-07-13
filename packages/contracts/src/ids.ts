@@ -21,7 +21,7 @@ export type EventId = z.infer<typeof eventId>;
 export const dataSubjectId = z.string().regex(ULID).brand<'DataSubjectId'>();
 export type DataSubjectId = z.infer<typeof dataSubjectId>;
 
-// npm-package-shaped, e.g. '@chassis/engine-workorder'
+// npm-package-shaped, e.g. '@substrat/engine-workorder'
 export const moduleId = z
   .string()
   .regex(/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/)

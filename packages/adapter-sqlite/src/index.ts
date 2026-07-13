@@ -21,7 +21,7 @@ import {
   type RoleDefinition,
   type ScopeId,
   type TenantId,
-} from '@chassis/contracts';
+} from '@substrat/contracts';
 import {
   ulid,
   type ConsumerHandler,
@@ -36,7 +36,7 @@ import {
   type ScopeStub,
   type SqlMigration,
   type SqlValue,
-} from '@chassis/kernel';
+} from '@substrat/kernel';
 import { ScopeActor } from './actor.js';
 import { createTupleChecker } from './checker.js';
 
@@ -62,7 +62,7 @@ export interface SqliteScopeHostOptions {
 }
 
 const KERNEL_DDL = `
-  CREATE TABLE IF NOT EXISTS _chassis_outbox (
+  CREATE TABLE IF NOT EXISTS _substrat_outbox (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
@@ -77,20 +77,20 @@ const KERNEL_DDL = `
     payload TEXT,
     drained_at TEXT
   );
-  CREATE TABLE IF NOT EXISTS _chassis_migrations (
+  CREATE TABLE IF NOT EXISTS _substrat_migrations (
     module_id TEXT NOT NULL,
     version TEXT NOT NULL,
     applied_at TEXT NOT NULL,
     PRIMARY KEY (module_id, version)
   );
-  CREATE TABLE IF NOT EXISTS _chassis_tuples (
+  CREATE TABLE IF NOT EXISTS _substrat_tuples (
     subject TEXT NOT NULL,
     relation TEXT NOT NULL,
     object TEXT NOT NULL,
     expires_at TEXT,
     PRIMARY KEY (subject, relation, object)
   );
-  CREATE TABLE IF NOT EXISTS _chassis_deliveries (
+  CREATE TABLE IF NOT EXISTS _substrat_deliveries (
     event_id TEXT NOT NULL,
     consumer_module TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
@@ -142,7 +142,7 @@ export class SqliteScopeHost implements ScopeHost {
         schema_version TEXT NOT NULL DEFAULT '0',
         created_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS _chassis_tenant_tuples (
+      CREATE TABLE IF NOT EXISTS _substrat_tenant_tuples (
         tenant_id TEXT NOT NULL,
         subject TEXT NOT NULL,
         relation TEXT NOT NULL,
@@ -150,7 +150,7 @@ export class SqliteScopeHost implements ScopeHost {
         expires_at TEXT,
         PRIMARY KEY (tenant_id, subject, relation, object)
       );
-      CREATE TABLE IF NOT EXISTS _chassis_roles (
+      CREATE TABLE IF NOT EXISTS _substrat_roles (
         tenant_id TEXT NOT NULL,
         role_key TEXT NOT NULL,
         permissions TEXT NOT NULL,
@@ -287,10 +287,10 @@ export class SqliteScopeHost implements ScopeHost {
         for (const consumer of mod.consumers) {
           const rows = rt.db
             .prepare(
-              `SELECT * FROM _chassis_outbox o
+              `SELECT * FROM _substrat_outbox o
                WHERE o.type = ?
                  AND NOT EXISTS (
-                   SELECT 1 FROM _chassis_deliveries d
+                   SELECT 1 FROM _substrat_deliveries d
                    WHERE d.event_id = o.id AND d.consumer_module = ?
                  )
                ORDER BY o.id`,
@@ -306,7 +306,7 @@ export class SqliteScopeHost implements ScopeHost {
               await consumer.handler(ctx, event);
               rt.db
                 .prepare(
-                  `INSERT INTO _chassis_deliveries (event_id, consumer_module, delivered_at)
+                  `INSERT INTO _substrat_deliveries (event_id, consumer_module, delivered_at)
                    VALUES (?, ?, ?)`,
                 )
                 .run(event.id, mod.id, new Date().toISOString());
@@ -318,7 +318,7 @@ export class SqliteScopeHost implements ScopeHost {
               // can't wedge the loop. Real redelivery/backoff is a later cut.
               rt.db
                 .prepare(
-                  `INSERT INTO _chassis_deliveries (event_id, consumer_module, delivered_at, error)
+                  `INSERT INTO _substrat_deliveries (event_id, consumer_module, delivered_at, error)
                    VALUES (?, ?, ?, ?)`,
                 )
                 .run(event.id, mod.id, new Date().toISOString(), String(err));
@@ -360,7 +360,7 @@ export class SqliteScopeHost implements ScopeHost {
     ) =>
       this.directory
         .prepare(
-          `INSERT OR REPLACE INTO _chassis_tenant_tuples
+          `INSERT OR REPLACE INTO _substrat_tenant_tuples
              (tenant_id, subject, relation, object, expires_at)
            VALUES (?, ?, ?, ?, ?)`,
         )
@@ -377,7 +377,7 @@ export class SqliteScopeHost implements ScopeHost {
       const rt = this.runtime(node.tenantId, node.scopeId);
       rt.db
         .prepare(
-          `INSERT OR REPLACE INTO _chassis_tuples (subject, relation, object, expires_at)
+          `INSERT OR REPLACE INTO _substrat_tuples (subject, relation, object, expires_at)
            VALUES (?, ?, ?, ?)`,
         )
         .run(subject, relation, object, expiresAt ?? null);
@@ -416,7 +416,7 @@ export class SqliteScopeHost implements ScopeHost {
         const parsed = roleDefinition.parse(role);
         this.directory
           .prepare(
-            `INSERT OR REPLACE INTO _chassis_roles (tenant_id, role_key, permissions, source)
+            `INSERT OR REPLACE INTO _substrat_roles (tenant_id, role_key, permissions, source)
              VALUES (?, ?, ?, ?)`,
           )
           .run(tenantId, parsed.key, JSON.stringify(parsed.permissions), String(parsed.source));
@@ -460,7 +460,7 @@ export class SqliteScopeHost implements ScopeHost {
 
   private loadRoles(): void {
     const rows = this.directory
-      .prepare('SELECT tenant_id, role_key, permissions, source FROM _chassis_roles')
+      .prepare('SELECT tenant_id, role_key, permissions, source FROM _substrat_roles')
       .all() as { tenant_id: string; role_key: string; permissions: string; source: string }[];
     for (const r of rows) {
       this.roles.set(`${r.tenant_id}/${r.role_key}`, {
@@ -497,7 +497,7 @@ export class SqliteScopeHost implements ScopeHost {
         });
         rt.db
           .prepare(
-            `INSERT INTO _chassis_outbox
+            `INSERT INTO _substrat_outbox
                (id, type, schema_version, occurred_at, tenant_id, scope_id, actor,
                 entity_type, entity_id, pii_class, subject_id, payload)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -542,7 +542,7 @@ export class SqliteScopeHost implements ScopeHost {
         }
         rt.db
           .prepare(
-            `INSERT OR IGNORE INTO _chassis_tuples (subject, relation, object)
+            `INSERT OR IGNORE INTO _substrat_tuples (subject, relation, object)
              VALUES (?, 'parent', ?)`,
           )
           .run(`${child.entityType}:${child.entityId}`, `${parent.entityType}:${parent.entityId}`);
@@ -567,13 +567,13 @@ export class SqliteScopeHost implements ScopeHost {
         rt.db.exec('BEGIN IMMEDIATE');
         try {
           const already = rt.db
-            .prepare('SELECT 1 FROM _chassis_migrations WHERE module_id = ? AND version = ?')
+            .prepare('SELECT 1 FROM _substrat_migrations WHERE module_id = ? AND version = ?')
             .get(moduleId, migration.version);
           if (!already) {
             rt.db.exec(migration.sql);
             rt.db
               .prepare(
-                'INSERT INTO _chassis_migrations (module_id, version, applied_at) VALUES (?, ?, ?)',
+                'INSERT INTO _substrat_migrations (module_id, version, applied_at) VALUES (?, ?, ?)',
               )
               .run(moduleId, migration.version, new Date().toISOString());
           }
@@ -598,7 +598,7 @@ export class SqliteScopeHost implements ScopeHost {
     db.exec(KERNEL_DDL);
     const appliedMigrations = new Set<string>(
       (
-        db.prepare('SELECT module_id, version FROM _chassis_migrations').all() as {
+        db.prepare('SELECT module_id, version FROM _substrat_migrations').all() as {
           module_id: string;
           version: string;
         }[]

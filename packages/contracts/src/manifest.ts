@@ -22,7 +22,7 @@ export const eventTypeRef = z.object({
 export type EventTypeRef = z.infer<typeof eventTypeRef>;
 
 export const moduleManifest = z.object({
-  id: moduleId, // '@chassis/engine-workorder'
+  id: moduleId, // '@substrat/engine-workorder'
   version: semverVersion,
   kernelContract: z.string().min(1), // semver range of the kernel API it targets
   permissions: z.array(permissionDeclaration),

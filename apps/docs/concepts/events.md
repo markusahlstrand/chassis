@@ -1,6 +1,6 @@
 # Events & audit
 
-Every mutation in a Chassis system emits a **domain event**. Events are the audit trail,
+Every mutation in a Substrat system emits a **domain event**. Events are the audit trail,
 the integration surface between engines, and the feed for reporting — one mechanism,
 three jobs.
 
@@ -85,7 +85,7 @@ moment the event happened — which is exactly what an invoice wants.
 ## Delivery semantics
 
 - Consumers run as ordinary in-scope operations under a **system actor**
-  (`{ system: '@chassis/engine-invoicing' }` — visible as such in the audit trail).
+  (`{ system: '@substrat/engine-invoicing' }` — visible as such in the audit trail).
 - Delivery is **at-least-once**, tracked in a kernel delivery journal — consumers must
   be idempotent; the event `id` is the idempotency key.
 - Ordering is guaranteed only within one (scope, module) pair.

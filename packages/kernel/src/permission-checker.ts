@@ -5,7 +5,7 @@ import {
   type Node,
   type PermissionKey,
   type PrincipalId,
-} from '@chassis/contracts';
+} from '@substrat/contracts';
 
 /**
  * The evaluation seam (D-16): the MODEL is kernel-owned, the evaluation engine

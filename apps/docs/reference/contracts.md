@@ -1,12 +1,12 @@
-# @chassis/contracts
+# @substrat/contracts
 
-The **source of truth** for every data shape that crosses a Chassis boundary. Schemas
+The **source of truth** for every data shape that crosses a Substrat boundary. Schemas
 are written in [Zod](https://zod.dev), so the reviewed artifact *is* the runtime
 validator — OpenAPI and JSON Schema documents are emitted from this package, never
 hand-maintained beside it.
 
 ```sh
-pnpm add @chassis/contracts zod
+pnpm add @substrat/contracts zod
 ```
 
 ## IDs (`ids.ts`)
@@ -20,13 +20,13 @@ Branded ULID types — opaque, sortable, no PII, and unmixable at compile time:
 | `principalId` | `PrincipalId` | |
 | `eventId` | `EventId` | |
 | `dataSubjectId` | `DataSubjectId` | keys crypto-shredding erasure |
-| `moduleId` | `ModuleId` | npm-package-shaped: `@chassis/engine-workorder` |
+| `moduleId` | `ModuleId` | npm-package-shaped: `@substrat/engine-workorder` |
 | `instant` | `Instant` | ISO 8601 with timezone; stamped kernel-side |
 | `permissionKey` | `PermissionKey` | module-namespaced: `workorder:create` |
 | `slug` | — | URL-safe identifier |
 
 ```ts
-import { tenantId, type TenantId } from '@chassis/contracts';
+import { tenantId, type TenantId } from '@substrat/contracts';
 
 const t: TenantId = tenantId.parse(input); // validated + branded
 ```

@@ -2,13 +2,13 @@
 layout: home
 
 hero:
-  name: Chassis
+  name: Substrat
   text: The hard parts, hosted.
   tagline: A runtime-enforced substrate for building vertical B2B SaaS — tenancy, permissions, audit, and GDPR live below your API surface, so code built at AI speed can't break them.
   actions:
     - theme: brand
-      text: What is Chassis?
-      link: /guide/what-is-chassis
+      text: What is Substrat?
+      link: /guide/what-is-substrat
     - theme: alt
       text: Getting started
       link: /guide/getting-started

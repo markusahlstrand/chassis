@@ -8,14 +8,14 @@ import {
   permissionKey,
   type EntityRef,
   type Money,
-} from '@chassis/contracts';
+} from '@substrat/contracts';
 import {
   assertAllowed,
   ulid,
   type ModuleRegistration,
   type OperationContext,
   type OperationHandler,
-} from '@chassis/kernel';
+} from '@substrat/kernel';
 import {
   completeWorkOrder,
   createWorkOrder,
@@ -24,7 +24,7 @@ import {
   PERM as WO,
   type BillableLine,
   type WorkOrder,
-} from '@chassis/engine-workorder';
+} from '@substrat/engine-workorder';
 
 // ============================================================================
 // The ServiceCo vertical (spec/testrun.md §5.1): customers, facilities, the
@@ -38,7 +38,7 @@ export const SC_PERM = {
 };
 
 export const servicecoManifest = moduleManifest.parse({
-  id: '@chassis-demos/fsm',
+  id: '@substrat-demos/fsm',
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [
@@ -299,7 +299,7 @@ const timelineOp: OperationHandler<
     .parse(input);
   assertAllowed(await ctx.check(WO.read, entity));
   return ctx.sql.query(
-    `SELECT type, occurred_at, actor FROM _chassis_outbox
+    `SELECT type, occurred_at, actor FROM _substrat_outbox
      WHERE entity_type = ? AND entity_id = ? ORDER BY id`,
     [entity.entityType, entity.entityId],
   );

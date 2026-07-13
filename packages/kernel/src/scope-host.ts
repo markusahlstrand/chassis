@@ -14,7 +14,7 @@ import type {
   ScopeId,
   StorageShape,
   TenantId,
-} from '@chassis/contracts';
+} from '@substrat/contracts';
 
 /**
  * The scope-host contract — the adapter seam (§5.1 of the design doc).
@@ -79,7 +79,7 @@ export interface SqlMigration {
 /**
  * How a module (engine or vertical) joins a host: manifest + migrations +
  * operations in one registration. Migrations apply lazily per scope, inside
- * the scope's serialization domain, journaled in `_chassis_migrations`
+ * the scope's serialization domain, journaled in `_substrat_migrations`
  * (design doc §5.3 in miniature). Operations are the module's default
  * bindings (K-16); in-scope functions need no registration — they are plain
  * exports called by other modules' handlers.

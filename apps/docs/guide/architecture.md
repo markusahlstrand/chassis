@@ -10,7 +10,7 @@ flowchart TB
     S2["Scope (branch #240)<br/>own SQLite DB + ACL<br/>serialized executor"]
     SPINE["Event spine<br/>audit · reporting · integrations"]
 
-    V -->|"@chassis/kernel API only"| H
+    V -->|"@substrat/kernel API only"| H
     H --> S1
     H --> S2
     S1 -->|"events (kernel-stamped)"| SPINE
@@ -50,16 +50,16 @@ See [Tenants & scopes](/concepts/tenancy) and
 ## Contracts first, adapters below
 
 Every boundary-crossing data shape is a [Zod](https://zod.dev) schema in
-[`@chassis/contracts`](/reference/contracts) — the reviewed artifact *is* the runtime
+[`@substrat/contracts`](/reference/contracts) — the reviewed artifact *is* the runtime
 validator ("parse, don't trust"). The kernel's behavioral seams are pure TypeScript
-interfaces in [`@chassis/kernel`](/reference/kernel) that import no platform APIs.
+interfaces in [`@substrat/kernel`](/reference/kernel) that import no platform APIs.
 
 Platform specifics live only in **adapters**:
 
 | Adapter | Backing | Use |
 |---|---|---|
-| [`@chassis/adapter-sqlite`](/reference/adapter-sqlite) | one SQLite file per scope, per-scope actor | local dev, CI, self-host |
-| `@chassis/adapter-cloudflare` (planned) | Durable Object per scope | production |
+| [`@substrat/adapter-sqlite`](/reference/adapter-sqlite) | one SQLite file per scope, per-scope actor | local dev, CI, self-host |
+| `@substrat/adapter-cloudflare` (planned) | Durable Object per scope | production |
 
 The rule is testable and non-negotiable: **a module's contract tests must pass unchanged
 on both adapters.** The pure-SQLite adapter is not a mock — it implements the same

@@ -23,13 +23,13 @@ compliance — is the layer where mistakes are catastrophic. The layer where LLM
 strongest — screens, forms, workflows, reports — is the layer where mistakes are
 cosmetic.**
 
-Chassis puts humans and hard guarantees under the line, and AI velocity above it.
+Substrat puts humans and hard guarantees under the line, and AI velocity above it.
 
 ## Defaults, not configuration
 
 The subtler failure mode than "no enforcement" is **enforcement you can misconfigure**:
 platforms where isolation is real but contingent on builder-declared policy — a public
-ACL here, a system-mode default there. Chassis guarantees are defaults of the substrate,
+ACL here, a system-mode default there. Substrat guarantees are defaults of the substrate,
 not configuration surfaces:
 
 - There is no API that returns another scope's data with the wrong flag set — the API
@@ -53,7 +53,7 @@ serialization, fail-closed addressing, stamped envelopes — unchanged, forever.
 
 ## The two human checkpoints
 
-Chassis is built for verticals that iterate at AI speed, but two things stay under human
+Substrat is built for verticals that iterate at AI speed, but two things stay under human
 review even in a fully agent-driven shop:
 
 1. **Schema migrations** — the blast radius of a bad migration is data, not pixels.

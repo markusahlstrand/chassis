@@ -1,11 +1,11 @@
-# @chassis/kernel
+# @substrat/kernel
 
 The kernel's **behavioral seams** in pure TypeScript. This package imports no platform
 APIs — Cloudflare specifics live only in adapters, and every adapter must pass the same
 [conformance suite](/reference/contract-tests).
 
 ```sh
-pnpm add @chassis/kernel @chassis/contracts
+pnpm add @substrat/kernel @substrat/contracts
 ```
 
 ## Scope host (`scope-host.ts`)
@@ -42,17 +42,17 @@ The evaluation seam — the model is kernel-owned, the engine is swappable. See
 ## `ulid()`
 
 A dependency-free ULID generator — the ID scheme used everywhere
-(`ids` in [`@chassis/contracts`](/reference/contracts)).
+(`ids` in [`@substrat/contracts`](/reference/contracts)).
 
 ```ts
-import { ulid } from '@chassis/kernel';
+import { ulid } from '@substrat/kernel';
 const id = ulid(); // '01JZX6ZH2E...'
 ```
 
 ## Guarantees adapters must uphold
 
 Any `ScopeHost` implementation must provide — verified by
-[`@chassis/contract-tests`](/reference/contract-tests):
+[`@substrat/contract-tests`](/reference/contract-tests):
 
 - **Strict serialization per scope** — one operation at a time, to completion.
 - **Structured-clone boundary** — inputs/results cloned both directions, even

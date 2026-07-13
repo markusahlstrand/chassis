@@ -1,6 +1,6 @@
 # Invoicing engine
 
-`@chassis/engine-invoicing` — accumulates **invoice bases** (Swedish: *fakturaunderlag*)
+`@substrat/engine-invoicing` — accumulates **invoice bases** (Swedish: *fakturaunderlag*)
 from billable events and makes them **immutable once exported**. It is the reference
 example of star-topology composition: it consumes the work-order engine's events with
 zero imports from it.

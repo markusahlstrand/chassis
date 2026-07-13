@@ -57,7 +57,7 @@ export default function App() {
     <>
       <header className="topbar">
         <div className="brand">
-          Service<span>Co</span> <span className="muted" style={{ fontSize: 11 }}>on Chassis</span>
+          Service<span>Co</span> <span className="muted" style={{ fontSize: 11 }}>on Substrat</span>
         </div>
         <nav>
           {!isPortal && (

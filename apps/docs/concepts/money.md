@@ -1,12 +1,12 @@
 # Money
 
-Chassis ships **one money representation** and one sanctioned way to compute with it,
+Substrat ships **one money representation** and one sanctioned way to compute with it,
 because "every engine invents its own money handling" is how reconciliation dies.
 
 ## The representation
 
 ```ts
-import { money, moneyOf, type Money } from '@chassis/contracts';
+import { money, moneyOf, type Money } from '@substrat/contracts';
 
 type Money = {
   amount: MoneyAmount;     // decimal string, up to 6 dp — never a float
@@ -28,7 +28,7 @@ All computation happens on micro-units (6 decimal places, `bigint`) with half-up
 rounding at the 6th decimal — exact, deterministic, overflow-free:
 
 ```ts
-import { addMoney, mulMoney, addDecimal, mulDecimal, compareDecimal } from '@chassis/contracts';
+import { addMoney, mulMoney, addDecimal, mulDecimal, compareDecimal } from '@substrat/contracts';
 
 addMoney(a, b);            // Money + Money (throws on currency mismatch)
 mulMoney('2.5', hourlyRate); // quantity × unit price → Money
@@ -45,7 +45,7 @@ The system's standing integrity guarantee is that **reported totals reconcile wi
 transactional truth** — a reconciliation job continuously verifies that sums derived
 from the event stream match the balances in scope databases. That guarantee is only as
 good as the weakest arithmetic in any engine, which is why the arithmetic lives in
-`@chassis/contracts` and not in each engine's utils file.
+`@substrat/contracts` and not in each engine's utils file.
 
 You can see the discipline in the engines: the work-order engine sums billable lines
 with `addMoney`; the invoicing engine stores `amount`/`currency` as separate columns and

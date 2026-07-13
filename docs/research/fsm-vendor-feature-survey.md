@@ -351,7 +351,7 @@ company lookup (bolagssök) · person lookup (privatsök) · supplier-invoice in
    sv/no/en UI.
 7. **No public pricing**; quote-based sales with "no hidden fees" counter-positioning.
 
-## 8. Implications for Chassis (deltas against current design docs)
+## 8. Implications for Substrat (deltas against current design docs)
 
 Findings that should feed back into [the demo concept](../../demos/fsm/spec/concept.md) and
 future engine designs:

@@ -8,8 +8,8 @@ import {
   type EntityRef,
   type PermissionKey,
   type PrincipalId,
-} from '@chassis/contracts';
-import { ulid, type OperationHandler, type ScopeHost } from '@chassis/kernel';
+} from '@substrat/contracts';
+import { ulid, type OperationHandler, type ScopeHost } from '@substrat/kernel';
 import type { ScopeHostFixture } from './scope-host-suite.js';
 
 const permModManifest = moduleManifest.parse({
@@ -114,7 +114,7 @@ export function permissionContractSuite(
         principalId: dave,
         permission: PERM_READ,
         node: { tenantId: t1, scopeId: s1 },
-        expiresAt: (await import('@chassis/contracts')).instant.parse('2000-01-01T00:00:00Z'),
+        expiresAt: (await import('@substrat/contracts')).instant.parse('2000-01-01T00:00:00Z'),
         grantedBy: alice,
       });
       host.admin.grantToOrg('acme', PERM_READ, { tenantId: t1, scopeId: s1 });

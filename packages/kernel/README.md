@@ -1,13 +1,13 @@
-# @chassis/kernel
+# @substrat/kernel
 
-Kernel contracts and services for [Chassis](https://github.com/markusahlstrand/chassis) —
+Kernel contracts and services for [Substrat](https://github.com/markusahlstrand/chassis) —
 the hard parts of vertical B2B SaaS (tenancy, permissions, audit, GDPR), hosted and
 enforced at runtime.
 
 This package defines the **behavioral seams** of the kernel in pure TypeScript. It
 imports no platform APIs — Cloudflare specifics live only in adapters, and every
 adapter must pass the same conformance suite
-([`@chassis/contract-tests`](https://npmjs.com/package/@chassis/contract-tests)).
+([`@substrat/contract-tests`](https://npmjs.com/package/@substrat/contract-tests)).
 
 ## The scope-host contract
 
@@ -16,7 +16,7 @@ database. Module code registers **operations**; callers reach a scope only throu
 capability stub minted by the host:
 
 ```ts
-import type { ScopeHost } from '@chassis/kernel';
+import type { ScopeHost } from '@substrat/kernel';
 
 host.defineOperation('workorder/create', async (ctx, input) => {
   await ctx.check('workorder:create');      // ambient principal + scope
@@ -47,9 +47,9 @@ a deliberately alarming `UNSAFE_allowAllChecker` for tests) and a dependency-fre
 
 ## Related packages
 
-- [`@chassis/contracts`](https://npmjs.com/package/@chassis/contracts) — the Zod data
+- [`@substrat/contracts`](https://npmjs.com/package/@substrat/contracts) — the Zod data
   shapes these interfaces are built on
-- [`@chassis/adapter-sqlite`](https://npmjs.com/package/@chassis/adapter-sqlite) — the
+- [`@substrat/adapter-sqlite`](https://npmjs.com/package/@substrat/adapter-sqlite) — the
   pure-SQLite reference implementation
 
 ## Status

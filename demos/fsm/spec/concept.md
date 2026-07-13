@@ -93,7 +93,7 @@ fields, the price-list + avtal tables and the pricing hook, role *definitions* f
 personas (office-admin, technician, customer), screens (dispatch list, technician
 mobile capture form, customer portal page, fakturaunderlag review), and the manifest
 wiring both engines + Fortnox stub. Screens compose via the manifest `ui` contributions
-into `@chassis/shell` (shadcn-admin seed) per kernel-design §7.4 — the engines ship
+into `@substrat/shell` (shadcn-admin seed) per kernel-design §7.4 — the engines ship
 default headless-first screens; the demo vertical uses them copy-and-own. **No raw DB, no fetch, no event forging — lint and
 the contract surface make the vertical boring by construction.** The v2 bike-shop skin
 replaces vocabulary, price list, and screens only.
@@ -113,7 +113,7 @@ replaces vocabulary, price list, and screens only.
    RörService's orders — forged scope ID, direct SQL, cross-tenant stub request. Lint
    catches what it can in CI; the boundary rejects the rest at runtime, audited. This is
    the §10 enforcement table, performed.
-5. **(2 min) The exit**: stop the demo, `chassis dev` the same data on plain SQLite
+5. **(2 min) The exit**: stop the demo, `substrat dev` the same data on plain SQLite
    files, open one in a SQLite browser — the escrow/eject story, shown not told.
 
 6. *(stretch beat)* Cross-tenant grant: RörService as subcontractor receives one

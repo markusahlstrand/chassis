@@ -1,6 +1,6 @@
-# @chassis/contract-tests
+# @substrat/contract-tests
 
-The conformance suite for [Chassis](https://github.com/markusahlstrand/chassis)
+The conformance suite for [Substrat](https://github.com/markusahlstrand/chassis)
 scope-host adapters. Every adapter — pure SQLite, Cloudflare Durable Objects, and any
 future one — must pass this suite **unchanged**, forever. If an adapter needs the suite
 modified, the contract changed, and that is a decision, not a patch.
@@ -12,7 +12,7 @@ nothing itself. Each adapter runs the suite from its own `test/` folder.
 
 ```ts
 // packages/adapter-yours/test/contract.test.ts
-import { scopeHostContractSuite } from '@chassis/contract-tests';
+import { scopeHostContractSuite } from '@substrat/contract-tests';
 import { YourScopeHost } from '../src/index.js';
 
 scopeHostContractSuite('adapter-yours', async () => {

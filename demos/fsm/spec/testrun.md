@@ -6,7 +6,7 @@ Status: draft v0.1 · Last updated: 2026-07-13
 > [kernel-design.md](../../../docs/design/kernel-design.md) (the contracts). This document is the
 > implementation-level spec: concrete schemas, operations, events, permissions, and the
 > scenario script — detailed enough to build and run end-to-end on
-> `@chassis/adapter-sqlite` with **no UI, no HTTP, no Cloudflare** — and to derive the
+> `@substrat/adapter-sqlite` with **no UI, no HTTP, no Cloudflare** — and to derive the
 > **minimum kernel API surface** (§9) the run requires.
 
 ## 1. Goal and non-goals
@@ -35,7 +35,7 @@ notifications, documents, custom fields, offline, Cloudflare adapter.
 |---|---|---|
 | `engines/workorder` | orders + time + material (one engine, D-19) | `workorder_*`, ops `workorder/*` |
 | `engines/invoicing` | fakturaunderlag | `invoicing_*`, ops `invoicing/*` |
-| `demos/fsm` (`@chassis-demos/fsm`, private) | customers, facilities, price list, orchestration | `serviceco_*`, ops `serviceco/*` |
+| `demos/fsm` (`@substrat-demos/fsm`, private) | customers, facilities, price list, orchestration | `serviceco_*`, ops `serviceco/*` |
 
 Workspace: `demos/*` in `pnpm-workspace.yaml`. Demo verticals live under `demos/`
 (one folder per demo, more over time — `demos/bikeshop` is next); the engines stay
@@ -250,7 +250,7 @@ that chain as the proof**. Same check against styrbjörn's order → deny.
 ## 8. The scenario script (vitest, in order)
 
 1. **Provision**: two hosts? No — one host, two tenants, one scope each; register all
-   three modules; migrations apply on first `getScope` (assert `_chassis_migrations`
+   three modules; migrations apply on first `getScope` (assert `_substrat_migrations`
    rows per module).
 2. **Seed**: roles/assignments/grants (§7); customers *BRF Grunden* + *Kontorshotellet*
    with one facility each; price list (`labor` 515/tim min 1.5, `travel-km` 6/km
@@ -282,7 +282,7 @@ that chain as the proof**. Same check against styrbjörn's order → deny.
    asserted here as "tables exist and are readable read-only".
 
 Every assertion above that touches kernel behavior (journal, delivery, proof paths,
-fail-closed) graduates into `@chassis/contract-tests` as a generic harness; the
+fail-closed) graduates into `@substrat/contract-tests` as a generic harness; the
 FSM-specific ones stay in the vertical's own `test/`.
 
 ## 9. Minimum kernel surface — the deliverable
@@ -306,11 +306,11 @@ strict serialization + clone boundary · fail-closed pair check · contracts sch
    D-23 rule 3. (Contract addition — K-16.)
 3. **Local event dispatch.** After an operation commits, the host drains new outbox
    rows to registered consumers *in the same scope*, at-least-once, recorded in a
-   kernel `_chassis_deliveries (event_id, consumer_module)` journal; consumer handlers
+   kernel `_substrat_deliveries (event_id, consumer_module)` journal; consumer handlers
    run as ordinary in-scope operations (system actor). Redelivery on crash; consumers
    idempotent by contract.
 4. **Tuple permission checker v0** behind the existing `PermissionChecker` seam:
-   `_chassis_tuples` in scope storage; the four fixed derivations (role expansion,
+   `_substrat_tuples` in scope storage; the four fixed derivations (role expansion,
    tree inheritance via tenant-level assignments, declared entity edges depth≤4,
    membership); proof-path decisions; `explain`.
 5. **Kernel admin surface** for enforcement input: `defineRole`, `assignRole`,
@@ -339,7 +339,7 @@ distance between today's green scaffold and a running FSM.**
 2. `engines/workorder` (schemas → migrations → functions/ops → own tests).
 3. `engines/invoicing` (+ consumer; redelivery test).
 4. `demos/fsm` (+ the §8 scenario as its test suite).
-5. Promote generic assertions into `@chassis/contract-tests`.
+5. Promote generic assertions into `@substrat/contract-tests`.
 
 ## 11. Open items surfaced by this spec
 

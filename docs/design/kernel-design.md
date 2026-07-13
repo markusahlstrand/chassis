@@ -1,4 +1,4 @@
-# Chassis Kernel — Design Document
+# Substrat Kernel — Design Document
 
 Status: draft v0.1 · Last updated: 2026-07-12
 
@@ -48,7 +48,7 @@ flowchart TB
     QG["Query gateway<br/>Tier 2 only · injects tenant predicates"]
     SPINE["Event spine → Pipelines → Iceberg on R2"]
 
-    V -->|"@chassis/sdk only — lint bans raw fetch/DB"| API
+    V -->|"@substrat/sdk only — lint bans raw fetch/DB"| API
     API --> TR
     API --> S
     API --> QG
@@ -368,7 +368,7 @@ is why it lives on the `Scope` row.
   D1 HTTP API instead of waiting for wake; the wake-time version check still guards
   serving.
 - Human checkpoint: migrations are the second non-negotiable review gate (§4 of the
-  plan). `chassis migrate --dry-run` renders the diff per shape; agents can propose,
+  plan). `substrat migrate --dry-run` renders the diff per shape; agents can propose,
   never apply.
 
 ### 5.4 Operating the scope fleet
@@ -461,7 +461,7 @@ file, spec-first, checked into the module package:
 
 ```ts
 interface ModuleManifest {
-  id: ModuleId;                    // '@chassis/engine-workorder'
+  id: ModuleId;                    // '@substrat/engine-workorder'
   version: string;                 // semver; kernel enforces (§6 of the plan)
   kernelContract: string;          // semver range of kernel API it targets
   permissions: PermissionDeclaration[];   // keys + human descriptions (fuel for §4.3 diffs)
@@ -512,19 +512,19 @@ Engines own **tables and migrations, never databases**. The decisive reason is
 transactional: the outbox pattern (K-4) requires a domain write and its event to commit
 in one transaction, and the scope is the consistency domain (D-4) — everything that must
 commit together lives in one database. One scope database, shared by every module active
-in that scope: kernel tables (`_chassis_*`), engine tables, vertical tables.
+in that scope: kernel tables (`_substrat_*`), engine tables, vertical tables.
 
 Ownership rules:
 
 1. **Namespaced tables.** Each module prefixes its tables (`workorder_*`); the
-   `_chassis_` prefix is reserved. Within a module, FKs and joins are fine and
+   `_substrat_` prefix is reserved. Within a module, FKs and joins are fine and
    encouraged.
 2. **Cross-module FKs are forbidden.** Cross-module references use the opaque
    `EntityRef` stored as plain columns — the star topology (D-19) applied to schema.
    Engines version and license independently, which physical schema entanglement would
    break. CI-lintable: parse migration SQL, reject `REFERENCES` across prefix
    boundaries.
-3. **Migrations are module-owned and module-journaled** (`_chassis_migrations` tracks
+3. **Migrations are module-owned and module-journaled** (`_substrat_migrations` tracks
    `(module_id, version)`); on wake, each active module's pending migrations apply
    independently — kernel, then engines, then vertical. An engine upgrade never touches
    another module's tables.
@@ -606,7 +606,7 @@ entirely, keeping the headless layer.
 
 **The shell and what sits above it:**
 
-- `@chassis/shell` — seeded from shadcn-admin as a one-time copy (proven on the auth
+- `@substrat/shell` — seeded from shadcn-admin as a one-time copy (proven on the auth
   platform), then stripped and owned: auth pages replaced by identity-adapter flows,
   nav replaced by the contribution renderer. The shell stays domain-free — kernel
   chrome only (org/scope switcher, permission-aware nav, settings, members, audit
@@ -653,15 +653,15 @@ module manifest.
 pnpm monorepo, published as:
 
 ```
-@chassis/sdk               — the narrow typed surface verticals import (the only import)
-@chassis/kernel            — contracts + kernel services (runtime-agnostic core)
-@chassis/adapter-cloudflare
-@chassis/adapter-sqlite
-@chassis/contracts             — Zod contract schemas (source of truth, D-22) + emitted
+@substrat/sdk               — the narrow typed surface verticals import (the only import)
+@substrat/kernel            — contracts + kernel services (runtime-agnostic core)
+@substrat/adapter-cloudflare
+@substrat/adapter-sqlite
+@substrat/contracts             — Zod contract schemas (source of truth, D-22) + emitted
                              OAS/JSON Schema artifacts, checked in and CI-diffed
-@chassis/cli               — `chassis dev` (pure-SQLite composition), migrate --dry-run,
+@substrat/cli               — `substrat dev` (pure-SQLite composition), migrate --dry-run,
                              scaffold; the MCP server ships here
-@chassis/contract-tests    — the suite every adapter and module must pass
+@substrat/contract-tests    — the suite every adapter and module must pass
 engines/*                  — manifest-carrying packages, versioned independently
 demos/*                    — demo verticals (private, never published): demos/fsm first,
                              demos/bikeshop later reusing the same engines (reuse proof)
@@ -683,11 +683,11 @@ isolation test suite and the 15-minute demo's failure moment:
 | call third-party APIs raw | credentials live in the hub; lint bans `fetch`; egress policy on user workers (WFP) | vertical with hand-rolled fetch fails CI *and* runtime egress |
 | skip or forge audit | envelope stamped kernel-side; emission transactional via outbox | write-without-event harness; origin-spoof attempt |
 | mislabel PII | `piiClass` required by event-type schema; emit validates against generated schema | unclassified event type fails spec build |
-| self-approve schema/permission changes | migrations + permission definitions only apply via reviewed path; agents get dry-run only | `chassis migrate` without approval token is inert |
+| self-approve schema/permission changes | migrations + permission definitions only apply via reviewed path; agents get dry-run only | `substrat migrate` without approval token is inert |
 
 ## 11. Testing strategy
 
-1. **Contract tests** (`@chassis/contract-tests`): every kernel contract, run against
+1. **Contract tests** (`@substrat/contract-tests`): every kernel contract, run against
    both adapters in CI, forever (D-14). Includes the duplicate-delivery, skew-window, and
    crash-during-provisioning harnesses.
 2. **Isolation suite**: the §10 table above, run adversarially; results published (the
@@ -703,7 +703,7 @@ isolation test suite and the 15-minute demo's failure moment:
 What must exist, and nothing more (§13.4): directory + provisioning for two tenants ×
 two scopes · permission model with `check`/`explain` · scope stub on the **pure-SQLite
 adapter only** (Cloudflare adapter may lag — the demo is about contracts, not hosting) ·
-event envelope + local spine · module manifest loading a toy engine · `chassis dev` +
+event envelope + local spine · module manifest loading a toy engine · `substrat dev` +
 scaffold + specs enough for the agent loop · the isolation suite's tenant-boundary test,
 shown **failing the attack live**.
 
@@ -761,6 +761,6 @@ externalization convention is day one; translations are not).
 | K-11 | 2026-07-13 | Module storage model (§7.3): engines own namespaced tables + module-journaled migrations in the shared scope DB, never databases; no cross-module FKs; event ordering only within (scope, module); no cross-module transactions promised; outbox is per-database | Outbox atomicity requires one DB per consistency domain; forbidding cross-module coupling keeps per-engine sharding and Shape B migration available as ops changes, not contract changes |
 | K-12 | 2026-07-13 | Permission evaluation = constrained relationship-tuple engine (§4.2): fixed four-rule algebra, no negation/config, scope-local tuples, proof-path decisions; grants gain optional entity narrowing; manifests declare entity parent edges | Implements plan D-23; the FSM portal-customer case needs entity-graph resolution; per-scope serialization makes the mini-engine small (no zookies) |
 | K-13 | 2026-07-13 | Attachment items carry mandatory `visibility: internal \| customer` | FSM survey: internal/external flags pervade every portal-shared surface; classifications are only total if never optional (same reasoning as piiClass) |
-| K-14 | 2026-07-13 | Shared `money` schema in @chassis/contracts: decimal-string amount + ISO 4217 code, branded; engines never invent money representations | Multi-currency evidence (SEK/NOK) + Tier 1/Tier 2 reconciliation needs uniform money handling |
-| K-15 | 2026-07-13 | UI composition (§7.4): build-time composition of manifest-declared `ui` contributions into one React app per vertical; entity-view registry for cross-engine rendering; headless-first engine UI with copy-and-own screens; `@chassis/shell` seeded from shadcn-admin; three surfaces (office/field/portal); runtime microfrontends rejected; web-component slot kept as future escape hatch | Federation solves team-scale deployment we don't have and costs theming/versioning/agent ergonomics; the manifest, proof-path checker, and EntityRef registry are exactly the primitives a pluggable UI needs |
-| K-16 | 2026-07-13 | In-scope composition (demos/fsm/spec/testrun.md §9.2): engines export plain functions taking `ctx`; a vertical's operation may call them — same transaction, same serialization; registered operations are default bindings of these functions. Plus `ctx.link(child, parent)` writing manifest-declared relation tuples, and kernel-managed at-least-once local event dispatch with a `_chassis_deliveries` journal | Vertical-owned orchestration (D-19) needs one-transaction composition (e.g. price-then-complete); invariants hold because everything still flows through ctx; `link` is the write path for D-23 rule 3 |
+| K-14 | 2026-07-13 | Shared `money` schema in @substrat/contracts: decimal-string amount + ISO 4217 code, branded; engines never invent money representations | Multi-currency evidence (SEK/NOK) + Tier 1/Tier 2 reconciliation needs uniform money handling |
+| K-15 | 2026-07-13 | UI composition (§7.4): build-time composition of manifest-declared `ui` contributions into one React app per vertical; entity-view registry for cross-engine rendering; headless-first engine UI with copy-and-own screens; `@substrat/shell` seeded from shadcn-admin; three surfaces (office/field/portal); runtime microfrontends rejected; web-component slot kept as future escape hatch | Federation solves team-scale deployment we don't have and costs theming/versioning/agent ergonomics; the manifest, proof-path checker, and EntityRef registry are exactly the primitives a pluggable UI needs |
+| K-16 | 2026-07-13 | In-scope composition (demos/fsm/spec/testrun.md §9.2): engines export plain functions taking `ctx`; a vertical's operation may call them — same transaction, same serialization; registered operations are default bindings of these functions. Plus `ctx.link(child, parent)` writing manifest-declared relation tuples, and kernel-managed at-least-once local event dispatch with a `_substrat_deliveries` journal | Vertical-owned orchestration (D-19) needs one-transaction composition (e.g. price-then-complete); invariants hold because everything still flows through ctx; `link` is the write path for D-23 rule 3 |

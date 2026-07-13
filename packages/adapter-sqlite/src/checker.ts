@@ -8,8 +8,8 @@ import {
   type PrincipalId,
   type RelationTuple,
   type RoleDefinition,
-} from '@chassis/contracts';
-import type { PermissionChecker } from '@chassis/kernel';
+} from '@substrat/contracts';
+import type { PermissionChecker } from '@substrat/kernel';
 
 /**
  * The built-in constrained relationship-tuple evaluator (design doc §4.2,
@@ -18,8 +18,8 @@ import type { PermissionChecker } from '@chassis/kernel';
  * negation, no configurable rewrites. Every allow carries its tuple proof.
  *
  * Tuple placement: scope-level and entity tuples live in the scope database
- * (`_chassis_tuples`); tenant-level assignments/grants and org membership
- * live in the directory (`_chassis_tenant_tuples`). Everything is evaluated
+ * (`_substrat_tuples`); tenant-level assignments/grants and org membership
+ * live in the directory (`_substrat_tenant_tuples`). Everything is evaluated
  * inside the caller's serialization domain, so check-after-write consistency
  * is free — the "no zookies" property.
  */
@@ -50,7 +50,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
   const tenantTuples = (tenantId: string, subject: string, relationPrefix: string): TupleRow[] =>
     deps.directory
       .prepare(
-        `SELECT subject, relation, object, expires_at FROM _chassis_tenant_tuples
+        `SELECT subject, relation, object, expires_at FROM _substrat_tenant_tuples
          WHERE tenant_id = ? AND subject = ? AND relation LIKE ?`,
       )
       .all(tenantId, subject, `${relationPrefix}%`) as TupleRow[];
@@ -62,7 +62,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
   ): TupleRow[] =>
     db
       .prepare(
-        `SELECT subject, relation, object, expires_at FROM _chassis_tuples
+        `SELECT subject, relation, object, expires_at FROM _substrat_tuples
          WHERE subject = ? AND relation LIKE ?`,
       )
       .all(subject, `${relationPrefix}%`) as TupleRow[];
@@ -152,7 +152,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
             for (const subject of subjects) {
               const grant = scopeDb
                 .prepare(
-                  `SELECT subject, relation, object, expires_at FROM _chassis_tuples
+                  `SELECT subject, relation, object, expires_at FROM _substrat_tuples
                    WHERE subject = ? AND relation = ? AND object = ?`,
                 )
                 .get(subject.ref, `granted:${permission}`, candidate.ref) as
@@ -175,7 +175,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
           for (const candidate of frontier) {
             const parents = scopeDb
               .prepare(
-                `SELECT subject, relation, object, expires_at FROM _chassis_tuples
+                `SELECT subject, relation, object, expires_at FROM _substrat_tuples
                  WHERE subject = ? AND relation = 'parent'`,
               )
               .all(candidate.ref) as TupleRow[];

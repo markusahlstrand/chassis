@@ -1,6 +1,6 @@
 # Tenants & scopes
 
-Chassis tenancy is **two levels, tree-shaped**: the tenant is the business that pays you
+Substrat tenancy is **two levels, tree-shaped**: the tenant is the business that pays you
 (a property-management firm, a retail chain, a publisher); beneath it are **scopes** —
 the housing associations it manages, its branch offices, its client companies, its
 brands. Users belong to the tenant, to a scope, or to several scopes with different
@@ -12,7 +12,7 @@ to retrofit — which is why it's kernel-owned and first-class rather than a con
 ## The entities
 
 ```ts
-import { tenant, scope } from '@chassis/contracts';
+import { tenant, scope } from '@substrat/contracts';
 
 type Tenant = {
   id: TenantId;          // branded ULID

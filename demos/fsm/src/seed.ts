@@ -7,11 +7,11 @@ import {
   type PrincipalId,
   type ScopeId,
   type TenantId,
-} from '@chassis/contracts';
-import { ulid } from '@chassis/kernel';
-import { SqliteScopeHost } from '@chassis/adapter-sqlite';
-import { workorderModule, PERM as WO } from '@chassis/engine-workorder';
-import { invoicingModule, INVOICING_PERM as INV } from '@chassis/engine-invoicing';
+} from '@substrat/contracts';
+import { ulid } from '@substrat/kernel';
+import { SqliteScopeHost } from '@substrat/adapter-sqlite';
+import { workorderModule, PERM as WO } from '@substrat/engine-workorder';
+import { invoicingModule, INVOICING_PERM as INV } from '@substrat/engine-invoicing';
 import { servicecoModule, SC_PERM } from './module.js';
 
 export interface DemoWorld {

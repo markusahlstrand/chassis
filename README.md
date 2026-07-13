@@ -1,14 +1,14 @@
-# Chassis
+# Substrat
 
 **The hard parts, hosted.**
 
 AI made building vertical B2B software fast — except for the parts that were never about
 writing code: multi-tenancy, identity, permissions, integrations, data integrity, audit,
-GDPR. Chassis is a hosted substrate that owns those parts and enforces them at runtime, so
+GDPR. Substrat is a hosted substrate that owns those parts and enforces them at runtime, so
 small teams — including non-engineers wielding AI tools — can build production-grade
 vertical SaaS on top.
 
-We build the chassis. You build the vehicle.
+We build the substrate. You build the verticals.
 
 ## The idea in three points
 
@@ -23,9 +23,9 @@ We build the chassis. You build the vehicle.
 
 ## Status
 
-Kernel scaffold under way: `@chassis/contracts` (Zod contracts — the source of truth),
-`@chassis/kernel` (contract interfaces), `@chassis/adapter-sqlite` (pure-SQLite scope
-host), and `@chassis/contract-tests` (the suite every adapter must pass). Run
+Kernel scaffold under way: `@substrat/contracts` (Zod contracts — the source of truth),
+`@substrat/kernel` (contract interfaces), `@substrat/adapter-sqlite` (pure-SQLite scope
+host), and `@substrat/contract-tests` (the suite every adapter must pass). Run
 `pnpm install && pnpm test`.
 
 The canonical planning document is [docs/master-plan.md](docs/master-plan.md) —

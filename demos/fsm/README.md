@@ -1,7 +1,7 @@
 # FSM demo — "ServiceCo"
 
 The first demo vertical: a small Swedish service/installation firm built on the
-Chassis kernel and the work-order + invoicing engines. **Runs end-to-end**: React UI →
+Substrat kernel and the work-order + invoicing engines. **Runs end-to-end**: React UI →
 Hono API → kernel operations → per-scope SQLite, with the tuple permission engine
 enforcing every call.
 
@@ -35,7 +35,7 @@ that's the escrow story, live. Delete `.data/` to reseed.
   [spec/testrun.md](spec/testrun.md)
 - **View specifications:** [spec/views.md](spec/views.md)
 
-`pnpm --filter @chassis-demos/fsm test` runs the headless nine-step scenario from
+`pnpm --filter @substrat-demos/fsm test` runs the headless nine-step scenario from
 spec/testrun.md §8.
 
 Demo verticals under `demos/` are private and never published. The engines they consume

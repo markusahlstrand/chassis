@@ -34,7 +34,7 @@ Cross-cutting improvements applied to *every* view, then not repeated:
   `ProofPopover` shows the tuple chain. "View as user" is a shell toggle (§7.8).
 - **i18n keys day one** (sv/en for the demo); dark mode via theme tokens.
 
-## 1. Office shell (desktop, `@chassis/shell`)
+## 1. Office shell (desktop, `@substrat/shell`)
 
 ### 1.1 Work order list — `/workorders` · `workorder:read` · **v0**
 
@@ -118,7 +118,7 @@ open the underlying append-only entries (auditability their matrix lacks).
 - Role/assignment/grant list per node; **"View as"** launcher (any principal, any
   scope) — the §7.8 demo prop; **permission diff** review screen for definition
   changes (who gains what, where — rendered from tuples). The incumbent has nothing
-  here; this is Chassis showing its kernel.
+  here; this is Substrat showing its kernel.
 
 ## 2. Field mobile (separate lightweight shell, same headless hooks)
 

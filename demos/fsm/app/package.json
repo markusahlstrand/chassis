@@ -1,5 +1,5 @@
 {
-  "name": "@chassis-demos/fsm-app",
+  "name": "@substrat-demos/fsm-app",
   "version": "0.0.1",
   "private": true,
   "type": "module",

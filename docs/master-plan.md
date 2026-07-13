@@ -1,4 +1,4 @@
-# Chassis — Master Plan
+# Substrat — Master Plan
 
 > **The hard parts, hosted.**
 >
@@ -23,11 +23,11 @@ never about writing code: multi-tenancy, identity, permissions, integrations, da
 audit, and GDPR. Those are exactly the parts that are catastrophic when wrong and that
 LLM-generated code gets wrong most often.
 
-Chassis is a hosted substrate that owns those hard parts and enforces them **at runtime** —
+Substrat is a hosted substrate that owns those hard parts and enforces them **at runtime** —
 so that small teams (including non-engineers wielding AI tools) can build production-grade
 vertical SaaS on top, at AI speed, without the speed being fatal.
 
-We build the chassis. They build the vehicles.
+We build the substrate. They build the verticals.
 
 ## 2. The problem, with evidence
 
@@ -55,13 +55,13 @@ depends on them. He is right, and the failure list is enumerable — and it is t
 The structural insight: **the layer where LLMs are weakest (tenancy, auth, migrations,
 integrations, compliance) is the layer where mistakes are catastrophic. The layer where LLMs
 are strongest (screens, forms, workflows, reports) is the layer where mistakes are cosmetic.**
-Chassis puts humans and hard guarantees under the line, and AI velocity above it.
+Substrat puts humans and hard guarantees under the line, and AI velocity above it.
 
 ## 3. The three-layer model
 
 Everything in this plan hangs off one architectural and commercial decomposition:
 
-**Kernel** (Chassis proper). Everything that is true of every B2B SaaS and nothing that is
+**Kernel** (Substrat proper). Everything that is true of every B2B SaaS and nothing that is
 true of any particular one. Identity, nested tenancy, permissions, documents, integrations
 framework, events/audit/reporting spine, module system, notifications, jobs, billing
 entitlements, GDPR machinery, app shell. Owns **no domain entities** — no customer table,
@@ -102,10 +102,10 @@ is the very thing vibe coders misconfigure (Supabase RLS). Conventions erode wit
 LLM edit. The adjacent failure mode is **configuration**: even platforms that do enforce
 at runtime make the guarantee contingent on builder-declared rules — Supabase RLS,
 ServiceNow ACLs (2023 mass exposures from misconfigured public ACLs), Salesforce Apex
-defaulting to system mode. Chassis guarantees are defaults of the substrate, not
+defaulting to system mode. Substrat guarantees are defaults of the substrate, not
 configuration surfaces the builder — human or AI — can get wrong.
 
-Chassis inverts this. Generated vertical code **cannot**:
+Substrat inverts this. Generated vertical code **cannot**:
 
 - reach another tenant's data — data access only exists as capability-scoped RPC into the
   owning scope's Durable Object, which validates the caller against its own ACL;
@@ -120,7 +120,7 @@ When the guarantees live below the API surface, it stops mattering who — or wh
 the code above it. This is a categorically stronger safety model than "prompt the LLM to be
 careful," and it is the one property that survives model improvement: even a future AI that
 writes flawless tenancy code doesn't solve the **trust** problem. Someone has to underwrite
-that isolation, audit, and GDPR hold structurally. That someone is Chassis.
+that isolation, audit, and GDPR hold structurally. That someone is Substrat.
 
 The two human checkpoints that stay non-negotiable even in a fully AI-driven vertical shop:
 schema migrations and permission definitions get reviewed by a person. Everything else
@@ -293,7 +293,7 @@ integrations hub (Fortnox, BankID-sign, EDI). The full adapter set beyond storag
 
 What must **never** become an adapter: the event spine, tenancy/permission model,
 entitlements, and the module manifest — those are the product. Swapping them out is
-called "not using Chassis."
+called "not using Substrat."
 
 ### 5.8 Language, build, and distribution
 
@@ -347,9 +347,9 @@ Workers, Node, Bun, Deno); platform specifics live only in adapters; external co
 manifest may later admit WASM component modules for hot paths (parsers, crypto, gateway
 internals) or polyglot engines — additive, never a platform bet.
 
-**Build & distribution.** pnpm monorepo → published npm packages: `@chassis/sdk`,
+**Build & distribution.** pnpm monorepo → published npm packages: `@substrat/sdk`,
 adapters (`adapter-cloudflare`, `adapter-sqlite`), engines as manifest-carrying packages,
-the specs, the CLI (`chassis dev` = pure-SQLite composition locally, §5.7), skills + MCP
+the specs, the CLI (`substrat dev` = pure-SQLite composition locally, §5.7), skills + MCP
 server. Semver everywhere (§6); AGPL + commercial licensing (§9). Runtime distribution:
 hosted control plane; verticals deploy as Workers-for-Platforms user workers (the same
 mechanism §9 relies on for per-tenant cost attribution). The auth-platform packaging
@@ -401,8 +401,8 @@ day one — the moment two verticals depend on it, unversioned changes halt both
 
 Every ingredient exists as a standalone company — WorkOS/Clerk (identity+orgs), Nile
 (tenant-virtualized Postgres), Nango/Paragon (integrations), Inngest/Trigger.dev (jobs),
-Stripe (billing) — and nobody has bundled the chassis, because the chassis alone has no
-buyers; only products built on it do. Hence: **Chassis is an internal architecture
+Stripe (billing) — and nobody has bundled the substrate, because the substrate alone has no
+buyers; only products built on it do. Hence: **Substrat is an internal architecture
 investment justified by owned verticals, with category optionality on top** — the auth-platform
 playbook.
 
@@ -425,7 +425,7 @@ multi-tenant vertical SaaS, in the EU. That intersection is the category.
   §4's point.
 - **Base44 (Wix)**: the partial exception among AI-natives — auth, roles, and row-level
   security are **platform primitives enforced at runtime**, not generated code. Nearest
-  AI-native articulation of the Chassis model, and proof the idea is in the air. But:
+  AI-native articulation of the Substrat model, and proof the idea is in the air. But:
   single-app-shaped (no tenancy tree, no engines, no B2B SaaS shape), weakest portability
   in the field (exported frontends die without the Base44 SDK), inside Wix — and the
   platform's own auth was bypassed in 2025
@@ -483,7 +483,7 @@ architecture + compliance machinery + vertical depth is a **trust** moat, not a 
 moat — model improvements don't erode it (same reason auth didn't stop being a product when
 LLMs learned OAuth).
 
-The convergence layer is also a **latent channel**: Chassis as the backend prompt-to-app
+The convergence layer is also a **latent channel**: Substrat as the backend prompt-to-app
 tools generate against. Not as a general Supabase replacement — the median prompt-to-app
 app has no tenants, and unopinionated wins there — but for their B2B slice, whose failures
 (§2) are exactly what the kernel enforces. The option costs nothing to keep alive: the
@@ -491,7 +491,7 @@ integration surface a Lovable-class tool needs is the same manifest + specs + MC
 already being built for Claude Code (§5.6). Strictly post-operator-proof optionality, not
 a case; it would also require a self-serve tier and support surface the vertical play
 doesn't. The vibe-code-hardening consultancies may be the cheaper first channel ("migrate
-your Lovable app onto Chassis" as their remediation product).
+your Lovable app onto Substrat" as their remediation product).
 
 ### 7.5 Vertical market notes (gathered en route)
 
@@ -524,7 +524,7 @@ your Lovable app onto Chassis" as their remediation product).
 
 ### 7.6 Price anchors (what the ingredients cost à la carte, 2026)
 
-What a serious B2B SaaS team pays today for the pieces Chassis bundles — i.e., the
+What a serious B2B SaaS team pays today for the pieces Substrat bundles — i.e., the
 willingness-to-pay evidence for a platform fee:
 
 | Ingredient | Vendor | Price | Source |
@@ -559,14 +559,14 @@ in §7.5: package-priced fastighetssystem at 5,900–25,200 SEK/mo against volum
 few hundred SEK per user), and why the long tail below "fundable SaaS" stays on
 spreadsheets, Access databases, and — lately — vibe-coded internal tools.
 
-Chassis collapses the equation twice: AI removes most of the domain-logic cost, and the
+Substrat collapses the equation twice: AI removes most of the domain-logic cost, and the
 kernel converts the foundation from a fixed build into a per-tenant fee. **The relative
 gain is therefore largest exactly where the user base is smallest** — enterprise-priced
 niche services with high ACV and few seats. Their buyers also demand the most compliance
 (procurement checklists, SSO, audit trails, DSAR) — which is the kernel's product, not the
 vertical's problem. Consequences:
 
-- **ICP sharpened**: the ideal Chassis vertical is small-N, high-ACV, compliance-touched —
+- **ICP sharpened**: the ideal Substrat vertical is small-N, high-ACV, compliance-touched —
   the segment where foundation cost, not demand, is the binding constraint. Every owned
   vertical (§8) already has this shape.
 - **Pricing headroom**: a kernel fee that is a rounding error against niche ACVs is still
@@ -578,7 +578,7 @@ vertical's problem. Consequences:
 
 The portfolio statement of the same fact: **no single niche vertical can justify building
 the foundation; a portfolio of them can — but only if the foundation is shared.** That is
-the chassis business.
+the substrate business.
 
 ### 7.8 Lessons worth stealing from the field
 
@@ -703,7 +703,7 @@ kernels become the reason nothing ships.
 **Ownership map** (write down before code): kernel — the kernel owner's side. Engines — the
 kernel owner's side as licensed modules, friend's teams contribute domain knowledge under
 CLA (the AGPL+CLA muscle proven on the auth platform). Verticals — the friend's companies: branschlogik, GTM, customers. If
-engines end up on the friend's side, the "platform" is an empty chassis and should be priced
+engines end up on the friend's side, the "platform" is an empty substrate and should be priced
 as one — be honest about which product is being sold.
 
 **Fee model — four meters, priced asymmetrically.** Two user populations exist: the
@@ -754,7 +754,7 @@ we could self-host in a pinch" — made literally true by the pure-SQLite adapte
 single-node but runnable — and is the same pitch that sells to strangers later.
 
 **Who builds the verticals** — verify before pricing anything. The friend has salespeople
-and operators; vertical teams on Chassis need one or two technically-literate people
+and operators; vertical teams on Substrat need one or two technically-literate people
 wielding AI against a platform designed for it (which matches the team he has), plus the
 two human checkpoints (§4). If capacity is thinner: the kernel owner's team builds vertical v1 as
 paid work, handover priced explicitly.
@@ -806,7 +806,7 @@ now; a negotiation after PropCo runs on it.
 - R2 SQL benchmark (≈50M events / 500 scopes) — pass/fail criteria and date.
 - Which Nordic SMS + email providers (transport buy list).
 - Techy friend: advisor, collaborator, or competitor? Decide what role the RFC recruits for.
-- Public brand trademark/domain pass for "Chassis" before launch (Groundplane as fallback).
+- Public brand trademark/domain pass for "Substrat" before launch (Groundplane as fallback).
 - Prompt-to-app channel (§7.4): if/when the demo exists, which entry first — a builder
   integration (Lovable/Bolt-class), Claude Code templates, or hardening consultancies as
   resellers? What would a self-serve tier have to cost?
@@ -844,6 +844,7 @@ now; a negotiation after PropCo runs on it.
 | 21 | 2026-07-12 | TypeScript end-to-end; runtime validation generated from specs at every trust boundary; portability via WinterTC standards surface + adapters, not WASM; pnpm/npm distribution, verticals on Workers for Platforms; WASM module slot kept open for hot paths | Team-independent case (§5.8): language is downstream of the runtime; the SDK boundary is the value; workload is I/O-bound and per-scope serialized; Go can't express the type thesis; agents are the primary users |
 | 22 | 2026-07-12 | Contracts are Zod-first (zod-openapi on Hono): Zod schemas in a semver'd package are both source of truth and runtime validators; OAS/JSON Schema emitted, checked in, CI-diffed with breaking-change linting; AsyncAPI deferred; TypeSpec/Arazzo dropped until polyglot consumers exist; connectors generate validators from vendor OAS | One source of truth at the enforcement boundary — the reviewed artifact is the running validator; TS end-to-end (21) removes TypeSpec's polyglot payoff; auth-platform Hono muscle. Amends 15 (§5.6) |
 | 23 | 2026-07-13 | Permission evaluation = built-in **constrained relationship-tuple engine** (FGA-shaped): fixed four-rule derivation algebra (role expansion; tenancy-tree inheritance; manifest-declared entity parent edges, depth-capped; org/group membership); no negation, no configurable rewrites; tuples scope-local, evaluated inside the scope's serialization domain; checks return tuple **proof paths**. Roles/grants stay the authored surface; verticals never see tuples; OpenFGA remains the swap target | Resolves the §11 open question (built-in vs OpenFGA) with both: DO-per-scope serialization removes Zanzibar's consistency problem (no zookies), so the mini-engine is genuinely small; entity-level portal access (the FSM shape: end customers within a filial scope) needs graph resolution the identity layer cannot do; proof paths power explain / view-as / the reviewable permission diff (§7.8). Implements 16 |
+| 24 | 2026-07-13 | Name: **Substrat** (Swedish/German spelling of substrate), replacing Chassis (12); npm scope `@substrat`, all packages renamed pre-publish; tagline unchanged: **The hard parts, hosted** | The thesis sentence already called the product "a hosted substrate" — the name is the positioning; native sv/de word keeps 12's pronunciation criterion; unscoped npm `chassis` is taken and the `@chassis` scope uncertain; adjacency to Parity's Substrate accepted as a fading brand (retired into polkadot-sdk). Groundplane fallback retired |
 
 ## 13. Next actions
 

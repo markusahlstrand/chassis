@@ -8,8 +8,8 @@ import {
   type PrincipalId,
   type ScopeId,
   type TenantId,
-} from '@chassis/contracts';
-import { ulid, type OperationHandler, type ScopeHost } from '@chassis/kernel';
+} from '@substrat/contracts';
+import { ulid, type OperationHandler, type ScopeHost } from '@substrat/kernel';
 
 const testModManifest = moduleManifest.parse({
   id: '@test/mod',
@@ -69,10 +69,10 @@ const linkUndeclared: OperationHandler<undefined, void> = (ctx) => {
 
 const readJournal: OperationHandler<undefined, { module_id: string; version: string }[]> = (
   ctx,
-) => ctx.sql.query('SELECT module_id, version FROM _chassis_migrations ORDER BY module_id');
+) => ctx.sql.query('SELECT module_id, version FROM _substrat_migrations ORDER BY module_id');
 
 const readTuples: OperationHandler<undefined, { subject: string; relation: string; object: string }[]> =
-  (ctx) => ctx.sql.query('SELECT subject, relation, object FROM _chassis_tuples ORDER BY subject');
+  (ctx) => ctx.sql.query('SELECT subject, relation, object FROM _substrat_tuples ORDER BY subject');
 
 export interface ScopeHostFixture {
   host: ScopeHost;
@@ -162,7 +162,7 @@ export function scopeHostContractSuite(
       });
 
       host.defineOperation<undefined, OutboxRow[]>('test/read-outbox', (ctx) =>
-        ctx.sql.query<OutboxRow>('SELECT * FROM _chassis_outbox ORDER BY id'),
+        ctx.sql.query<OutboxRow>('SELECT * FROM _substrat_outbox ORDER BY id'),
       );
 
       host.defineOperation<{ v: string }, void>('test/write-marker', (ctx, input) => {
@@ -192,7 +192,7 @@ export function scopeHostContractSuite(
         'test/atomic-read',
         (ctx) => ({
           rows: ctx.sql.query<{ n: number }>('SELECT n FROM atomic_t').length,
-          events: ctx.sql.query('SELECT id FROM _chassis_outbox WHERE type = ?', ['test.atomic'])
+          events: ctx.sql.query('SELECT id FROM _substrat_outbox WHERE type = ?', ['test.atomic'])
             .length,
         }),
       );
@@ -238,12 +238,12 @@ export function scopeHostContractSuite(
             )) as OperationHandler<never, unknown>,
           'flow/deliveries': ((ctx) =>
             ctx.sql.query(
-              `SELECT event_id, consumer_module, error FROM _chassis_deliveries
+              `SELECT event_id, consumer_module, error FROM _substrat_deliveries
                WHERE consumer_module = '@test/flow' ORDER BY event_id`,
             )) as OperationHandler<never, unknown>,
           'flow/step2-actors': ((ctx) =>
             ctx.sql.query(
-              `SELECT actor FROM _chassis_outbox WHERE type = 'flow.step2'`,
+              `SELECT actor FROM _substrat_outbox WHERE type = 'flow.step2'`,
             )) as OperationHandler<never, unknown>,
         },
         consumers: {

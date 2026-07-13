@@ -5,7 +5,7 @@ module with a migration and one operation, and an invocation through a capabilit
 No cloud account, no services — one directory of `.sqlite` files.
 
 ::: warning Pre-release
-Chassis is 0.x. The packages are developed in the
+Substrat is 0.x. The packages are developed in the
 [chassis monorepo](https://github.com/markusahlstrand/chassis) and interfaces change
 without notice until the first vertical ships.
 :::
@@ -13,10 +13,10 @@ without notice until the first vertical ships.
 ## Install
 
 ```sh
-pnpm add @chassis/kernel @chassis/contracts @chassis/adapter-sqlite zod
+pnpm add @substrat/kernel @substrat/contracts @substrat/adapter-sqlite zod
 ```
 
-`@chassis/adapter-sqlite` uses [better-sqlite3](https://www.npmjs.com/package/better-sqlite3),
+`@substrat/adapter-sqlite` uses [better-sqlite3](https://www.npmjs.com/package/better-sqlite3),
 a native module. With pnpm 10+, allow its build script:
 
 ```jsonc
@@ -31,9 +31,9 @@ a native module. With pnpm 10+, allow its build script:
 ## 1. Create a host and provision a scope
 
 ```ts
-import { SqliteScopeHost } from '@chassis/adapter-sqlite';
-import { UNSAFE_allowAllChecker } from '@chassis/kernel';
-import { tenantId, scopeId, principalId } from '@chassis/contracts';
+import { SqliteScopeHost } from '@substrat/adapter-sqlite';
+import { UNSAFE_allowAllChecker } from '@substrat/kernel';
+import { tenantId, scopeId, principalId } from '@substrat/contracts';
 
 const host = new SqliteScopeHost({
   dir: './data', // one .sqlite file per scope + _directory.sqlite
@@ -63,8 +63,8 @@ this structure for you — see [What is an engine?](/engines/)):
 
 ```ts
 import { z } from 'zod';
-import { moduleManifest } from '@chassis/contracts';
-import { assertAllowed, ulid, type ModuleRegistration } from '@chassis/kernel';
+import { moduleManifest } from '@substrat/contracts';
+import { assertAllowed, ulid, type ModuleRegistration } from '@substrat/kernel';
 
 const noteInput = z.object({ text: z.string().min(1) });
 
@@ -156,7 +156,7 @@ Scope databases are plain SQLite files in WAL mode — debugging is opening a fi
 
 ```sh
 sqlite3 ./data/<scopeId>.sqlite 'SELECT * FROM notes;'
-sqlite3 ./data/<scopeId>.sqlite 'SELECT type, tenant_id, actor, occurred_at FROM _chassis_events;'
+sqlite3 ./data/<scopeId>.sqlite 'SELECT type, tenant_id, actor, occurred_at FROM _substrat_events;'
 ```
 
 The event row carries the full kernel-stamped envelope — that's your audit trail,
@@ -170,5 +170,5 @@ log.
 - [Events & audit](/concepts/events) — the envelope, PII classes, and consumers.
 - [What is an engine?](/engines/) — using the work-order and invoicing engines instead
   of writing your own machinery.
-- [@chassis/contract-tests](/reference/contract-tests) — if you're writing an adapter
+- [@substrat/contract-tests](/reference/contract-tests) — if you're writing an adapter
   rather than a vertical.

@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import type { ScopeStub } from '@chassis/kernel';
-import type { WorkOrder, BillableLine } from '@chassis/engine-workorder';
+import type { ScopeStub } from '@substrat/kernel';
+import type { WorkOrder, BillableLine } from '@substrat/engine-workorder';
 import { buildDemoHost, seedDemo, type DemoWorld } from '../src/index.js';
-import type { SqliteScopeHost } from '@chassis/adapter-sqlite';
+import type { SqliteScopeHost } from '@substrat/adapter-sqlite';
 
 /**
  * The nine-step scenario from spec/testrun.md §8 — the headless end-to-end
@@ -22,7 +22,7 @@ describe('FSM demo scenario (spec §8)', () => {
   let orderId: string;
 
   beforeAll(async () => {
-    dir = mkdtempSync(join(tmpdir(), 'chassis-fsm-'));
+    dir = mkdtempSync(join(tmpdir(), 'substrat-fsm-'));
     host = buildDemoHost(dir);
     w = await seedDemo(host, dir);
     anna = await host.getScope(w.anna, w.t1, w.s1);
@@ -37,13 +37,13 @@ describe('FSM demo scenario (spec §8)', () => {
   it('1. provisions and applies all three module journals', () => {
     const db = new Database(join(dir, `${w.t1}__${w.s1}.sqlite`), { readonly: true });
     const rows = db
-      .prepare('SELECT DISTINCT module_id FROM _chassis_migrations ORDER BY module_id')
+      .prepare('SELECT DISTINCT module_id FROM _substrat_migrations ORDER BY module_id')
       .all() as { module_id: string }[];
     db.close();
     expect(rows.map((r) => r.module_id)).toEqual([
-      '@chassis-demos/fsm',
-      '@chassis/engine-invoicing',
-      '@chassis/engine-workorder',
+      '@substrat-demos/fsm',
+      '@substrat/engine-invoicing',
+      '@substrat/engine-workorder',
     ]);
   });
 

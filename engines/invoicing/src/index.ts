@@ -5,7 +5,7 @@ import {
   money,
   moduleManifest,
   permissionKey,
-} from '@chassis/contracts';
+} from '@substrat/contracts';
 import {
   assertAllowed,
   ulid,
@@ -13,7 +13,7 @@ import {
   type ModuleRegistration,
   type OperationContext,
   type OperationHandler,
-} from '@chassis/kernel';
+} from '@substrat/kernel';
 
 // ============================================================================
 // The invoicing engine (demos/fsm/spec/testrun.md §4.3/§5.3). Consumes
@@ -28,7 +28,7 @@ export const INVOICING_PERM = {
 };
 
 export const invoicingManifest = moduleManifest.parse({
-  id: '@chassis/engine-invoicing',
+  id: '@substrat/engine-invoicing',
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [

@@ -4,10 +4,10 @@
   "commit": false,
   "fixed": [
     [
-      "@chassis/contracts",
-      "@chassis/kernel",
-      "@chassis/adapter-sqlite",
-      "@chassis/contract-tests"
+      "@substrat/contracts",
+      "@substrat/kernel",
+      "@substrat/adapter-sqlite",
+      "@substrat/contract-tests"
     ]
   ],
   "linked": [],

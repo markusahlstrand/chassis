@@ -1,6 +1,6 @@
-# @chassis/adapter-sqlite
+# @substrat/adapter-sqlite
 
-Pure-SQLite scope host for [Chassis](https://github.com/markusahlstrand/chassis) — real
+Pure-SQLite scope host for [Substrat](https://github.com/markusahlstrand/chassis) — real
 kernel semantics with **no Cloudflare dependency**.
 
 One SQLite file per scope, a per-scope actor for strict serialization, a directory
@@ -11,8 +11,8 @@ self-host/escrow story is literally true (single-node, but runnable).
 ## Usage
 
 ```ts
-import { SqliteScopeHost } from '@chassis/adapter-sqlite';
-import { UNSAFE_allowAllChecker } from '@chassis/kernel';
+import { SqliteScopeHost } from '@substrat/adapter-sqlite';
+import { UNSAFE_allowAllChecker } from '@substrat/kernel';
 
 const host = new SqliteScopeHost({
   dir: './data',                    // one .sqlite file per scope + _directory.sqlite
@@ -28,7 +28,7 @@ await host.close();
 ## Guarantees
 
 This adapter passes the full
-[`@chassis/contract-tests`](https://npmjs.com/package/@chassis/contract-tests) suite —
+[`@substrat/contract-tests`](https://npmjs.com/package/@substrat/contract-tests) suite —
 the same suite the Cloudflare adapter (Durable Objects) must pass unchanged:
 
 - strict per-scope serialization (concurrent read-modify-writes cannot interleave)

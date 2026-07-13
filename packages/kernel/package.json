@@ -1,7 +1,7 @@
 {
-  "name": "@chassis/kernel",
+  "name": "@substrat/kernel",
   "version": "0.0.1",
-  "description": "Chassis kernel contracts and services — pure TypeScript, no platform imports (D-14)",
+  "description": "Substrat kernel contracts and services — pure TypeScript, no platform imports (D-14)",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,7 +19,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@chassis/contracts": "workspace:^"
+    "@substrat/contracts": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

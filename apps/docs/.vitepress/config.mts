@@ -2,14 +2,14 @@ import { defineConfig } from 'vitepress';
 import { withMermaid } from 'vitepress-plugin-mermaid';
 
 export default withMermaid(defineConfig({
-  title: 'Chassis',
+  title: 'Substrat',
   description:
     'The hard parts, hosted. A runtime-enforced substrate for building vertical B2B SaaS.',
   lastUpdated: true,
 
   themeConfig: {
     nav: [
-      { text: 'Guide', link: '/guide/what-is-chassis', activeMatch: '/guide/' },
+      { text: 'Guide', link: '/guide/what-is-substrat', activeMatch: '/guide/' },
       { text: 'Concepts', link: '/concepts/tenancy', activeMatch: '/concepts/' },
       { text: 'Engines', link: '/engines/', activeMatch: '/engines/' },
       { text: 'Reference', link: '/reference/contracts', activeMatch: '/reference/' },
@@ -39,8 +39,8 @@ function guideSidebar() {
     {
       text: 'Introduction',
       items: [
-        { text: 'What is Chassis?', link: '/guide/what-is-chassis' },
-        { text: 'Why runtime enforcement?', link: '/guide/why-chassis' },
+        { text: 'What is Substrat?', link: '/guide/what-is-substrat' },
+        { text: 'Why runtime enforcement?', link: '/guide/why-substrat' },
         { text: 'Architecture', link: '/guide/architecture' },
         { text: 'Getting started', link: '/guide/getting-started' },
         { text: 'Building for AI agents', link: '/guide/ai-agents' },
@@ -68,10 +68,10 @@ function guideSidebar() {
     {
       text: 'Package reference',
       items: [
-        { text: '@chassis/contracts', link: '/reference/contracts' },
-        { text: '@chassis/kernel', link: '/reference/kernel' },
-        { text: '@chassis/adapter-sqlite', link: '/reference/adapter-sqlite' },
-        { text: '@chassis/contract-tests', link: '/reference/contract-tests' },
+        { text: '@substrat/contracts', link: '/reference/contracts' },
+        { text: '@substrat/kernel', link: '/reference/kernel' },
+        { text: '@substrat/adapter-sqlite', link: '/reference/adapter-sqlite' },
+        { text: '@substrat/contract-tests', link: '/reference/contract-tests' },
       ],
     },
   ];

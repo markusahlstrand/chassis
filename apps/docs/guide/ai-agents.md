@@ -1,8 +1,8 @@
 # Building for AI agents
 
-Chassis treats coding agents as primary users of the platform, and that shapes the API
+Substrat treats coding agents as primary users of the platform, and that shapes the API
 more than any other single requirement. If you're pointing Claude Code (or any agent) at
-a Chassis vertical, this page explains what the platform does to keep generated code on
+a Substrat vertical, this page explains what the platform does to keep generated code on
 the rails — and what stays under human review no matter what.
 
 ## Small surface, strong types
@@ -36,7 +36,7 @@ fails closed on a mismatched pair is a fact.
 
 ## Self-describing modules
 
-The [module manifest](/concepts/modules) is what makes a Chassis system legible to an
+The [module manifest](/concepts/modules) is what makes a Substrat system legible to an
 agent without reading its implementation: every module declares its permissions (with
 descriptions), the events it emits and consumes (with schema versions), its entity
 relations, its migrations and compatibility window, and its UI contributions. An agent

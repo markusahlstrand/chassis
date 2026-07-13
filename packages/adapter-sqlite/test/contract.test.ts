@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { UNSAFE_allowAllChecker } from '@chassis/kernel';
-import { permissionContractSuite, scopeHostContractSuite } from '@chassis/contract-tests';
+import { UNSAFE_allowAllChecker } from '@substrat/kernel';
+import { permissionContractSuite, scopeHostContractSuite } from '@substrat/contract-tests';
 import { SqliteScopeHost } from '../src/index.js';
 
 scopeHostContractSuite('adapter-sqlite', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'chassis-contract-'));
+  const dir = mkdtempSync(join(tmpdir(), 'substrat-contract-'));
   const host = new SqliteScopeHost({ dir, checker: UNSAFE_allowAllChecker });
   return {
     host,
@@ -19,7 +19,7 @@ scopeHostContractSuite('adapter-sqlite', async () => {
 
 // The permission suite runs against the DEFAULT checker (the tuple engine).
 permissionContractSuite('adapter-sqlite', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'chassis-perm-'));
+  const dir = mkdtempSync(join(tmpdir(), 'substrat-perm-'));
   const host = new SqliteScopeHost({ dir });
   return {
     host,

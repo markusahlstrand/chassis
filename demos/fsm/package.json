@@ -1,5 +1,5 @@
 {
-  "name": "@chassis-demos/fsm",
+  "name": "@substrat-demos/fsm",
   "version": "0.0.1",
   "private": true,
   "description": "FSM demo vertical (ServiceCo) — see spec/testrun.md",
@@ -12,11 +12,11 @@
     "demo": "pnpm run dev"
   },
   "dependencies": {
-    "@chassis/adapter-sqlite": "workspace:^",
-    "@chassis/contracts": "workspace:^",
-    "@chassis/engine-invoicing": "workspace:^",
-    "@chassis/engine-workorder": "workspace:^",
-    "@chassis/kernel": "workspace:^",
+    "@substrat/adapter-sqlite": "workspace:^",
+    "@substrat/contracts": "workspace:^",
+    "@substrat/engine-invoicing": "workspace:^",
+    "@substrat/engine-workorder": "workspace:^",
+    "@substrat/kernel": "workspace:^",
     "@hono/node-server": "^1.13.0",
     "better-sqlite3": "^12.0.0",
     "hono": "^4.6.0",

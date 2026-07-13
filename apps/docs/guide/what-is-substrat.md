@@ -1,6 +1,6 @@
-# What is Chassis?
+# What is Substrat?
 
-Chassis is a substrate for building **vertical B2B SaaS** — the software a property
+Substrat is a substrate for building **vertical B2B SaaS** — the software a property
 manager, an installation firm, or a point-of-sale chain actually runs their business on.
 
 AI has made building that kind of software fast and cheap — except for the parts that
@@ -8,15 +8,15 @@ were never about writing code: multi-tenancy, identity, permissions, integration
 integrity, audit, and GDPR. Those are exactly the parts that are catastrophic when wrong,
 and the parts LLM-generated code gets wrong most often.
 
-Chassis owns those hard parts and enforces them **at runtime**, so small teams — including
+Substrat owns those hard parts and enforces them **at runtime**, so small teams — including
 non-engineers wielding AI tools — can build production-grade products on top, at AI speed,
 without the speed being fatal.
 
-> We build the chassis. You build the vehicle.
+> We build the substrate. You build the verticals.
 
 ## The three layers
 
-Everything in Chassis hangs off one decomposition:
+Everything in Substrat hangs off one decomposition:
 
 ### 1. Kernel
 
@@ -56,7 +56,7 @@ sits below the API surface, enforced by the kernel.
 
 ## What "enforced at runtime" means concretely
 
-Code built on Chassis **cannot**:
+Code built on Substrat **cannot**:
 
 - **reach another tenant's data** — data access only exists as capability-scoped
   operations invoked through a stub minted for one `(tenant, scope)` pair; a mismatched
@@ -74,16 +74,16 @@ increasingly that code is written by an agent.
 
 ## Current status
 
-Chassis is pre-release (0.x). What exists today:
+Substrat is pre-release (0.x). What exists today:
 
 | Piece | Package | Status |
 |---|---|---|
-| Contract schemas (Zod, source of truth) | [`@chassis/contracts`](/reference/contracts) | Working |
-| Kernel interfaces (scope host, permission checker) | [`@chassis/kernel`](/reference/kernel) | Working |
-| Pure-SQLite scope host (local dev, CI, self-host) | [`@chassis/adapter-sqlite`](/reference/adapter-sqlite) | Working |
-| Adapter conformance suite | [`@chassis/contract-tests`](/reference/contract-tests) | Working |
-| Work-order engine | [`@chassis/engine-workorder`](/engines/workorder) | Seed |
-| Invoicing engine | [`@chassis/engine-invoicing`](/engines/invoicing) | Seed |
+| Contract schemas (Zod, source of truth) | [`@substrat/contracts`](/reference/contracts) | Working |
+| Kernel interfaces (scope host, permission checker) | [`@substrat/kernel`](/reference/kernel) | Working |
+| Pure-SQLite scope host (local dev, CI, self-host) | [`@substrat/adapter-sqlite`](/reference/adapter-sqlite) | Working |
+| Adapter conformance suite | [`@substrat/contract-tests`](/reference/contract-tests) | Working |
+| Work-order engine | [`@substrat/engine-workorder`](/engines/workorder) | Seed |
+| Invoicing engine | [`@substrat/engine-invoicing`](/engines/invoicing) | Seed |
 | Cloudflare adapter (Durable Objects, production) | — | Planned |
 
 Interfaces change without notice until the first vertical ships.
