@@ -53,6 +53,10 @@ Module code = everything reachable from a `ModuleRegistration` (operations, cons
 - Migrations are append-only ordered `SqlMigration[]`; never edit a shipped version.
 - IDs come from `ulid()`; money/decimals are strings via `@substrat-run/contracts`
   helpers (`moneyOf`, `mulMoney`, `addDecimal`, `compareDecimal`) — never floats.
+- Web-standard APIs always, node-only imports never: hashing/crypto is
+  `globalThis.crypto` (Web Crypto — same API in Node, Workers, browsers), encoding is
+  `TextEncoder`/`TextDecoder`, URLs are `URL`. Never hand-roll a hash to dodge an
+  import ban. (Harness code may use `node:fs` etc. for genuinely node-only needs.)
 - Parse, don't trust: operation inputs go through Zod schemas at the boundary.
 
 ## Two human checkpoints (agents never self-approve)

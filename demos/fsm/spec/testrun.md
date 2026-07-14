@@ -1,6 +1,6 @@
 # FSM demo — implementation spec for the pure-SQLite test run
 
-Status: draft v0.1 · Last updated: 2026-07-13
+Status: draft v0.2 (adds §4.1b/§5.1b protocols — engine-protocol.md milestone A) · Last updated: 2026-07-14
 
 > Companion to [concept.md](concept.md) (the concept) and
 > [kernel-design.md](../../../docs/design/kernel-design.md) (the contracts). This document is the
@@ -17,8 +17,13 @@ isolation → cross-tenant attack fails. Everything observable in plain `.sqlite
 
 **Non-goals for this run:** UI (§7.4 composes later against the same operations — the
 individual views are specified in [views.md](views.md)), HTTP surface
-(zod-openapi wraps the same operations later), protocols engine, scheduling, Tier 2,
+(zod-openapi wraps the same operations later), protocols *engine*, scheduling, Tier 2,
 notifications, documents, custom fields, offline, Cloudflare adapter.
+
+> **Amendment (v0.2).** Protocols/egenkontroller are now IN — as **vertical code**
+> per [engine-protocol.md](../../../docs/design/engine-protocol.md) milestone A
+> (§4.1b, §5.1b, scenario steps 10–13). The protocols *engine* stays a non-goal:
+> extraction happens at milestone B, when CykelService's second shape forces it.
 
 ## 2. Cast
 
@@ -35,7 +40,7 @@ notifications, documents, custom fields, offline, Cloudflare adapter.
 |---|---|---|
 | `engines/workorder` | orders + time + material (one engine, D-19) | `workorder_*`, ops `workorder/*` |
 | `engines/invoicing` | fakturaunderlag | `invoicing_*`, ops `invoicing/*` |
-| `demos/fsm` (`@substrat-run/demo-fsm`, private) | customers, facilities, price list, orchestration | `serviceco_*`, ops `serviceco/*` |
+| `demos/fsm` (`@substrat-run/demo-fsm`, private) | customers, facilities, price list, protocols (milestone A — invariants move to `engines/protocol` at milestone B), orchestration | `serviceco_*`, ops `serviceco/*` |
 
 Workspace: `demos/*` in `pnpm-workspace.yaml`. Demo verticals live under `demos/`
 (one folder per demo, more over time — `demos/bikeshop` is next); the engines stay
@@ -75,8 +80,69 @@ CREATE TABLE serviceco_price_list (
 );
 ```
 
-Declared `entityRelations` (vertical manifest): `facility → customer`.
-FK within the module is fine (rule §7.3.1); no FK crosses a module boundary.
+Declared `entityRelations` (vertical manifest): `facility → customer`,
+`protocol → workorder` (§4.1b). FK within the module is fine (rule §7.3.1); no FK
+crosses a module boundary.
+
+### 4.1b `demos/fsm` protocols (vertical, milestone A) — migration 0002
+
+The [engine-protocol.md](../../../docs/design/engine-protocol.md) §3 domain model as
+`serviceco_*` tables — deliberately engine-shaped so the milestone-B extraction diff
+is mostly a rename. Migration `0002-protocols`, appended to the journal (0001 shipped).
+
+```sql
+CREATE TABLE serviceco_protocol_templates (
+  id           TEXT PRIMARY KEY,
+  key          TEXT NOT NULL,             -- 'egenkontroll-el' — vertical vocabulary
+  version      INTEGER NOT NULL,          -- immutable per (key, version); new content = new version
+  title        TEXT NOT NULL,
+  content_json TEXT NOT NULL,             -- sections/items (check | value | text), Zod-validated
+  created_at   TEXT NOT NULL,
+  UNIQUE (key, version)
+);
+
+CREATE TABLE serviceco_protocol_instances (
+  id               TEXT PRIMARY KEY,
+  template_key     TEXT NOT NULL,         -- pinned at instantiation, forever
+  template_version INTEGER NOT NULL,
+  entity_type      TEXT NOT NULL,         -- 'workorder' (later anything)
+  entity_id        TEXT NOT NULL,
+  status           TEXT NOT NULL CHECK (status IN ('open','signed','voided')),
+  created_by       TEXT NOT NULL,
+  created_at       TEXT NOT NULL,
+  voided_by        TEXT,                  -- voiding, not deleting: superseded rows survive
+  voided_reason    TEXT,
+  voided_at        TEXT
+);
+
+-- Append-only: a correction is a NEW row; latest-per-item (rowid order) wins.
+-- The fill history is audit material ("4.2 → 5.1 before signing").
+CREATE TABLE serviceco_protocol_responses (
+  id           TEXT PRIMARY KEY,
+  instance_id  TEXT NOT NULL REFERENCES serviceco_protocol_instances(id),
+  item_key     TEXT NOT NULL,
+  value_json   TEXT NOT NULL,
+  note         TEXT,
+  responded_by TEXT NOT NULL,
+  responded_at TEXT NOT NULL
+);
+
+CREATE TABLE serviceco_protocol_signatures (
+  id           TEXT PRIMARY KEY,
+  instance_id  TEXT NOT NULL REFERENCES serviceco_protocol_instances(id),
+  signed_by    TEXT NOT NULL,
+  method       TEXT NOT NULL,             -- 'in-app' (v0); bankid/scrive arrive as connectors
+  content_hash TEXT NOT NULL,             -- SHA-256 (Web Crypto) over key@version + content_json + sorted latest responses
+  evidence_ref TEXT,                      -- attachment slot for upgraded evidence
+  signed_at    TEXT NOT NULL
+);
+```
+
+**Invariants (enforced in the vertical's operations until the engine exists):**
+sign freezes (any response write to a non-open instance fails); responses append-only,
+bound to an open instance; one signature per instance (via the open→signed status
+gate); templates version immutably and instances pin (key, version) at instantiation;
+void supersedes, never deletes; every mutation emits, every operation checks.
 
 ### 4.2 `engines/workorder` — migration 0001
 
@@ -182,6 +248,27 @@ module's package; every operation starts with `await ctx.check(...)`.
 | `serviceco/complete-workorder` `{orderId}` → `{order, billable}` | `workorder:complete` | **the pricing moment**: reads the engine's time/material via engine read-function, prices each line from `serviceco_price_list` (min-qty applied, internal lines dropped), then calls engine `completeWorkOrder(ctx, {orderId, billable})` — pricing is vertical logic (§3 of the plan), the invariant is the engine's, one transaction |
 | `serviceco/list-portal-orders` `{}` → `WorkOrder[]` | `workorder:read` (entity-narrowed) | lists orders whose customer the caller's grant reaches — exercises the tuple walk |
 
+**The guard (in `serviceco/complete-workorder`, before the engine's transition):**
+ServiceCo policy `REQUIRED_SIGNED_PROTOCOLS = { montage: ['egenkontroll-el'] }`; the
+operation calls the protocol module's in-scope predicate
+`requireSigned(ctx, orderRef, templateKey)` — the milestone-A (vertical-composed) pole
+of open question 11. Same transaction as pricing + `completeWorkOrder`. The
+manifest-declared form is milestone C.
+
+### 5.1b `demos/fsm` protocol operations (vertical, milestone A)
+
+| Operation | Permission | Behavior / invariant |
+|---|---|---|
+| `serviceco/define-protocol-template` `{key, title, content}` → `Template` | `protocol:create` | inserts next version for key; existing versions never touched |
+| `serviceco/list-protocol-templates` `{}` → `Template[]` | `protocol:read` | latest version per key |
+| `serviceco/instantiate-protocol` `{templateKey, entityType:'workorder', entityId}` → `Instance` | `protocol:create` | pins latest (key, version); order must be planned/in_progress; one open instance per (template, entity); `ctx.link(protocol → workorder)`; emits `protocol.instantiated` |
+| `serviceco/fill-protocol` `{instanceId, itemKey, value, note?}` → `Response` | `protocol:fill` | instance must be `open`; item validated against the pinned template (checks take booleans, value/text take strings); always INSERT; emits `protocol.response-recorded` |
+| `serviceco/sign-protocol` `{instanceId}` → `{instance, signature}` | `protocol:sign` | `open → signed`; computes `content_hash`; method `in-app`; emits `protocol.signed` (fat: frozen answers travel with the event) |
+| `serviceco/void-protocol` `{instanceId, reason}` → `Instance` | `protocol:void` | `open|signed → voided` + reason; rows survive; emits `protocol.voided` |
+| `serviceco/get-protocol` `{instanceId}` → detail | `protocol:read` | instance + pinned template + full response history + latest-per-item + signature |
+| `serviceco/list-protocols` `{entityType, entityId}` → summaries | `protocol:read` | per-entity list with fill progress (the order-detail card) |
+| *fn* `requireSigned(ctx, entity, templateKey)` | caller checked | throws unless a signed instance of the template exists for the entity — the guard predicate |
+
 ### 5.2 `engines/workorder`
 
 | Operation / function | Permission | Invariant enforced |
@@ -222,6 +309,10 @@ them (K-16).
 | `workorder.closed` | 1 | none | `{orderId}` |
 | `invoicing.underlag-updated` | 1 | none | `{underlagId, addedLines, source: EntityRef}` |
 | `invoicing.underlag-exported` | 1 | none | `{underlagId, number, total: Money}` |
+| `protocol.instantiated` | 1 | none | `{instanceId, templateKey, templateVersion, title, entity: EntityRef}` |
+| `protocol.response-recorded` | 1 | pseudonymous → filler | `{instanceId, responseId, itemKey, value, entity}` |
+| `protocol.signed` | 1 | pseudonymous → signer | `{instanceId, templateKey, templateVersion, entity, signedBy, method, contentHash, responses}` — fat: the frozen answers travel |
+| `protocol.voided` | 1 | pseudonymous → voider | `{instanceId, entity, previousStatus, reason}` |
 
 `BillableLine = {article, description, qty, unit, unitPrice: Money, lineTotal: Money,
 sourceType: 'time'|'material', sourceId}`. v0 note: `subjectId` for technicians reuses
@@ -231,10 +322,13 @@ concern; the envelope contract is exercised regardless.
 ## 7. Permissions
 
 **Keys** (declared in manifests): `customer:manage`, `facility:manage`,
-`workorder:create|read|assign|report|complete|close`, `invoicing:read|export`.
+`workorder:create|read|assign|report|complete|close`, `invoicing:read|export`,
+`protocol:create|fill|sign|read|void` (`sign` deliberately separate from `fill` —
+the technician fills, the arbetsledare signs; `countersign` arrives with the engine
+at milestone B).
 
 **Roles** (vertical-defined): `office-admin` = all of the above; `technician` =
-`workorder:read`, `workorder:report`.
+`workorder:read`, `workorder:report`, `protocol:read`, `protocol:fill`.
 
 **Setup tuples (via kernel admin surface, §9.4):**
 - `anna` → role `office-admin` @ (t1, null) — inherits into s1 (rule 2).
@@ -280,6 +374,23 @@ that chain as the proof**. Same check against styrbjörn's order → deny.
    customer opens a **new** underlag.
 9. **The files**: open `t1__s1.sqlite` in any SQLite browser — the demo's escrow beat,
    asserted here as "tables exist and are readable read-only".
+10. **The guard blocks**: anna creates a `montage` order, starts it, reports 2 h;
+    `serviceco/complete-workorder` throws `protocol required: 'egenkontroll-el'` —
+    with no protocol, and still with an instantiated-but-unsigned one. A second open
+    instance of the same template on the same order is refused.
+11. **Append-only fill, split permissions**: harald fills checks and a measurement,
+    then corrects the measurement (4.2 → 5.1) — two rows, latest wins, history kept.
+    Unknown item keys and type-mismatched values are rejected against the pinned
+    template. Harald tries `serviceco/sign-protocol` → **permission denied** (fill ≠
+    sign).
+12. **Sign freezes, guard opens**: anna signs (method `in-app`); further fills throw
+    `frozen`; a second sign throws; the `content_hash` recomputes identically from the
+    read-back template + latest responses; the protocol's spine timeline reads
+    instantiated → 4× response-recorded → signed; completion now succeeds (2 h × 515 =
+    1030, pricing untouched by the guard).
+13. **Template immutability + void**: redefining `egenkontroll-el` creates version 2;
+    the signed instance still reads as (key, v1) with v1 content; a fresh instance
+    pins v2; voiding it records the reason, keeps every row, and freezes fills.
 
 Every assertion above that touches kernel behavior (journal, delivery, proof paths,
 fail-closed) graduates into `@substrat-run/contract-tests` as a generic harness; the

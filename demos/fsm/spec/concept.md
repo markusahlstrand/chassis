@@ -1,6 +1,6 @@
 # Demo Vertical — "ServiceCo" (milestone 1)
 
-Status: draft v0.1 · Last updated: 2026-07-13
+Status: draft v0.2 · Last updated: 2026-07-14
 
 > Companion to [kernel-design.md](../../../docs/design/kernel-design.md) §12 (milestone-1 cut) and the master
 > plan §13.4 (the 15-minute demo). Anonymization per the master plan: the feature set is
@@ -42,7 +42,7 @@ plays in the real sequence, at demo scale.
 | Capability | Layer | Demo scope |
 |---|---|---|
 | Work orders + time + material | **Engine `engine-workorder`** | v1, core |
-| Protocols/checklists (sign → immutable) | **Engine `engine-protocol`** | stretch; content pack is vertical |
+| Protocols/checklists (sign → immutable) | **Vertical code now, engine at milestone B** ([engine-protocol.md](../../../docs/design/engine-protocol.md), decision 27) | v1: egenkontroll-el fill/sign + completion guard as `serviceco/*` ops; extraction when CykelService's checklist forces it |
 | Fakturaunderlag | **Engine `engine-invoicing`** | v1, core — the star-topology showpiece |
 | Scheduling/dispatch | Engine, **deferred** | demo shows assignment field + list |
 | Automatic pricing per customer contract | **Vertical** | price list table + pricing hook |

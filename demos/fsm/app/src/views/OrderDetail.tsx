@@ -8,6 +8,7 @@ import {
   type WorkOrder,
 } from '../api';
 import { StatusPill } from './Orders';
+import { ProtocolPanel } from './Protocols';
 
 const STEPS: WorkOrder['status'][] = ['planned', 'in_progress', 'completed', 'closed'];
 const STEP_LABEL: Record<string, string> = {
@@ -131,6 +132,8 @@ export function OrderDetailView({ orderId, cast }: { orderId: string; cast: Reco
           )}
         </div>
       </div>
+
+      <ProtocolPanel key={order.status} order={order} />
 
       {billed && (
         <div className="card">

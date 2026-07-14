@@ -5,13 +5,25 @@ import Database from 'better-sqlite3';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { ScopeStub } from '@substrat-run/kernel';
 import type { WorkOrder, BillableLine } from '@substrat-run/engine-workorder';
-import { buildDemoHost, seedDemo, type DemoWorld } from '../src/index.js';
+import {
+  buildDemoHost,
+  seedDemo,
+  protocolContentHash,
+  type DemoWorld,
+  type ProtocolDetail,
+  type ProtocolInstanceRow,
+  type ProtocolSignatureRow,
+  type ProtocolTemplateRow,
+} from '../src/index.js';
 import type { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 
 /**
- * The nine-step scenario from spec/testrun.md §8 — the headless end-to-end
- * run: provision → modules → lifecycle → priced completion → event →
- * invoicing → portal isolation → attack fails → plain .sqlite files.
+ * The scenario from spec/testrun.md §8 — the headless end-to-end run:
+ * provision → modules → lifecycle → priced completion → event → invoicing →
+ * portal isolation → attack fails → plain .sqlite files, then the
+ * egenkontroll beat (steps 10–13, engine-protocol.md milestone A): the guard
+ * blocks completion → append-only fill → sign freezes → templates version
+ * immutably.
  */
 describe('FSM demo scenario (spec §8)', () => {
   let dir: string;
@@ -20,6 +32,8 @@ describe('FSM demo scenario (spec §8)', () => {
   let anna: ScopeStub;
   let harald: ScopeStub;
   let orderId: string;
+  let montageOrderId: string;
+  let protocolId: string;
 
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'substrat-fsm-'));
@@ -195,5 +209,210 @@ describe('FSM demo scenario (spec §8)', () => {
     await expect(anna.invoke('workorder/close', { orderId: order3.id })).rejects.toThrow(
       /invalid transition/,
     );
+  });
+
+  it('10. the guard: a montage order cannot complete without a signed egenkontroll', async () => {
+    const order = await anna.invoke<WorkOrder>('serviceco/create-workorder', {
+      facilityId: w.forskolanId,
+      kind: 'montage',
+      title: 'Ny gruppcentral i undercentralen',
+    });
+    montageOrderId = order.id;
+    await anna.invoke('workorder/start', { orderId: montageOrderId });
+    await anna.invoke('workorder/report-time', { orderId: montageOrderId, hours: '2' });
+
+    // Vertical-composed guard (engine-protocol.md §6, milestone-A pole):
+    // no protocol at all → blocked…
+    await expect(
+      anna.invoke('serviceco/complete-workorder', { orderId: montageOrderId }),
+    ).rejects.toThrow(/protocol required: 'egenkontroll-el'/);
+
+    // …and an instantiated-but-unsigned protocol still blocks.
+    const inst = await anna.invoke<ProtocolInstanceRow>('serviceco/instantiate-protocol', {
+      templateKey: 'egenkontroll-el',
+      entityType: 'workorder',
+      entityId: montageOrderId,
+    });
+    protocolId = inst.id;
+    expect(inst.status).toBe('open');
+    expect(inst.template_version).toBe(1);
+    await expect(
+      anna.invoke('serviceco/complete-workorder', { orderId: montageOrderId }),
+    ).rejects.toThrow(/protocol required/);
+
+    // One open instance per (template, entity): starting it twice fails.
+    await expect(
+      anna.invoke('serviceco/instantiate-protocol', {
+        templateKey: 'egenkontroll-el',
+        entityType: 'workorder',
+        entityId: montageOrderId,
+      }),
+    ).rejects.toThrow(/already open/);
+  });
+
+  it('11. fill is append-only (a correction is a new row); fill and sign are separate permissions', async () => {
+    await harald.invoke('serviceco/fill-protocol', {
+      instanceId: protocolId,
+      itemKey: 'spanningslost',
+      value: true,
+    });
+    await harald.invoke('serviceco/fill-protocol', {
+      instanceId: protocolId,
+      itemKey: 'isolationsmatning',
+      value: '4.2',
+    });
+    // The correction before signing: a NEW row, never an update.
+    await harald.invoke('serviceco/fill-protocol', {
+      instanceId: protocolId,
+      itemKey: 'isolationsmatning',
+      value: '5.1',
+      note: 'ommätt efter åtdragning',
+    });
+    await harald.invoke('serviceco/fill-protocol', {
+      instanceId: protocolId,
+      itemKey: 'jordfelsbrytare',
+      value: true,
+    });
+
+    const detail = await harald.invoke<ProtocolDetail>('serviceco/get-protocol', {
+      instanceId: protocolId,
+    });
+    expect(detail.responses).toHaveLength(4); // full history kept
+    expect(
+      detail.responses
+        .filter((r) => r.item_key === 'isolationsmatning')
+        .map((r) => JSON.parse(r.value_json)),
+    ).toEqual(['4.2', '5.1']); // the audit trail: 4.2 → 5.1 before signing
+    expect(JSON.parse(detail.latest['isolationsmatning']!.value_json)).toBe('5.1'); // latest wins
+
+    // Responses validate against the pinned template.
+    await expect(
+      harald.invoke('serviceco/fill-protocol', {
+        instanceId: protocolId,
+        itemKey: 'finns-inte',
+        value: true,
+      }),
+    ).rejects.toThrow(/unknown item/);
+    await expect(
+      harald.invoke('serviceco/fill-protocol', {
+        instanceId: protocolId,
+        itemKey: 'spanningslost',
+        value: 'ja',
+      }),
+    ).rejects.toThrow(/must be boolean/);
+
+    // The technician fills; only the arbetsledare signs (permission split).
+    await expect(harald.invoke('serviceco/sign-protocol', { instanceId: protocolId })).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+
+  it('12. sign freezes the protocol, records a verifiable hash, and opens the guard', async () => {
+    const signed = await anna.invoke<{
+      instance: ProtocolInstanceRow;
+      signature: ProtocolSignatureRow;
+    }>('serviceco/sign-protocol', { instanceId: protocolId });
+    expect(signed.instance.status).toBe('signed');
+    expect(signed.signature.method).toBe('in-app');
+    expect(signed.signature.signed_by).toBe(w.anna);
+    expect(signed.signature.content_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // The invariant: any write to a signed instance's responses fails.
+    await expect(
+      harald.invoke('serviceco/fill-protocol', {
+        instanceId: protocolId,
+        itemKey: 'kontinuitet',
+        value: '0.3',
+      }),
+    ).rejects.toThrow(/frozen/);
+    // One signature per instance: signing again fails on the status invariant.
+    await expect(anna.invoke('serviceco/sign-protocol', { instanceId: protocolId })).rejects.toThrow(
+      /only an open protocol/,
+    );
+
+    // The hash is verifiable against replayed state (engine-protocol.md §4.2).
+    const detail = await anna.invoke<ProtocolDetail>('serviceco/get-protocol', {
+      instanceId: protocolId,
+    });
+    const replayed = await protocolContentHash(
+      {
+        key: detail.template.key,
+        version: detail.template.version,
+        content_json: JSON.stringify(detail.template.content),
+      },
+      detail.latest,
+    );
+    expect(replayed).toBe(signed.signature.content_hash);
+
+    // Every mutation hit the spine.
+    const timeline = await anna.invoke<{ type: string }[]>('serviceco/timeline', {
+      entityType: 'protocol',
+      entityId: protocolId,
+    });
+    expect(timeline.map((e) => e.type)).toEqual([
+      'protocol.instantiated',
+      'protocol.response-recorded',
+      'protocol.response-recorded',
+      'protocol.response-recorded',
+      'protocol.response-recorded',
+      'protocol.signed',
+    ]);
+
+    // The guard opens: completion now goes through, pricing intact.
+    const result = await anna.invoke<{ order: WorkOrder; total: { amount: string } }>(
+      'serviceco/complete-workorder',
+      { orderId: montageOrderId },
+    );
+    expect(result.order.status).toBe('completed');
+    expect(result.total.amount).toBe('1030'); // 2h × 515
+  });
+
+  it('13. templates version immutably: new content = v2, the signed instance stays pinned to v1', async () => {
+    const v2 = await anna.invoke<ProtocolTemplateRow>('serviceco/define-protocol-template', {
+      key: 'egenkontroll-el',
+      title: 'Egenkontroll — Elinstallation (utökad)',
+      content: {
+        sections: [
+          {
+            title: 'Kontroll före idrifttagning',
+            items: [
+              { key: 'isolationsmatning', label: 'Isolationsmätning', type: 'value', unit: 'MΩ' },
+              { key: 'markning', label: 'Märkning av central uppdaterad', type: 'check' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(v2.version).toBe(2);
+
+    // The signed document still refers to exactly what was signed.
+    const detail = await anna.invoke<ProtocolDetail>('serviceco/get-protocol', {
+      instanceId: protocolId,
+    });
+    expect(detail.instance.template_version).toBe(1);
+    expect(detail.template.version).toBe(1);
+    expect(detail.template.title).toBe('Egenkontroll — Elinstallation');
+
+    // A voided protocol is superseded, never deleted: rows survive.
+    const order = await anna.invoke<WorkOrder>('serviceco/create-workorder', {
+      facilityId: w.kontorId,
+      kind: 'montage',
+      title: 'Belysningsstyrning',
+    });
+    const inst = await anna.invoke<ProtocolInstanceRow>('serviceco/instantiate-protocol', {
+      templateKey: 'egenkontroll-el',
+      entityType: 'workorder',
+      entityId: order.id,
+    });
+    expect(inst.template_version).toBe(2); // new instances pin the new version
+    const voided = await anna.invoke<ProtocolInstanceRow>('serviceco/void-protocol', {
+      instanceId: inst.id,
+      reason: 'startad på fel order',
+    });
+    expect(voided.status).toBe('voided');
+    expect(voided.voided_reason).toBe('startad på fel order');
+    await expect(
+      anna.invoke('serviceco/fill-protocol', { instanceId: inst.id, itemKey: 'markning', value: true }),
+    ).rejects.toThrow(/frozen/);
   });
 });

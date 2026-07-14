@@ -13,6 +13,7 @@ import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
 import { servicecoModule, SC_PERM } from './module.js';
+import { PROTO_PERM as PROTO } from './protocol.js';
 
 export interface DemoWorld {
   t1: TenantId; // ElMontage AB
@@ -68,10 +69,17 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     SC_PERM.customerManage, SC_PERM.facilityManage,
     WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
     INV.read, INV.export,
+    PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
   ];
   for (const t of [world.t1, world.t2]) {
     host.admin.defineRole(t, { key: 'office-admin', permissions: officePerms, source: 'vertical' });
-    host.admin.defineRole(t, { key: 'technician', permissions: [WO.read, WO.report], source: 'vertical' });
+    // Technicians fill protocols; SIGNING stays with the office (arbetsledare) —
+    // the fill/sign permission split from engine-protocol.md §4.6.
+    host.admin.defineRole(t, {
+      key: 'technician',
+      permissions: [WO.read, WO.report, PROTO.read, PROTO.fill],
+      source: 'vertical',
+    });
   }
   host.admin.assignRole({ principalId: world.anna, roleKey: 'office-admin', node: { tenantId: world.t1, scopeId: null } });
   host.admin.assignRole({ principalId: world.harald, roleKey: 'technician', node: { tenantId: world.t1, scopeId: world.s1 } });
@@ -107,6 +115,45 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     world.forskolanId = forskolan.id;
     world.kontorId = kontor.id;
     writeFileSync(castPath, JSON.stringify(world, null, 2));
+  }
+
+  // Branschprotokoll pack (idempotent, and outside `fresh` so existing demo
+  // data gains it on restart): the electrical-trade egenkontroll — 100%
+  // vertical content; only the invariants are protocol machinery.
+  const stub = await host.getScope(world.anna, world.t1, world.s1);
+  const templates = await stub.invoke<{ key: string }[]>('serviceco/list-protocol-templates');
+  if (!templates.some((t) => t.key === 'egenkontroll-el')) {
+    await stub.invoke('serviceco/define-protocol-template', {
+      key: 'egenkontroll-el',
+      title: 'Egenkontroll — Elinstallation',
+      content: {
+        sections: [
+          {
+            title: 'Före arbete',
+            items: [
+              { key: 'spanningslost', label: 'Anläggningsdel spänningslös och säkrad mot tillkoppling', type: 'check' },
+              { key: 'ritningsunderlag', label: 'Ritningsunderlag och gruppförteckning aktuella', type: 'check' },
+            ],
+          },
+          {
+            title: 'Utförande',
+            items: [
+              { key: 'ledningsdragning', label: 'Ledningsdragning och förläggning enligt SS 436 40 00', type: 'check' },
+              { key: 'kapslingsklass', label: 'Kapslingsklass anpassad till miljön', type: 'check' },
+            ],
+          },
+          {
+            title: 'Kontroll före idrifttagning',
+            items: [
+              { key: 'isolationsmatning', label: 'Isolationsmätning', type: 'value', unit: 'MΩ' },
+              { key: 'kontinuitet', label: 'Kontinuitetsmätning av skyddsledare', type: 'value', unit: 'Ω' },
+              { key: 'jordfelsbrytare', label: 'Jordfelsbrytare provad med testknapp och mätning', type: 'check' },
+              { key: 'anmarkningar', label: 'Anmärkningar / avvikelser', type: 'text' },
+            ],
+          },
+        ],
+      },
+    });
   }
 
   // Portal grants (idempotent): entity-narrowed workorder:read per customer.

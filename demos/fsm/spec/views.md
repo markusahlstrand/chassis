@@ -1,6 +1,6 @@
 # FSM demo — view specifications
 
-Status: draft v0.1 · Last updated: 2026-07-13
+Status: draft v0.2 · Last updated: 2026-07-14
 
 > Companion to [testrun.md](testrun.md) (operations these views call)
 > and kernel-design §7.4 (composition model). Each view is guided by the incumbent's
@@ -66,6 +66,14 @@ Cross-cutting improvements applied to *every* view, then not repeated:
   in_progress"; later: "protocol 3/8 incomplete" — open question 11's UI). This is the
   single biggest improvement: the incumbent shows status as a value; we show it as a
   governed machine.
+- **Egenkontroll card** (v0, engine-protocol.md milestone A): protocols on the order
+  with fill progress ("3/8 punkter"), status pill (Öppen/Signerad/Makulerad), template
+  picker to start one, and an expandable fill sheet — checkboxes save on toggle,
+  measurements/text per-item with unit labels; corrections show an entry-count badge
+  whose tooltip is the append-only history. Signing freezes the sheet read-only and
+  prints signer/method/`content_hash`. A warn banner states the completion guard
+  ("Obligatoriskt för slutförande: egenkontroll-el") on `montage` orders — the block
+  itself is the operation's, not the UI's.
 - **Improvement:** completion is a **priced review sheet** (modal): reported lines →
   priced billable lines side-by-side (min-qty adjustments and dropped internal lines
   shown explicitly with strikethrough + reason) before confirming — the survey's
@@ -140,7 +148,7 @@ open the underlying append-only entries (auditability their matrix lacks).
   is already right); no editable history on mobile at all (append-only made tangible),
   corrections are new entries.
 
-### 2.3 Checklist filling — **v2** (protocol engine)
+### 2.3 Checklist filling — **v2** (mobile; the office fill/sign slice shipped v0 in 1.2)
 
 Per-point assessment (X/1/2/A/– kept — it's the industry's language), note + photo per
 point, progress counter, **"Skapa aktivitet"** kept (their best mobile idea: spawn a

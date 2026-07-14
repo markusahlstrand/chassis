@@ -25,6 +25,7 @@ import {
   type BillableLine,
   type WorkOrder,
 } from '@substrat-run/engine-workorder';
+import { protocolMigration, protocolOperations, requireSigned } from './protocol.js';
 
 // ============================================================================
 // The ServiceCo vertical (spec/testrun.md §5.1): customers, facilities, the
@@ -44,14 +45,31 @@ export const servicecoManifest = moduleManifest.parse({
   permissions: [
     { key: 'customer:manage', description: 'Manage customers and the price list' },
     { key: 'facility:manage', description: 'Manage facilities' },
+    { key: 'protocol:create', description: 'Define protocol templates and start protocols on work orders' },
+    { key: 'protocol:fill', description: 'Record responses on an open protocol (append-only)' },
+    { key: 'protocol:sign', description: 'Sign a protocol — freezes it forever (separate from fill: the technician fills, the arbetsledare signs)' },
+    { key: 'protocol:read', description: 'Read protocol templates, instances, responses and signatures' },
+    { key: 'protocol:void', description: 'Void (supersede) a protocol — never deletes' },
   ],
-  events: { emits: [], consumes: [] },
+  events: {
+    emits: [
+      { type: 'protocol.instantiated', schemaVersion: 1 },
+      { type: 'protocol.response-recorded', schemaVersion: 1 },
+      { type: 'protocol.signed', schemaVersion: 1 },
+      { type: 'protocol.voided', schemaVersion: 1 },
+    ],
+    consumes: [],
+  },
   migrations: { journalDir: './migrations', compatibleFrom: '0.0.1' },
   attachmentTargets: [
     { entityType: 'customer', readPermission: 'customer:manage' },
     { entityType: 'facility', readPermission: 'facility:manage' },
+    { entityType: 'protocol', readPermission: 'protocol:read' },
   ],
-  entityRelations: [{ entityType: 'facility', parentType: 'customer' }],
+  entityRelations: [
+    { entityType: 'facility', parentType: 'customer' },
+    { entityType: 'protocol', parentType: 'workorder' },
+  ],
   entitlementKey: 'serviceco',
 });
 
@@ -85,6 +103,7 @@ export const servicecoMigrations = [
       );
     `,
   },
+  protocolMigration, // 0002-protocols (append-only journal — 0001 is shipped)
 ];
 
 export interface CustomerRow {
@@ -219,6 +238,15 @@ const createWorkOrderOp: OperationHandler<
 };
 
 /**
+ * ServiceCo compliance policy ("obligatorisk för status"): which order kinds
+ * demand a signed protocol before the engine's complete may run. Vertical
+ * vocabulary on both axes — kinds AND template keys are ServiceCo content.
+ */
+const REQUIRED_SIGNED_PROTOCOLS: Record<string, string[]> = {
+  montage: ['egenkontroll-el'],
+};
+
+/**
  * THE PRICING MOMENT (spec §5.1): reads the engine's reported lines, prices
  * them from the vertical's price list (min-qty applied, internal articles
  * dropped), then calls the engine's complete — one transaction, engine
@@ -229,6 +257,17 @@ const completeWorkOrderOp: OperationHandler<
   { order: WorkOrder; billable: BillableLine[]; total: Money }
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(WO.complete));
+
+  // THE GUARD, milestone-A form (engine-protocol.md §6, open question 11):
+  // vertical-composed predicate before the engine transition, same
+  // transaction. This glue IS the compliance gate — removing it is
+  // human-checkpoint material, not a refactor.
+  const order = listOrders(ctx).find((o) => o.id === input.orderId);
+  if (!order) throw new Error(`work order not found: ${input.orderId}`);
+  for (const templateKey of REQUIRED_SIGNED_PROTOCOLS[order.kind] ?? []) {
+    requireSigned(ctx, { entityType: 'workorder', entityId: order.id }, templateKey);
+  }
+
   const reported = getReportedLines(ctx, input.orderId);
   const prices = new Map<string, PriceRow>(
     ctx.sql
@@ -318,5 +357,6 @@ export const servicecoModule: ModuleRegistration = {
     'serviceco/complete-workorder': completeWorkOrderOp as never,
     'serviceco/portal-orders': portalOrdersOp as never,
     'serviceco/timeline': timelineOp as never,
+    ...protocolOperations,
   },
 };

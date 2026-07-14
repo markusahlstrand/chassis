@@ -62,6 +62,9 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pill.exported { background: #e7f5ec; color: var(--ok); }
 .pill.akut { background: #fdecea; color: var(--danger); }
 .pill.service { background: #eef7f0; color: var(--ok); }
+.pill.montage { background: #fdf3e3; color: var(--warn); }
+.pill.signed { background: #e7f5ec; color: var(--ok); }
+.pill.voided { background: #f0eef5; color: #6b5b8e; }
 
 .statusflow { display: flex; align-items: center; gap: 6px; margin: 10px 0 16px; }
 .statusflow .step {
