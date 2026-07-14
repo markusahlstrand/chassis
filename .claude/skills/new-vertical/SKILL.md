@@ -84,6 +84,21 @@ Copy-and-own from `demos/fsm/app`: Vite + React, hash routing, principal picker 
 the top bar, views renamed to the vertical's vocabulary. Change brand, labels, and
 which columns matter; keep the api.ts pattern (typed wrappers over the server routes).
 
+## Conventions the reference doesn't show
+
+- **Permission keys** are host-local: two verticals never registered on the same host
+  may reuse a key (`customer:manage`); rename only when the meaning differs. Roles are
+  vertical vocabulary — name them for the persona (`workshop-admin`), don't copy the
+  reference's role names.
+- **Side-by-side demos**: pick the next free API port (fsm uses :8787, cykel :8788)
+  and web port (:5173, :5174), and a vertical-specific localStorage key for the
+  principal picker, so demos coexist.
+- **Declare every link edge you traverse**: engines link the refs you hand them
+  verbatim (workorder → your facility-shaped entity), and the adapter rejects links
+  undeclared in any registered manifest — so your `entityRelations` must cover both
+  your own edges (`bike → customer`) and the engine-made ones (`workorder → bike`).
+  This is also exactly what makes the portal proof-walk reach the customer.
+
 ## Gates before you're done
 
 Run all of these from the repo root; all must pass:
