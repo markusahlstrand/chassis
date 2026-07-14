@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.10.0",
   "scripts": {
     "build": "pnpm -r build",
+    "lint:boundaries": "node tools/boundary-lint.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r build && pnpm -r test",
     "docs:dev": "pnpm --filter @substrat-run/docs dev",

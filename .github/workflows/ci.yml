@@ -16,6 +16,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: node tools/boundary-lint.mjs
       - run: pnpm -r build
       - run: pnpm -r typecheck
       # The rule this job exists to enforce: the pure-SQLite adapter stays
