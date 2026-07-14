@@ -15,6 +15,12 @@
  *   R3 no network      module code never calls fetch() or imports an HTTP client
  *   R4 spine is sacred module code never writes _substrat_* tables (reads are
  *                      fine — timelines are projections)
+ *   R5 tables private  module code never references another module's tables in
+ *                      SQL (decision 28) — engine data is reached via exported
+ *                      in-scope functions; the stable surface is entity ids,
+ *                      EntityRefs, and event payloads. One-time extraction
+ *                      handoffs (decision 27) opt out explicitly with a
+ *                      `boundary-lint-allow R5` … `boundary-lint-end R5` block.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -53,9 +59,39 @@ function importsOf(source) {
   return specs;
 }
 
-function checkModuleFile(file, { ownEngine } = {}) {
+// tableOwners: table name → package key ('engines/workorder', 'demos/fsm', …),
+// built from every CREATE TABLE in every package's src before the rule pass.
+const tableOwners = new Map();
+
+function collectTables(file, pkgKey) {
+  const source = readFileSync(file, 'utf8');
+  const re = /CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)/gi;
+  for (let m; (m = re.exec(source)); ) tableOwners.set(m[1], pkgKey);
+}
+
+function checkForeignTables(rel, source, pkgKey) {
+  const lines = source.split('\n');
+  let allowed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes('boundary-lint-allow R5')) allowed = true;
+    else if (lines[i].includes('boundary-lint-end R5')) allowed = false;
+    if (allowed) continue;
+    for (const [table, owner] of tableOwners) {
+      if (owner === pkgKey) continue;
+      if (new RegExp(`\\b${table}\\b`).test(lines[i])) {
+        failures.push(
+          `${rel}:${i + 1}: R5 tables private — references '${table}' owned by ${owner} (use its in-scope functions)`,
+        );
+      }
+    }
+  }
+}
+
+function checkModuleFile(file, { ownEngine, pkgKey } = {}) {
   const rel = relative(root, file);
   const source = readFileSync(file, 'utf8');
+
+  checkForeignTables(rel, source, pkgKey);
 
   for (const spec of importsOf(source)) {
     if (ownEngine && spec.startsWith('@substrat-run/engine-') && spec !== ownEngine) {
@@ -81,6 +117,7 @@ function checkModuleFile(file, { ownEngine } = {}) {
   }
 }
 
+const packages = [];
 for (const group of ['engines', 'demos']) {
   const groupDir = join(root, group);
   let pkgs;
@@ -97,13 +134,26 @@ for (const group of ['engines', 'demos']) {
     } catch {
       continue;
     }
-    for (const file of walk(srcDir)) {
-      const isHarness =
-        group === 'demos' &&
-        HARNESS.has(relative(srcDir, file).split(sep).join('/'));
-      if (isHarness) continue;
-      checkModuleFile(file, group === 'engines' ? { ownEngine: pkgName } : {});
-    }
+    packages.push({ group, srcDir, pkgName, pkgKey: `${group}/${pkg}` });
+  }
+}
+
+// Pass 1: table ownership (harness included — a table is owned wherever created).
+for (const { srcDir, pkgKey } of packages) {
+  for (const file of walk(srcDir)) collectTables(file, pkgKey);
+}
+
+// Pass 2: the rules.
+for (const { group, srcDir, pkgName, pkgKey } of packages) {
+  for (const file of walk(srcDir)) {
+    const isHarness =
+      group === 'demos' &&
+      HARNESS.has(relative(srcDir, file).split(sep).join('/'));
+    if (isHarness) continue;
+    checkModuleFile(file, {
+      pkgKey,
+      ...(group === 'engines' ? { ownEngine: pkgName } : {}),
+    });
   }
 }
 

@@ -51,6 +51,18 @@ Module code = everything reachable from a `ModuleRegistration` (operations, cons
 - Every mutation emits a **fat** event (consumer must never need a cross-module read);
   payload validated by the consumer's own Zod parse, never the producer's types.
 - Migrations are append-only ordered `SqlMigration[]`; never edit a shipped version.
+- Another module's tables are **private** — never reference them in SQL (decision 28).
+  Engine data is reached through the engine's exported in-scope functions; the stable
+  surface is entity ids, `EntityRef`s, and event payloads. A vertical needing extra data
+  on an engine entity adds its **own side table keyed by the engine's id** — never a
+  column upstream. One-time extraction handoffs use an explicit
+  `boundary-lint-allow R5` … `boundary-lint-end R5` comment block (reviewable escape hatch).
+- Engine operations are thin: the permission check + one exported in-scope function.
+  All engine logic lives in composable exports so verticals extend by composition, never fork.
+- Engine surfaces evolve **additively only**: new operation inputs are optional with
+  behavior-preserving defaults; emitted event payload fields are frozen once shipped —
+  rename/remove/retype means a `schemaVersion` bump (dual-emit through a deprecation
+  window); permission keys are never renamed.
 - IDs come from `ulid()`; money/decimals are strings via `@substrat-run/contracts`
   helpers (`moneyOf`, `mulMoney`, `addDecimal`, `compareDecimal`) — never floats.
 - Web-standard APIs always, node-only imports never: hashing/crypto is
