@@ -21,9 +21,13 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # npm trusted publishing (OIDC, tokenless) needs npm >= 11.5.1; Node 22
+      # bundles 10.x. Provenance is automatic under trusted publishing.
+      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       # With pending changesets: opens/updates the "Version Packages" PR.
-      # Without: publishes any package whose version is not yet on npm.
+      # Without: publishes any package whose version is not yet on npm, via
+      # the trusted-publisher config on each @substrat-run package (no token).
       - uses: changesets/action@v1
         with:
           publish: pnpm release
@@ -31,5 +35,3 @@ jobs:
           title: "Version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
