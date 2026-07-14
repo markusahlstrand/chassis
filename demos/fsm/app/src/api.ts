@@ -32,11 +32,29 @@ export interface BillableLine {
   lineTotal: Money;
 }
 
+export interface Facility {
+  id: string;
+  name: string;
+  address: string | null;
+  access_note: string | null;
+}
+
 export interface Customer {
   id: string;
   number: string;
   name: string;
-  facilities: { id: string; name: string; address: string | null; access_note: string | null }[];
+  org_ref: string | null;
+  facilities: Facility[];
+}
+
+export interface Price {
+  article: string;
+  description: string;
+  unit: string;
+  price_amount: string;
+  currency: string;
+  min_qty: string | null;
+  internal: number;
 }
 
 export interface Underlag {
@@ -120,5 +138,17 @@ export const api = {
   underlag: (id: string) =>
     call<{ underlag: Underlag; lines: UnderlagLine[]; total: string }>(`/invoicing/${id}`),
   exportUnderlag: (id: string) => call<Underlag>(`/invoicing/${id}/export`, { method: 'POST', body: '{}' }),
-  prices: () => call<{ article: string; description: string; unit: string; price_amount: string; internal: number }[]>('/prices'),
+  prices: () => call<Price[]>('/prices'),
+  createCustomer: (input: { number: string; name: string; orgRef?: string }) =>
+    call<Omit<Customer, 'facilities'>>('/customers', { method: 'POST', body: JSON.stringify(input) }),
+  createFacility: (customerId: string, input: { name: string; address?: string; accessNote?: string }) =>
+    call<Facility>(`/customers/${customerId}/facilities`, { method: 'POST', body: JSON.stringify(input) }),
+  upsertPrice: (input: {
+    article: string;
+    description: string;
+    unit: string;
+    priceAmount: string;
+    minQty?: string;
+    internal?: boolean;
+  }) => call<Price>('/prices', { method: 'POST', body: JSON.stringify(input) }),
 };

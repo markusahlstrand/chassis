@@ -3,6 +3,8 @@ import { api, currentPrincipal, setPrincipal, type CastMember } from './api';
 import { OrdersView } from './views/Orders';
 import { OrderDetailView } from './views/OrderDetail';
 import { InvoicingView } from './views/Invoicing';
+import { CustomersView } from './views/Customers';
+import { PricesView } from './views/Prices';
 import { PortalView } from './views/Portal';
 
 function useHashRoute(): string {
@@ -51,6 +53,8 @@ export default function App() {
   let view = <OrdersView />;
   if (route.startsWith('/orders/')) view = <OrderDetailView orderId={route.split('/')[2] ?? ''} cast={cast} />;
   else if (route.startsWith('/invoicing')) view = <InvoicingView />;
+  else if (route.startsWith('/customers')) view = <CustomersView />;
+  else if (route.startsWith('/prices')) view = <PricesView />;
   else if (route.startsWith('/portal')) view = <PortalView />;
 
   return (
@@ -67,6 +71,12 @@ export default function App() {
               </a>
               <a href="#/invoicing" className={route.startsWith('/invoicing') ? 'active' : ''}>
                 Fakturaunderlag
+              </a>
+              <a href="#/customers" className={route.startsWith('/customers') ? 'active' : ''}>
+                Kunder
+              </a>
+              <a href="#/prices" className={route.startsWith('/prices') ? 'active' : ''}>
+                Prislista
               </a>
             </>
           )}

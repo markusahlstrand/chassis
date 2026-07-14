@@ -55,7 +55,21 @@ app.onError((err, c) => {
 app.get('/api/cast', (c) => c.json(CAST));
 
 app.get('/api/customers', async (c) => c.json(await (await stub(c)).invoke('serviceco/list-customers')));
+app.post('/api/customers', async (c) =>
+  c.json(await (await stub(c)).invoke('serviceco/create-customer', await c.req.json())),
+);
+app.post('/api/customers/:id/facilities', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('serviceco/create-facility', {
+      customerId: c.req.param('id'),
+      ...(await c.req.json<Record<string, unknown>>()),
+    }),
+  ),
+);
 app.get('/api/prices', async (c) => c.json(await (await stub(c)).invoke('serviceco/price-list')));
+app.post('/api/prices', async (c) =>
+  c.json(await (await stub(c)).invoke('serviceco/upsert-price', await c.req.json())),
+);
 
 app.get('/api/workorders', async (c) =>
   c.json(await (await stub(c)).invoke('workorder/list', { status: c.req.query('status') })),
