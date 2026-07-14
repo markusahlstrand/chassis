@@ -91,12 +91,40 @@ export interface SqlMigration {
  */
 export type ConsumerHandler = (ctx: OperationContext, event: DomainEvent) => void | Promise<void>;
 
+/**
+ * A named, manifest-wired pre-condition on an operation (K-17; engine-protocol
+ * §6, open question 11). One module CONTRIBUTES a predicate under a name; a
+ * (usually different) module's manifest WIRES it to an operation via
+ * `guards: [{ before, predicate, config }]`. The kernel runs it inside the
+ * guarded operation's own transaction, immediately before the handler:
+ *
+ *   throw  → the operation is BLOCKED and the transaction rolls back (fail closed)
+ *   return → the handler runs
+ *
+ * `config` is the manifest's config object, opaque to the kernel and parsed by
+ * the predicate itself; `input` is the (already structured-cloned) operation
+ * input. A predicate is a READ: it must not mutate — it is a gate, not a hook.
+ * Star topology holds — the guarded engine knows nothing of the guarding one.
+ */
+export type GuardPredicate = (
+  ctx: OperationContext,
+  config: Record<string, unknown>,
+  input: unknown,
+) => void | Promise<void>;
+
 export interface ModuleRegistration {
   manifest: ModuleManifest;
   migrations?: SqlMigration[];
   operations?: Record<string, OperationHandler<never, unknown>>;
   /** eventType → handler; the types must appear in manifest.events.consumes. */
   consumers?: Record<string, ConsumerHandler>;
+  /**
+   * Named guard predicates this module contributes to the host — the code half
+   * of `manifest.guards`. Names are module-namespaced like operations
+   * ('protocol/all-signed'). Predicate names are global: two modules may not
+   * contribute the same name.
+   */
+  predicates?: Record<string, GuardPredicate>;
 }
 
 /**

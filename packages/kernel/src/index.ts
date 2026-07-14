@@ -1,5 +1,6 @@
 export type {
   ConsumerHandler,
+  GuardPredicate,
   HostAdmin,
   ModuleRegistration,
   OperationContext,

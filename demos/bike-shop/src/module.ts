@@ -17,6 +17,7 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import {
+  closeWorkOrder,
   completeWorkOrder,
   createWorkOrder,
   getReportedLines,
@@ -76,6 +77,41 @@ export const bikeShopManifest = moduleManifest.parse({
     { entityType: 'bike', parentType: 'customer' },
     { entityType: 'workorder', parentType: 'bike' },
     { entityType: 'protocol', parentType: 'workorder' },
+  ],
+  // MILESTONE C — the manifest-declared guard (engine-protocol.md §6, kernel
+  // open question 11). CykelService's pickup rule: a repair is not closed until
+  // the customer has COUNTER-SIGNED the tillståndsrapport — i.e. accepted, on
+  // frozen content, the condition the bike goes home in. That gate is
+  // UNCONDITIONAL (it holds for every pickup, it depends on no vertical field),
+  // so it belongs here rather than in glue: the kernel runs it inside
+  // `bike-shop/close-repair`'s own transaction, before the handler, and
+  // DROPPING it is now a manifest diff a human reviews — not a deleted line
+  // inside a 60-line operation. Contrast: ServiceCo's montage→egenkontroll gate
+  // is conditional on order.kind — vertical vocabulary the kernel must never
+  // learn — so it stays vertical-composed glue (demos/fsm/src/module.ts).
+  //
+  // Star topology: the workorder engine knows nothing of protocols; the protocol
+  // engine contributes the named predicate; the VERTICAL — the layer that owns
+  // "what is mandatory when" — wires them.
+  // …and the complement that makes the guard ENFORCEABLE rather than merely
+  // reviewable: the engine's default `workorder/close` binding is WITHDRAWN in
+  // this host. The only door out of a repair is `bike-shop/close-repair`, which
+  // the guard above stands in front of. Withdrawal removes the BINDING, not the
+  // capability — the engine's in-scope `closeWorkOrder` is exactly what the
+  // vertical's guarded operation composes. Opt-in: ServiceCo withdraws nothing
+  // and keeps `workorder/close` (demos/fsm).
+  withdraws: ['workorder/close'],
+  guards: [
+    {
+      before: 'bike-shop/close-repair',
+      predicate: 'protocol/all-signed',
+      config: {
+        templateKey: 'tillstandsrapport', // vertical content
+        entityType: 'workorder',
+        entityIdFrom: 'orderId', // the input field carrying the repair id
+        countersigned: true, // the customer accepted it at pickup
+      },
+    },
   ],
   entitlementKey: 'cykelservice',
 });
@@ -330,6 +366,24 @@ const startConditionReportOp: OperationHandler<
   });
 };
 
+/**
+ * PICKUP: hand the bike back. A thin vertical binding of the engine's in-scope
+ * `closeWorkOrder` — the operation carries no policy of its own, because the
+ * policy is DECLARED in the manifest above: the kernel evaluates the
+ * `protocol/all-signed` guard (countersigned: true) before this handler runs,
+ * in the same transaction, and a failure rolls the whole invoke back.
+ *
+ * Why a vertical operation and not `guards: [{ before: 'workorder/close' }]`:
+ * the vertical must name the moment it actually owns — PICKUP, where the
+ * customer accepts the report — and the engine's transition is only part of it.
+ * The engine's default `workorder/close` binding is WITHDRAWN in the manifest,
+ * so this is the only door: there is no ungated path to `closed`.
+ */
+const closeRepairOp: OperationHandler<{ orderId: string }, WorkOrder> = async (ctx, input) => {
+  assertAllowed(await ctx.check(WO.close));
+  return closeWorkOrder(ctx, { orderId: input.orderId });
+};
+
 /** Portal listing: per-entity proof walks (workorder → bike → customer). */
 const portalRepairsOp: OperationHandler<undefined, WorkOrder[]> = async (ctx) => {
   const all = listOrders(ctx);
@@ -370,6 +424,7 @@ export const bikeShopModule: ModuleRegistration = {
     'bike-shop/create-repair': createRepairOp as never,
     'bike-shop/start-condition-report': startConditionReportOp as never,
     'bike-shop/complete-repair': completeRepairOp as never,
+    'bike-shop/close-repair': closeRepairOp as never,
     'bike-shop/portal-repairs': portalRepairsOp as never,
     'bike-shop/timeline': timelineOp as never,
   },

@@ -54,6 +54,76 @@ const lateModManifest = moduleManifest.parse({
   entitlementKey: 'late',
 });
 
+// Manifest-declared operation guards (K-17). Two modules, on purpose: one
+// GUARDED module whose manifest declares the gate, one GATE module that
+// contributes the named predicate. The guarded module registers FIRST — the
+// contract says predicates resolve at invoke, not at registration, because
+// registration order is caller-controlled.
+const guardedModManifest = moduleManifest.parse({
+  id: '@test/guarded',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'guarded:use', description: 'guarded permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'guarded',
+  guards: [
+    { before: 'guarded/act', predicate: 'gate/flag-set', config: { flag: 'go' } },
+    // A guard whose predicate NO module contributes: the operation must fail
+    // closed, never run unguarded.
+    { before: 'guarded/orphan', predicate: 'gate/does-not-exist', config: {} },
+  ],
+});
+
+// Operation withdrawal (K-17). Order-independence is the contract, so the suite
+// withdraws one operation BEFORE its module registers and one AFTER.
+const withdrawEarlyManifest = moduleManifest.parse({
+  id: '@test/withdraw-early',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'wearly:use', description: 'early withdrawer' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'withdraw-early',
+  withdraws: ['victim/a'], // @test/victim has not registered yet
+});
+
+const victimModManifest = moduleManifest.parse({
+  id: '@test/victim',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'victim:use', description: 'victim permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'victim',
+});
+
+const withdrawLateManifest = moduleManifest.parse({
+  id: '@test/withdraw-late',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'wlate:use', description: 'late withdrawer' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'withdraw-late',
+  withdraws: ['victim/b'], // @test/victim already registered
+});
+
+const gateModManifest = moduleManifest.parse({
+  id: '@test/gate',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'gate:use', description: 'gate permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'gate',
+});
+
 const addItem: OperationHandler<{ id: string; box: string }, void> = (ctx, input) => {
   ctx.sql.exec('INSERT INTO testmod_items (id, box) VALUES (?, ?)', [input.id, input.box]);
   ctx.link({ entityType: 'item', entityId: input.id }, { entityType: 'box', entityId: input.box });
@@ -269,6 +339,60 @@ export function scopeHostContractSuite(
         },
       });
 
+      // Guards (K-17). The guarded module registers BEFORE the module that
+      // contributes its predicate — wiring may legitimately precede the
+      // implementation, so resolution is late and fails closed at invoke.
+      host.registerModule({
+        manifest: guardedModManifest,
+        migrations: [
+          { version: '0001-init', sql: 'CREATE TABLE guarded_t (v TEXT NOT NULL)' },
+        ],
+        operations: {
+          'guarded/act': ((ctx, input: { flag?: string }) => {
+            ctx.sql.exec('INSERT INTO guarded_t (v) VALUES (?)', [input?.flag ?? 'none']);
+            ctx.emit({
+              type: 'guarded.acted',
+              schemaVersion: 1,
+              entity: { entityType: 'guarded-thing', entityId: 'g1' },
+              piiClass: 'none',
+              payload: {},
+            });
+          }) as OperationHandler<never, unknown>,
+          'guarded/orphan': (() => 'ran') as OperationHandler<never, unknown>,
+          'guarded/rows': ((ctx) =>
+            ctx.sql.query<{ v: string }>('SELECT v FROM guarded_t').map((r) => r.v)) as
+            OperationHandler<never, unknown>,
+          'guarded/events': ((ctx) =>
+            ctx.sql.query('SELECT id FROM _substrat_outbox WHERE type = ?', ['guarded.acted'])
+              .length) as OperationHandler<never, unknown>,
+        },
+      });
+
+      host.registerModule({
+        manifest: gateModManifest,
+        predicates: {
+          // The predicate sees ctx (its own transaction), the manifest config,
+          // and the operation input. It THROWS to block, returns to allow.
+          'gate/flag-set': (_ctx, config, input) => {
+            const want = config.flag;
+            const got = (input as { flag?: string } | undefined)?.flag;
+            if (got !== want) throw new Error(`guard: expected flag '${String(want)}', got '${String(got)}'`);
+          },
+        },
+      });
+
+      // Withdrawal, both orders: early withdrawer → victim → late withdrawer.
+      host.registerModule({ manifest: withdrawEarlyManifest });
+      host.registerModule({
+        manifest: victimModManifest,
+        operations: {
+          'victim/a': (() => 'a') as OperationHandler<never, unknown>,
+          'victim/b': (() => 'b') as OperationHandler<never, unknown>,
+          'victim/c': (() => 'c') as OperationHandler<never, unknown>,
+        },
+      });
+      host.registerModule({ manifest: withdrawLateManifest });
+
       await host.provisionScope({ tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
       await host.provisionScope({ tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
     });
@@ -395,6 +519,73 @@ export function scopeHostContractSuite(
       expect(() => host.registerModule({ manifest: testModManifest })).toThrow(
         /already registered/,
       );
+    });
+
+    // -- manifest-declared operation guards (K-17) ---------------------------
+
+    it('runs a manifest guard before the handler; a throw blocks and rolls back (K-17)', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      // Guard fails → the handler never ran: no row, and no event on the spine.
+      await expect(stub.invoke('guarded/act', { flag: 'stop' })).rejects.toThrow(/expected flag/);
+      await expect(stub.invoke<string[]>('guarded/rows')).resolves.toEqual([]);
+      await expect(stub.invoke<number>('guarded/events')).resolves.toBe(0);
+
+      // Guard passes → the handler runs, in the same transaction.
+      await stub.invoke('guarded/act', { flag: 'go' });
+      await expect(stub.invoke<string[]>('guarded/rows')).resolves.toEqual(['go']);
+      await expect(stub.invoke<number>('guarded/events')).resolves.toBe(1);
+    });
+
+    it('fails closed when a declared guard names a predicate no module contributes', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      await expect(stub.invoke('guarded/orphan')).rejects.toThrow(/unknown guard predicate/);
+    });
+
+    it('rejects a predicate name already contributed by another module', () => {
+      expect(() =>
+        host.registerModule({
+          manifest: moduleManifest.parse({
+            ...gateModManifest,
+            id: '@test/gate-clash',
+            entitlementKey: 'gate-clash',
+            permissions: [{ key: 'gateclash:use', description: 'clash' }],
+          }),
+          predicates: { 'gate/flag-set': () => undefined },
+        }),
+      ).toThrow(/already contributed/);
+    });
+
+    it('leaves unguarded operations untouched', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      await expect(stub.invoke<string[]>('guarded/rows')).resolves.toEqual(['go']);
+    });
+
+    // -- operation withdrawal (K-17) -----------------------------------------
+
+    it('withdraws a default binding regardless of registration order (K-17)', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      // withdrawn BEFORE its module registered…
+      await expect(stub.invoke('victim/a')).rejects.toThrow(/unknown operation/);
+      // …and AFTER its module registered. Both are indistinguishable from an
+      // operation that was never defined: fail closed, no special error class.
+      await expect(stub.invoke('victim/b')).rejects.toThrow(/unknown operation/);
+      // Withdrawal is per-operation and opt-in: everything else still binds.
+      await expect(stub.invoke<string>('victim/c')).resolves.toBe('c');
+    });
+
+    it('rejects a module withdrawing its own operation', () => {
+      expect(() =>
+        host.registerModule({
+          manifest: moduleManifest.parse({
+            ...victimModManifest,
+            id: '@test/self-withdrawer',
+            entitlementKey: 'self-withdrawer',
+            permissions: [{ key: 'selfw:use', description: 'self' }],
+            withdraws: ['selfw/op'],
+          }),
+          operations: { 'selfw/op': (() => 'x') as OperationHandler<never, unknown> },
+        }),
+      ).toThrow(/withdraws its own operation/);
     });
 
     it('links declared entity relations, idempotently (K-16)', async () => {

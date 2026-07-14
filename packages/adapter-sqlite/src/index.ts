@@ -25,6 +25,7 @@ import {
 import {
   ulid,
   type ConsumerHandler,
+  type GuardPredicate,
   type HostAdmin,
   type ModuleRegistration,
   type OperationContext,
@@ -52,6 +53,13 @@ interface RegisteredModule {
   id: string;
   migrations: SqlMigration[];
   consumers: { eventType: string; handler: ConsumerHandler }[];
+}
+
+/** A manifest guard, bound to the module whose manifest declared it (K-17). */
+interface DeclaredGuard {
+  predicate: string;
+  config: Record<string, unknown>;
+  declaredBy: string;
 }
 
 export interface SqliteScopeHostOptions {
@@ -123,6 +131,12 @@ export class SqliteScopeHost implements ScopeHost {
   private readonly scopesById = new Map<string, ScopeRuntime>();
   private readonly operations = new Map<string, OperationHandler<never, unknown>>();
   private readonly modules = new Map<string, RegisteredModule>();
+  /** operation name → guards declared before it, in registration order (K-17). */
+  private readonly guards = new Map<string, DeclaredGuard[]>();
+  /** predicate name → the module-contributed implementation. Names are global. */
+  private readonly predicates = new Map<string, { module: string; handler: GuardPredicate }>();
+  /** operation names whose default binding some manifest withdrew (K-17). */
+  private readonly withdrawn = new Map<string, string>(); // operation → withdrawing module
   private readonly relations = new Map<string, Set<string>>();
   private readonly roles = new Map<string, RoleDefinition>(); // 'tenantId/roleKey'
   private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
@@ -193,11 +207,56 @@ export class SqliteScopeHost implements ScopeHost {
         return { eventType, handler };
       },
     );
+    // Guards (K-17): the manifest half is DECLARATION, the registration half is
+    // the named predicate. They are deliberately resolved LATE — at invoke, not
+    // here. Registration order is caller-controlled (a vertical may register
+    // before the engine whose predicate it wires), so a fast-fail here would be
+    // a lie: it would reject wiring that is merely early. The honest fail-closed
+    // point is the invoke path — an unresolvable predicate BLOCKS the guarded
+    // operation rather than silently letting it through, so a typo can never
+    // widen the gate. What we DO enforce eagerly is the half we can see whole:
+    // predicate names are global and may not collide.
+    for (const [name, handler] of Object.entries(registration.predicates ?? {})) {
+      const existing = this.predicates.get(name);
+      if (existing) {
+        throw new Error(
+          `guard predicate already contributed by ${existing.module}: ${name} (names are global)`,
+        );
+      }
+      this.predicates.set(name, { module: manifest.id, handler });
+    }
+    for (const guard of manifest.guards ?? []) {
+      const forOperation = this.guards.get(guard.before) ?? [];
+      forOperation.push({
+        predicate: guard.predicate,
+        config: guard.config,
+        declaredBy: manifest.id,
+      });
+      this.guards.set(guard.before, forOperation);
+    }
     this.modules.set(manifest.id, { id: manifest.id, migrations, consumers });
     for (const rel of manifest.entityRelations ?? []) {
       const parents = this.relations.get(rel.entityType) ?? new Set<string>();
       parents.add(rel.parentType);
       this.relations.set(rel.entityType, parents);
+    }
+    // WITHDRAWAL (K-17): suppress another module's default binding. Order
+    // independent — a manifest may withdraw an operation whose module has not
+    // registered yet (recorded here, skipped at defineOperation) or one already
+    // registered (removed from the map now). The name then behaves exactly like
+    // an unregistered one: invoke → 'unknown operation', i.e. fail closed. The
+    // engine's in-scope FUNCTION is untouched — withdrawal removes the binding,
+    // not the capability, which is how a vertical re-offers the same transition
+    // behind its own guarded operation.
+    const ownOperations = new Set(Object.keys(registration.operations ?? {}));
+    for (const name of manifest.withdraws ?? []) {
+      if (ownOperations.has(name)) {
+        throw new Error(
+          `${manifest.id} withdraws its own operation: ${name} (a module cannot withdraw itself — just don't register it)`,
+        );
+      }
+      this.withdrawn.set(name, manifest.id);
+      this.operations.delete(name);
     }
     for (const [name, handler] of Object.entries(registration.operations ?? {})) {
       this.defineOperation(name, handler);
@@ -205,6 +264,7 @@ export class SqliteScopeHost implements ScopeHost {
   }
 
   defineOperation<I, O>(name: string, handler: OperationHandler<I, O>): void {
+    if (this.withdrawn.has(name)) return; // withdrawn by another manifest — never binds
     if (this.operations.has(name)) throw new Error(`operation already defined: ${name}`);
     this.operations.set(name, handler as OperationHandler<never, unknown>);
   }
@@ -254,6 +314,10 @@ export class SqliteScopeHost implements ScopeHost {
           rt.db.exec('BEGIN IMMEDIATE');
           let result: O;
           try {
+            // Manifest guards (K-17): pre-conditions, inside the operation's own
+            // transaction, before the handler. A throw here blocks the operation
+            // and rolls back exactly like a handler throw — fail closed.
+            await this.runGuards(operation, ctx, clonedInput);
             result = await (handler as OperationHandler<I | undefined, O>)(ctx, clonedInput);
             rt.db.exec('COMMIT');
           } catch (err) {
@@ -266,6 +330,35 @@ export class SqliteScopeHost implements ScopeHost {
         });
       },
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Manifest-declared operation guards (K-17; engine-protocol.md §6, kernel-
+  // design open question 11). Guards are keyed on OPERATIONS, never on engine
+  // transitions: the kernel sees operations and must not learn engine
+  // internals. They are UNCONDITIONAL gates — policy that depends on vertical
+  // data stays vertical-composed glue inside the operation handler.
+  // -------------------------------------------------------------------------
+
+  private async runGuards(
+    operation: string,
+    ctx: OperationContext,
+    input: unknown,
+  ): Promise<void> {
+    const declared = this.guards.get(operation);
+    if (!declared) return;
+    for (const guard of declared) {
+      const predicate = this.predicates.get(guard.predicate);
+      if (!predicate) {
+        // Fail closed: a guard whose predicate cannot be resolved blocks the
+        // operation. A dropped/misspelled predicate can never widen a gate.
+        throw new Error(
+          `unknown guard predicate: '${guard.predicate}' — declared by ${guard.declaredBy} ` +
+            `before '${operation}'; no registered module contributes it (operation blocked)`,
+        );
+      }
+      await predicate.handler(ctx, guard.config, input);
+    }
   }
 
   async close(): Promise<void> {

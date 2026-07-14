@@ -113,8 +113,11 @@ app.post('/api/repairs/:id/material', async (c) =>
 app.post('/api/repairs/:id/complete', async (c) =>
   c.json(await (await stub(c)).invoke('bike-shop/complete-repair', { orderId: c.req.param('id') })),
 );
+// Pickup — the only door to `closed`. The engine's `workorder/close` binding is
+// withdrawn in the bike-shop manifest, and this operation is guarded: the kernel
+// refuses it until the customer has counter-signed the tillståndsrapport.
 app.post('/api/repairs/:id/close', async (c) =>
-  c.json(await (await stub(c)).invoke('workorder/close', { orderId: c.req.param('id') })),
+  c.json(await (await stub(c)).invoke('bike-shop/close-repair', { orderId: c.req.param('id') })),
 );
 
 app.get('/api/protocol-templates', async (c) =>

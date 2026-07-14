@@ -332,6 +332,26 @@ export function completeWorkOrder(
   return { order: toWorkOrder(getRow(ctx, row.id)), total };
 }
 
+/**
+ * completed → closed. In-scope (K-16) so a vertical can compose the close into
+ * its own operation — e.g. a pickup ceremony that must satisfy a manifest guard
+ * first. `workorder/close` below is this function's default binding; the CALLER
+ * owns the permission check.
+ */
+export function closeWorkOrder(ctx: OperationContext, input: { orderId: string }): WorkOrder {
+  const row = getRow(ctx, input.orderId);
+  requireStatus(row, 'completed');
+  ctx.sql.exec(`UPDATE workorder_orders SET status = 'closed' WHERE id = ?`, [row.id]);
+  ctx.emit({
+    type: 'workorder.closed',
+    schemaVersion: 1,
+    entity: orderRef(row.id),
+    piiClass: 'none',
+    payload: { orderId: row.id },
+  });
+  return toWorkOrder(getRow(ctx, row.id));
+}
+
 // ---------------------------------------------------------------------------
 // Default operation bindings — each starts with the permission check.
 // ---------------------------------------------------------------------------
@@ -451,17 +471,7 @@ const completeOp: OperationHandler<
 
 const closeOp: OperationHandler<{ orderId: string }, WorkOrder> = async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.close));
-  const row = getRow(ctx, input.orderId);
-  requireStatus(row, 'completed');
-  ctx.sql.exec(`UPDATE workorder_orders SET status = 'closed' WHERE id = ?`, [row.id]);
-  ctx.emit({
-    type: 'workorder.closed',
-    schemaVersion: 1,
-    entity: orderRef(row.id),
-    piiClass: 'none',
-    payload: { orderId: row.id },
-  });
-  return toWorkOrder(getRow(ctx, row.id));
+  return closeWorkOrder(ctx, input);
 };
 
 export const workorderModule: ModuleRegistration = {

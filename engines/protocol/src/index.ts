@@ -9,6 +9,7 @@ import {
 import {
   assertAllowed,
   ulid,
+  type GuardPredicate,
   type ModuleRegistration,
   type OperationContext,
   type OperationHandler,
@@ -274,11 +275,25 @@ export async function protocolContentHash(
 }
 
 // ---------------------------------------------------------------------------
-// THE GUARD PREDICATE (engine-protocol.md §6, kernel-design open question 11):
-// a plain in-scope predicate the vertical composes into its own operations
-// BEFORE calling an engine transition ("obligatorisk för status"). The
-// manifest-declared form is milestone C; until then this call IS the
-// compliance gate — do not remove a call site without a human checkpoint.
+// THE GUARD (engine-protocol.md §6, kernel-design open question 11). ONE
+// predicate body, TWO ways to reach it — that is the whole open question:
+//
+//  pole 1 — VERTICAL-COMPOSED (milestone A): the vertical calls requireSigned()
+//    inside its own operation before the engine transition. Right when the
+//    policy is CONDITIONAL on vertical data ("only montage orders need an
+//    egenkontroll" — demos/fsm): the condition is vertical vocabulary, and the
+//    kernel must never learn it. Weakness: it is glue an edit can silently drop.
+//
+//  pole 2 — MANIFEST-DECLARED (milestone C): the engine contributes the named
+//    predicate `protocol/all-signed` below; a VERTICAL manifest wires it to an
+//    operation (`guards: [{ before, predicate, config }]`) and the kernel runs
+//    it inside that operation's transaction, before the handler. Right when the
+//    gate is UNCONDITIONAL ("a repair cannot be closed until the customer
+//    counter-signed the tillståndsrapport" — demos/bike-shop). Adding or
+//    DROPPING the gate is then a manifest diff: human-checkpoint material.
+//
+// Both poles are the same read against the same engine-owned tables. Star
+// topology holds either way: the workorder engine knows nothing of protocols.
 // ---------------------------------------------------------------------------
 
 export function requireSigned(ctx: OperationContext, entity: EntityRef, templateKey: string): void {
@@ -295,6 +310,61 @@ export function requireSigned(ctx: OperationContext, entity: EntityRef, template
     );
   }
 }
+
+/**
+ * The stronger form: signed AND counter-signed — the frozen content was
+ * ACCEPTED by a second principal (the customer at pickup). Invariant 3 already
+ * guarantees a counter-signature can only exist on verified frozen content, so
+ * the existence of the row is the whole check.
+ */
+export function requireCountersigned(
+  ctx: OperationContext,
+  entity: EntityRef,
+  templateKey: string,
+): void {
+  requireSigned(ctx, entity, templateKey);
+  const counter = ctx.sql.query<{ id: string }>(
+    `SELECT s.id FROM protocol_signatures s
+     JOIN protocol_instances i ON i.id = s.instance_id
+     WHERE i.entity_type = ? AND i.entity_id = ? AND i.template_key = ?
+       AND i.status = 'signed' AND s.kind = 'counter'
+     LIMIT 1`,
+    [entity.entityType, entity.entityId, templateKey],
+  )[0];
+  if (!counter) {
+    throw new Error(
+      `protocol required: '${templateKey}' must be counter-signed before this transition ` +
+        `(${entity.entityType} ${entity.entityId})`,
+    );
+  }
+}
+
+/**
+ * Config for the `protocol/all-signed` predicate — parsed by the PREDICATE, not
+ * by the kernel (the kernel keeps `config` opaque). `entityIdFrom` names the
+ * field of the guarded operation's input that carries the entity id, which is
+ * how one predicate serves any operation shape without the engine knowing the
+ * vertical's vocabulary.
+ */
+export const allSignedGuardConfig = z.object({
+  templateKey: z.string().min(1), // vertical content: 'tillstandsrapport'
+  entityType: z.string().min(1), // what the protocol hangs on: 'workorder'
+  entityIdFrom: z.string().min(1), // input field holding the id: 'orderId'
+  countersigned: z.boolean().default(false), // require the customer's acceptance too
+});
+export type AllSignedGuardConfig = z.input<typeof allSignedGuardConfig>;
+
+/** The named predicate the kernel resolves for `predicate: 'protocol/all-signed'`. */
+export const allSignedPredicate: GuardPredicate = (ctx, rawConfig, input) => {
+  const config = allSignedGuardConfig.parse(rawConfig);
+  const entityId = z
+    .string()
+    .min(1, `guard 'protocol/all-signed': input field '${config.entityIdFrom}' carries no entity id`)
+    .parse((input as Record<string, unknown> | undefined)?.[config.entityIdFrom]);
+  const entity: EntityRef = { entityType: config.entityType, entityId };
+  if (config.countersigned) requireCountersigned(ctx, entity, config.templateKey);
+  else requireSigned(ctx, entity, config.templateKey);
+};
 
 // ---------------------------------------------------------------------------
 // In-scope functions (K-16) — composable from vertical operations, same
@@ -769,6 +839,12 @@ const listForEntityOp: OperationHandler<
 export const protocolModule: ModuleRegistration = {
   manifest: protocolManifest,
   migrations: protocolMigrations,
+  // The engine CONTRIBUTES the predicate; a vertical manifest WIRES it (K-17).
+  // The engine never declares a guard of its own: what is mandatory when is
+  // vertical policy, and the engine cannot know another module's operations.
+  predicates: {
+    'protocol/all-signed': allSignedPredicate,
+  },
   operations: {
     'protocol/define-template': defineTemplateOp as OperationHandler<never, unknown>,
     'protocol/list-templates': listTemplatesOp as OperationHandler<never, unknown>,

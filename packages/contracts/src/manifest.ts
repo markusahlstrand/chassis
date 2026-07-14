@@ -21,6 +21,13 @@ export const eventTypeRef = z.object({
 });
 export type EventTypeRef = z.infer<typeof eventTypeRef>;
 
+export const manifestGuard = z.object({
+  before: z.string().min(1), // operation name, e.g. 'bike-shop/close-repair'
+  predicate: z.string().min(1), // named predicate, e.g. 'protocol/all-signed'
+  config: z.record(z.string(), z.unknown()).default({}), // predicate-owned shape
+});
+export type ManifestGuard = z.infer<typeof manifestGuard>;
+
 export const moduleManifest = z.object({
   id: moduleId, // '@substrat-run/engine-workorder'
   version: semverVersion,
@@ -51,6 +58,36 @@ export const moduleManifest = z.object({
       }),
     )
     .optional(),
+  // MANIFEST-DECLARED OPERATION GUARDS (engine-protocol.md §6, kernel-design
+  // open question 11, milestone C). A guard is an UNCONDITIONAL pre-condition
+  // on a registered OPERATION: the kernel resolves `predicate` (a named
+  // predicate contributed by some registered module) and runs it inside the
+  // operation's own transaction, before the handler. A throw blocks the
+  // operation and rolls back — fail closed.
+  //
+  // Keyed on operations, never on engine transitions: the kernel sees
+  // operations, and must not learn engine internals (star topology). Policy
+  // that is CONDITIONAL on vertical data (e.g. "only montage orders need an
+  // egenkontroll") stays vertical-composed glue inside the operation — see
+  // demos/fsm. Guards live here so that adding or DROPPING a compliance gate
+  // lands in the reviewable manifest diff.
+  //
+  // Optional: every pre-milestone-C manifest still parses unchanged (D-28,
+  // additive-only surface).
+  guards: z.array(manifestGuard).optional(),
+  // OPERATION WITHDRAWAL (K-17, the complement that makes guards enforceable).
+  // Operation names whose DEFAULT BINDING this module suppresses in the host it
+  // registers into: the name stops resolving — an invoke fails 'unknown
+  // operation', exactly as if it had never been registered. Order-independent
+  // (withdraw before or after the owning module registers) and opt-in.
+  //
+  // Withdrawal removes the BINDING, not the capability: the engine's in-scope
+  // function (e.g. `closeWorkOrder`) stays composable, which is how a vertical
+  // re-offers the same transition behind its own guarded operation. A module may
+  // not withdraw its own operations.
+  //
+  // Optional: additive-only surface (D-28).
+  withdraws: z.array(z.string().min(1)).optional(),
   entitlementKey: z.string().regex(/^[a-z0-9-]+$/), // the SKU flag that gates loading (D-20)
   api: z.string().optional(), // path to emitted OAS for the HTTP surface, if any (D-22)
   searchables: z

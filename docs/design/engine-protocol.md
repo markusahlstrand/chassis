@@ -41,7 +41,8 @@ discipline, rehearsed at demo scale:
    verticals' templates stay behind as content. The extraction diff is the proof the
    plan's least-proven hypothesis wants (§3), at rehearsal scale.
 3. **Milestone C — the guard.** With two verticals gating transitions on signatures,
-   decide open question 11 on real material (§6 below).
+   decide open question 11 on real material (§6 below). *Built: both poles exist and
+   each carries the case it fits; the decision-log entry for OQ11 awaits ratification.*
 
 Each milestone is agent-loop material (runs 003–005): A extends a vertical, B is an
 *extraction* — a benchmark shape no run has tested — and C is a kernel change behind
@@ -98,36 +99,112 @@ A signature records `signed_by` + `method` + `content_hash` + optional `evidence
   levels are an evidence-quality upgrade, not a different engine path. The engine never
   imports a vendor SDK. Demo treatment: stubbed like Fortnox export.
 
-## 6. The guard (open question 11) — proposed resolution shape
+## 6. The guard (open question 11) — both poles, built
 
 "Obligatorisk för status": completing a work order requires protocol X signed. The two
-poles from kernel-design:
+poles from kernel-design, **both now implemented**, each carrying the case it fits.
 
-- *Vertical-composed* (milestone A): the vertical's `complete` operation calls the
-  protocol module's in-scope predicate (`requireSigned(ctx, entityRef, templateKey)`)
-  before the engine's `completeWorkOrder`. Same pattern as the pricing moment; zero new
-  kernel machinery. Weakness (named in the open question): it's glue an AI edit can
-  silently drop — invisible to review, weak for compliance.
-- *Manifest-declared* (proposal for milestone C): the **vertical manifest** declares
+### Pole 1 — vertical-composed (milestone A, shipped)
 
-  ```ts
-  guards: [{
-    before: 'workorder/complete',                 // any registered operation
-    predicate: 'protocol/all-signed',             // an in-scope predicate the
-    config: { templateKey: 'egenkontroll-el' },   // protocol module exports
-  }]
-  ```
+The vertical's `complete` operation calls the protocol engine's in-scope predicate
+(`requireSigned(ctx, entityRef, templateKey)`) before the engine's `completeWorkOrder`.
+Same pattern as the pricing moment; zero kernel machinery. Weakness (named in the open
+question): it's glue an edit can silently drop — invisible to review, weak for
+compliance.
 
-  The kernel evaluates the predicate inside the same scope transaction before running
-  the guarded operation. Star topology holds: the workorder engine knows nothing of
-  protocols, the protocol module implements a predicate against its own tables, and the
-  *vertical manifest* — the layer that owns "what's mandatory when" — wires them.
-  Because it's manifest surface, a guard change lands in the reviewable diff: adding or
-  **dropping** a compliance gate becomes human-checkpoint material, which is exactly
-  the property vertical-composed glue lacks.
+**It is still the right pole when the policy is CONDITIONAL on vertical data.**
+ServiceCo owes an egenkontroll only on `montage` orders (`demos/fsm/src/module.ts`):
+`order.kind` is ServiceCo vocabulary, and the kernel must never learn it. That guard
+stays glue, on purpose.
 
-Milestone A ships the first pole; C decides whether the second is pinned (the manifest
-change is additive, per the open question's own note).
+### Pole 2 — manifest-declared (milestone C, shipped)
+
+A module's **manifest** declares an unconditional pre-condition on an operation; another
+module **contributes** the named predicate. CykelService (`demos/bike-shop`):
+
+```ts
+// manifest (the vertical — the layer that owns "what is mandatory when")
+guards: [{
+  before: 'bike-shop/close-repair',        // any registered OPERATION
+  predicate: 'protocol/all-signed',        // a named predicate some module contributes
+  config: {                                // opaque to the kernel; the predicate parses it
+    templateKey: 'tillstandsrapport',
+    entityType: 'workorder',
+    entityIdFrom: 'orderId',               // which input field carries the entity id
+    countersigned: true,                   // the customer accepted it at pickup
+  },
+}]
+
+// registration (the engine — contributes the code half, wires nothing)
+export const protocolModule: ModuleRegistration = {
+  manifest: protocolManifest,
+  predicates: { 'protocol/all-signed': allSignedPredicate },
+  operations: { … },
+};
+
+// kernel contract
+export type GuardPredicate = (
+  ctx: OperationContext,
+  config: Record<string, unknown>,
+  input: unknown,
+) => void | Promise<void>;        // throws → BLOCK; returns → allow
+```
+
+**Where it fires:** inside the scope actor task and inside the operation's own
+`BEGIN IMMEDIATE … COMMIT`, immediately *before* the handler. A throw rolls the
+transaction back exactly like a handler throw — no row, no event, fail closed.
+
+**Resolution is late, and that is deliberate.** Registration order is caller-controlled
+(a vertical may register before the engine whose predicate it wires), so a fast-fail at
+`registerModule` would reject wiring that is merely *early*. Predicates therefore resolve
+at invoke; an unresolvable name **blocks** the guarded operation ("unknown guard
+predicate"). A typo can never widen a gate, only close one. What *is* enforced eagerly is
+the half the kernel can see whole: predicate names are global and may not collide.
+
+Star topology holds: the workorder engine knows nothing of protocols; the protocol engine
+knows nothing of bike shops; the vertical manifest wires them. Because the gate is
+manifest surface, adding or **dropping** it lands in the reviewable diff — the property
+vertical-composed glue lacks.
+
+### The rule, stated once
+
+> Manifest guards are **unconditional gates on an operation**. Policy conditional on
+> vertical data stays **vertical-composed glue** inside the operation.
+
+### Pole 2's complement — operation withdrawal (what makes the guard *enforceable*)
+
+A guard binds the **operation it names**. On its own that makes a gate *reviewable* but
+not *enforceable*: CykelService gates `bike-shop/close-repair`, while the engine's own
+`workorder/close` would stay registered — and any caller holding `workorder:close` could
+walk around the gate. (Confirmed in the demo before this landed: sign without
+counter-signing, `bike-shop/close-repair` blocks, plain `workorder/close` closes it
+anyway.) Gating `workorder/close` directly is not the answer: it would make the gate
+unconditional for *every* repair, and a punktering carries no condition report.
+
+The fix is the missing half of the surface — a manifest may **withdraw** another module's
+default binding:
+
+```ts
+// bike-shop manifest
+withdraws: ['workorder/close'],   // the name stops resolving in THIS host
+```
+
+- **Withdrawal removes the BINDING, not the capability.** The engine's in-scope
+  `closeWorkOrder(ctx, …)` stays exported and composable — it is exactly what the
+  vertical's guarded `bike-shop/close-repair` calls. The engine loses a default door, not
+  a function.
+- **Order-independent.** A vertical may register before or after the engine it withdraws
+  from; the host keeps a `withdrawn` set, `defineOperation` skips a withdrawn name, and a
+  manifest that withdraws an already-registered operation removes it from the map.
+- **Fails closed and looks like nothing special.** A withdrawn operation is
+  indistinguishable from one that was never registered: `unknown operation`.
+- **Opt-in, never self-inflicted.** ServiceCo withdraws nothing and keeps
+  `workorder/close`. A module withdrawing its *own* operation throws — it is meaningless
+  and would hide bugs.
+
+Guard + withdrawal together: **the only door to `closed` in CykelService is the vertical's
+pickup ceremony, and the kernel refuses it until the customer has counter-signed.** The
+gate is now in the manifest diff *and* in the execution path.
 
 ## 7. Explicit non-goals (v0)
 
@@ -142,5 +219,26 @@ master-plan offline question, not solved here), template marketplace.
 2. Is append-only responses right, or is latest-value-with-audit-log enough?
 3. Counter-signature as second signature row on frozen content — does the bike-shop
    pickup flow actually need the customer to sign *after* content freezes, or before?
-4. Guard proposal: is `before:`-operation granularity right, or do guards belong on
-   engine *transitions* (status values) rather than operations?
+4. ~~Guard proposal: is `before:`-operation granularity right, or do guards belong on
+   engine *transitions* (status values) rather than operations?~~ **Resolved 2026-07-14
+   (milestone C): OPERATIONS.** Transitions were rejected on three counts. (a) *The
+   kernel would have to learn engine internals*: a transition key like
+   `workorder: in_progress → completed` only means something if the kernel knows that
+   engine's status vocabulary and its state machine — exactly the domain knowledge the
+   three-layer rule keeps out of layer 1. Operations are already the kernel's own
+   vocabulary (it registers them, it invokes them, it wraps them in a transaction). (b)
+   *There is no interception point*: a transition happens deep inside an engine's
+   in-scope function, called from a vertical's handler inside an open transaction — the
+   kernel never sees it, so enforcing there would mean a callback surface reaching into
+   engine code (the star topology's collapse). The operation boundary is the only place
+   the kernel legitimately stands between a caller and domain code. (c) *Transitions are
+   the wrong unit of review*: what compliance cares about is "closing a repair requires
+   the customer's counter-signature", a business moment the vertical names. It is an
+   operation. The cost of the choice — a guard binds one operation, so the engine's
+   default binding for the same transition was an unguarded path — is paid by
+   withdrawal (§6), not by more guard machinery.
+5. ~~Should a vertical be able to withdraw / re-bind an engine's default operations (so
+   `workorder/close` cannot bypass `bike-shop/close-repair`)?~~ **Resolved 2026-07-14:
+   yes — `withdraws: string[]` on the manifest, order-independent, opt-in, binding-only.
+   The bypass is closed; the demo asserts `workorder/close` is now `unknown operation`
+   in CykelService's host while ServiceCo keeps it.**

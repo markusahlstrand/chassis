@@ -340,10 +340,17 @@ const completeWorkOrderOp: OperationHandler<
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(WO.complete));
 
-  // THE GUARD, milestone-A form (engine-protocol.md §6, open question 11):
-  // vertical-composed predicate before the engine transition, same
-  // transaction. This glue IS the compliance gate — removing it is
-  // human-checkpoint material, not a refactor.
+  // THE GUARD, vertical-composed pole (engine-protocol.md §6, open question 11):
+  // predicate before the engine transition, same transaction. This glue IS the
+  // compliance gate — removing it is human-checkpoint material, not a refactor.
+  //
+  // It stays glue ON PURPOSE, and is the contrast that defines the other pole.
+  // Milestone C added MANIFEST-declared guards (`guards: [{ before, predicate,
+  // config }]`, see demos/bike-shop) — but those are UNCONDITIONAL gates on an
+  // operation. This one is conditional on VERTICAL DATA: only `montage` orders
+  // owe an egenkontroll, and `order.kind` is ServiceCo vocabulary the kernel
+  // must never learn. Conditional-on-vertical-data policy is composed here;
+  // unconditional gates are declared in the manifest.
   const order = listOrders(ctx).find((o) => o.id === input.orderId);
   if (!order) throw new Error(`work order not found: ${input.orderId}`);
   for (const templateKey of REQUIRED_SIGNED_PROTOCOLS[order.kind] ?? []) {

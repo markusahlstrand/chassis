@@ -5,7 +5,9 @@ import Database from 'better-sqlite3';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { ScopeStub } from '@substrat-run/kernel';
 import type { WorkOrder, BillableLine } from '@substrat-run/engine-workorder';
+import { workorderManifest } from '@substrat-run/engine-workorder';
 import {
+  bikeShopManifest,
   buildBikeShopHost,
   protocolContentHash,
   seedBikeShop,
@@ -214,17 +216,39 @@ describe('CykelService demo scenario (spec §7)', () => {
     expect(all.find((u) => u.status === 'open')!.total).toBe('744');
   });
 
-  it('9. close completes the state machine; planned → closed skip is impossible', async () => {
-    const closed = await greta.invoke<WorkOrder>('workorder/close', { orderId: repairId });
-    expect(closed.status).toBe('closed');
-    const open = (await greta.invoke<WorkOrder[]>('workorder/list', { status: 'completed' }))[0]!;
-    await greta.invoke('workorder/close', { orderId: open.id });
+  it('9. the bypass is CLOSED: workorder/close is withdrawn, and the state machine still holds behind the guard', async () => {
+    // The engine's default binding is withdrawn in the bike-shop manifest: the
+    // name does not resolve at all — indistinguishable from never registered.
+    // Greta holds workorder:close; there is simply no ungated door to `closed`.
+    await expect(greta.invoke('workorder/close', { orderId: repairId })).rejects.toThrow(
+      /unknown operation/,
+    );
+    // The only door is the guarded one — and this repair carries no
+    // tillståndsrapport, so the kernel refuses it.
+    await expect(greta.invoke('bike-shop/close-repair', { orderId: repairId })).rejects.toThrow(
+      /'tillstandsrapport' must be signed/,
+    );
+
+    // The engine invariant is untouched by the guard: a repair whose report IS
+    // counter-signed still cannot skip planned → closed. Guard first (passes),
+    // then the state machine (refuses).
     const repair3 = await greta.invoke<WorkOrder>('bike-shop/create-repair', {
-      bikeId: w.bianchiId,
+      bikeId: w.crescentId,
       kind: 'service',
       title: 'Justera bromsar',
     });
-    await expect(greta.invoke('workorder/close', { orderId: repair3.id })).rejects.toThrow(
+    const report3 = await greta.invoke<ProtocolInstanceRow>('bike-shop/start-condition-report', {
+      orderId: repair3.id,
+    });
+    await greta.invoke('protocol/fill', {
+      instanceId: report3.id,
+      itemKey: 'bromsar-ok',
+      value: true,
+    });
+    await greta.invoke('protocol/sign', { instanceId: report3.id });
+    const lisbeth = await host.getScope(w.lisbeth, w.t1, w.s1);
+    await lisbeth.invoke('protocol/countersign', { instanceId: report3.id });
+    await expect(greta.invoke('bike-shop/close-repair', { orderId: repair3.id })).rejects.toThrow(
       /invalid transition/,
     );
   });
@@ -366,8 +390,83 @@ describe('CykelService demo scenario (spec §7)', () => {
       'protocol.countersigned',
     ]);
 
-    // The bike goes home.
-    const closed = await greta.invoke<WorkOrder>('workorder/close', { orderId: serviceRepairId });
+    // The bike goes home — through the GUARDED pickup operation (step 12),
+    // which the counter-signature has just satisfied.
+    const closed = await greta.invoke<WorkOrder>('bike-shop/close-repair', {
+      orderId: serviceRepairId,
+    });
     expect(closed.status).toBe('closed');
+  });
+
+  it('12. the manifest guard gates pickup: blocked unsigned, blocked signed-only, allowed after the customer counter-signs', async () => {
+    // Otto's Bianchi this time — the whole pickup ceremony, gate first.
+    const repair = await greta.invoke<WorkOrder>('bike-shop/create-repair', {
+      bikeId: w.bianchiId,
+      kind: 'service',
+      title: 'Service inför säsongen',
+    });
+    const report = await greta.invoke<ProtocolInstanceRow>('bike-shop/start-condition-report', {
+      orderId: repair.id,
+    });
+    await greta.invoke('workorder/start', { orderId: repair.id });
+    await greta.invoke('workorder/report-time', { orderId: repair.id, hours: '1' });
+    await greta.invoke('protocol/fill', { instanceId: report.id, itemKey: 'bromsar-ok', value: true });
+    await greta.invoke('protocol/fill', { instanceId: report.id, itemKey: 'provkord', value: true });
+    await greta.invoke('bike-shop/complete-repair', { orderId: repair.id });
+
+    // (a) The report exists but is unsigned: the KERNEL blocks the operation
+    // before the handler ever runs — the verkstadschef holds workorder:close.
+    await expect(greta.invoke('bike-shop/close-repair', { orderId: repair.id })).rejects.toThrow(
+      /'tillstandsrapport' must be signed/,
+    );
+
+    // (b) Signed by the workshop is not enough — the gate is the CUSTOMER's
+    // acceptance of the frozen content.
+    await greta.invoke('protocol/sign', { instanceId: report.id });
+    await expect(greta.invoke('bike-shop/close-repair', { orderId: repair.id })).rejects.toThrow(
+      /'tillstandsrapport' must be counter-signed/,
+    );
+
+    // A blocked guard rolls back exactly like a handler throw: no state change,
+    // no event on the spine. The repair is still `completed`, not `closed`.
+    const stillOpen = (await greta.invoke<WorkOrder[]>('workorder/list', { status: 'completed' }))
+      .map((o) => o.id);
+    expect(stillOpen).toContain(repair.id);
+    const timeline = await greta.invoke<{ type: string }[]>('bike-shop/timeline', {
+      entityType: 'workorder',
+      entityId: repair.id,
+    });
+    expect(timeline.map((e) => e.type)).not.toContain('workorder.closed');
+
+    // (c) Otto counter-signs at pickup → the same operation now passes the gate.
+    const otto = await host.getScope(w.otto, w.t1, w.s1);
+    await otto.invoke('protocol/countersign', { instanceId: report.id });
+    const closed = await greta.invoke<WorkOrder>('bike-shop/close-repair', { orderId: repair.id });
+    expect(closed.status).toBe('closed');
+  });
+
+  it('13. the gate is visible in the manifest — dropping it is a reviewable diff', () => {
+    // The property vertical-composed glue lacks (engine-protocol.md §6): the
+    // compliance gate is DECLARED, not buried in an operation body. The engine
+    // contributes the predicate; the vertical manifest wires it.
+    expect(bikeShopManifest.guards).toEqual([
+      {
+        before: 'bike-shop/close-repair',
+        predicate: 'protocol/all-signed',
+        config: {
+          templateKey: 'tillstandsrapport',
+          entityType: 'workorder',
+          entityIdFrom: 'orderId',
+          countersigned: true,
+        },
+      },
+    ]);
+    // And the complement that makes the gate ENFORCEABLE, not merely visible.
+    expect(bikeShopManifest.withdraws).toEqual(['workorder/close']);
+
+    // The workorder engine stays ignorant of protocols, declares no guard, and
+    // withdraws nothing — every one of these is the OTHER layer's business.
+    expect(workorderManifest.guards).toBeUndefined();
+    expect(workorderManifest.withdraws).toBeUndefined();
   });
 });
