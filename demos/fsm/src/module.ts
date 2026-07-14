@@ -25,7 +25,12 @@ import {
   type BillableLine,
   type WorkOrder,
 } from '@substrat-run/engine-workorder';
-import { protocolMigration, protocolOperations, requireSigned } from './protocol.js';
+import {
+  instantiateProtocol,
+  requireSigned,
+  PROTOCOL_PERM as PROTO,
+  type ProtocolInstanceRow,
+} from '@substrat-run/engine-protocol';
 
 // ============================================================================
 // The ServiceCo vertical (spec/testrun.md §5.1): customers, facilities, the
@@ -45,29 +50,19 @@ export const servicecoManifest = moduleManifest.parse({
   permissions: [
     { key: 'customer:manage', description: 'Manage customers and the price list' },
     { key: 'facility:manage', description: 'Manage facilities' },
-    { key: 'protocol:create', description: 'Define protocol templates and start protocols on work orders' },
-    { key: 'protocol:fill', description: 'Record responses on an open protocol (append-only)' },
-    { key: 'protocol:sign', description: 'Sign a protocol — freezes it forever (separate from fill: the technician fills, the arbetsledare signs)' },
-    { key: 'protocol:read', description: 'Read protocol templates, instances, responses and signatures' },
-    { key: 'protocol:void', description: 'Void (supersede) a protocol — never deletes' },
   ],
-  events: {
-    emits: [
-      { type: 'protocol.instantiated', schemaVersion: 1 },
-      { type: 'protocol.response-recorded', schemaVersion: 1 },
-      { type: 'protocol.signed', schemaVersion: 1 },
-      { type: 'protocol.voided', schemaVersion: 1 },
-    ],
-    consumes: [],
-  },
+  // protocol:* permissions and protocol.* events moved to
+  // @substrat-run/engine-protocol at milestone B (engine-protocol.md §2).
+  events: { emits: [], consumes: [] },
   migrations: { journalDir: './migrations', compatibleFrom: '0.0.1' },
   attachmentTargets: [
     { entityType: 'customer', readPermission: 'customer:manage' },
     { entityType: 'facility', readPermission: 'facility:manage' },
-    { entityType: 'protocol', readPermission: 'protocol:read' },
   ],
   entityRelations: [
     { entityType: 'facility', parentType: 'customer' },
+    // The protocol engine is entity-agnostic; THIS vertical hangs protocols
+    // off work orders, so it declares the permission-walk edge.
     { entityType: 'protocol', parentType: 'workorder' },
   ],
   entitlementKey: 'serviceco',
@@ -103,7 +98,94 @@ export const servicecoMigrations = [
       );
     `,
   },
-  protocolMigration, // 0002-protocols (append-only journal — 0001 is shipped)
+  // 0002-protocols shipped at milestone A when protocols were VERTICAL code
+  // (engine-protocol.md §2). The journal is append-only: this version stays
+  // verbatim forever, even though the tables it creates are legacy since 0003.
+  {
+    version: '0002-protocols',
+    sql: `
+    CREATE TABLE serviceco_protocol_templates (
+      id           TEXT PRIMARY KEY,
+      key          TEXT NOT NULL,
+      version      INTEGER NOT NULL,
+      title        TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      created_at   TEXT NOT NULL,
+      UNIQUE (key, version)
+    );
+    CREATE TABLE serviceco_protocol_instances (
+      id               TEXT PRIMARY KEY,
+      template_key     TEXT NOT NULL,
+      template_version INTEGER NOT NULL,
+      entity_type      TEXT NOT NULL,
+      entity_id        TEXT NOT NULL,
+      status           TEXT NOT NULL CHECK (status IN ('open','signed','voided')),
+      created_by       TEXT NOT NULL,
+      created_at       TEXT NOT NULL,
+      voided_by        TEXT,
+      voided_reason    TEXT,
+      voided_at        TEXT
+    );
+    CREATE TABLE serviceco_protocol_responses (
+      id           TEXT PRIMARY KEY,
+      instance_id  TEXT NOT NULL REFERENCES serviceco_protocol_instances(id),
+      item_key     TEXT NOT NULL,
+      value_json   TEXT NOT NULL,
+      note         TEXT,
+      responded_by TEXT NOT NULL,
+      responded_at TEXT NOT NULL
+    );
+    CREATE TABLE serviceco_protocol_signatures (
+      id           TEXT PRIMARY KEY,
+      instance_id  TEXT NOT NULL REFERENCES serviceco_protocol_instances(id),
+      signed_by    TEXT NOT NULL,
+      method       TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      evidence_ref TEXT,
+      signed_at    TEXT NOT NULL
+    );
+  `,
+  },
+  // 0003 — MILESTONE B, the extraction's migration consequence (human
+  // checkpoint material): protocol data moves from the vertical's milestone-A
+  // tables into the engine's tables, then the legacy tables are dropped.
+  // Signed documents keep their ids, hashes and timestamps — the content_hash
+  // recipe is unchanged, so every existing signature stays verifiable.
+  // ORDERING CONTRACT: @substrat-run/engine-protocol must be registered on
+  // the host BEFORE this module so its 0001-init (which creates protocol_*)
+  // is journaled first; a wrong order fails closed at migration time.
+  // On fresh scopes 0002 + 0003 replay as create-copy-nothing-drop — the
+  // honest cost of an append-only journal.
+  // boundary-lint-allow R5 — extraction handoff (decision 27): the one-time move
+  // of milestone-A data into the engine's tables; the only sanctioned write to
+  // another module's schema.
+  {
+    version: '0003-protocols-to-engine',
+    sql: `
+    INSERT INTO protocol_templates (id, key, version, title, content_json, created_at)
+      SELECT id, key, version, title, content_json, created_at
+      FROM serviceco_protocol_templates;
+    INSERT INTO protocol_instances
+      (id, template_key, template_version, entity_type, entity_id, status,
+       created_by, created_at, voided_by, voided_reason, voided_at)
+      SELECT id, template_key, template_version, entity_type, entity_id, status,
+             created_by, created_at, voided_by, voided_reason, voided_at
+      FROM serviceco_protocol_instances;
+    INSERT INTO protocol_responses
+      (id, instance_id, item_key, value_json, note, responded_by, responded_at)
+      SELECT id, instance_id, item_key, value_json, note, responded_by, responded_at
+      FROM serviceco_protocol_responses;
+    INSERT INTO protocol_signatures
+      (id, instance_id, signed_by, kind, method, content_hash, evidence_ref, signed_at)
+      SELECT id, instance_id, signed_by, 'primary', method, content_hash, evidence_ref, signed_at
+      FROM serviceco_protocol_signatures;
+    DROP TABLE serviceco_protocol_signatures;
+    DROP TABLE serviceco_protocol_responses;
+    DROP TABLE serviceco_protocol_instances;
+    DROP TABLE serviceco_protocol_templates;
+  `,
+  },
+  // boundary-lint-end R5
 ];
 
 export interface CustomerRow {
@@ -318,6 +400,37 @@ const completeWorkOrderOp: OperationHandler<
   return { order: result.order, billable, total: result.total };
 };
 
+/**
+ * Starting an egenkontroll is engine mechanics + VERTICAL policy: ServiceCo
+ * attaches protocols to work orders still being worked. The invariants
+ * (version pinning, one open instance, events) live in the engine's in-scope
+ * function, composed here in the same transaction (K-16). Fill/sign/void/read
+ * carry no ServiceCo policy — the engine's default `protocol/*` bindings are
+ * used directly, exactly like `workorder/assign`.
+ */
+const instantiateProtocolInput = z.object({
+  templateKey: z.string().min(1),
+  entityType: z.literal('workorder'), // ServiceCo policy: protocols live on work orders
+  entityId: z.string().min(1),
+});
+
+const instantiateProtocolOp: OperationHandler<
+  z.infer<typeof instantiateProtocolInput>,
+  ProtocolInstanceRow
+> = async (ctx, rawInput) => {
+  assertAllowed(await ctx.check(PROTO.create));
+  const input = instantiateProtocolInput.parse(rawInput);
+  const order = listOrders(ctx).find((o) => o.id === input.entityId);
+  if (!order) throw new Error(`work order not found: ${input.entityId}`);
+  if (order.status !== 'planned' && order.status !== 'in_progress') {
+    throw new Error(`work order ${order.number} is '${order.status}' — protocols attach to open orders`);
+  }
+  return instantiateProtocol(ctx, {
+    templateKey: input.templateKey,
+    entity: { entityType: input.entityType, entityId: input.entityId },
+  });
+};
+
 /** Portal listing: per-entity proof walks, no node-level permission required. */
 const portalOrdersOp: OperationHandler<undefined, WorkOrder[]> = async (ctx) => {
   const all = listOrders(ctx);
@@ -337,9 +450,11 @@ const timelineOp: OperationHandler<
     .object({ entityType: z.string().min(1), entityId: z.string().min(1) })
     .parse(input);
   assertAllowed(await ctx.check(WO.read, entity));
+  // Append order is authoritative — rowid, not ULID (ids emitted in the same
+  // millisecond are not mutually ordered).
   return ctx.sql.query(
     `SELECT type, occurred_at, actor FROM _substrat_outbox
-     WHERE entity_type = ? AND entity_id = ? ORDER BY id`,
+     WHERE entity_type = ? AND entity_id = ? ORDER BY rowid`,
     [entity.entityType, entity.entityId],
   );
 };
@@ -355,8 +470,8 @@ export const servicecoModule: ModuleRegistration = {
     'serviceco/price-list': priceListOp as never,
     'serviceco/create-workorder': createWorkOrderOp as never,
     'serviceco/complete-workorder': completeWorkOrderOp as never,
+    'serviceco/instantiate-protocol': instantiateProtocolOp as never,
     'serviceco/portal-orders': portalOrdersOp as never,
     'serviceco/timeline': timelineOp as never,
-    ...protocolOperations,
   },
 };

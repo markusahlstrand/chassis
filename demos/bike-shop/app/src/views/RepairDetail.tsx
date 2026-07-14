@@ -8,6 +8,7 @@ import {
   type TimelineEntry,
 } from '../api';
 import { StatusPill } from './Repairs';
+import { ConditionReportPanel } from './ConditionReport';
 
 const STEPS: Repair['status'][] = ['planned', 'in_progress', 'completed', 'closed'];
 const STEP_LABEL: Record<string, string> = {
@@ -169,6 +170,8 @@ export function RepairDetailView({ repairId, cast }: { repairId: string; cast: R
           </p>
         </div>
       )}
+
+      <ConditionReportPanel repair={order} />
 
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="card grow">

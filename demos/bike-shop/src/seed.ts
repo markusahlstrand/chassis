@@ -12,6 +12,7 @@ import { ulid } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { bikeShopModule, CS_PERM } from './module.js';
 
 export interface BikeShopWorld {
@@ -34,6 +35,7 @@ export function buildBikeShopHost(dir: string): SqliteScopeHost {
   const host = new SqliteScopeHost({ dir }); // default checker: the tuple engine
   host.registerModule(workorderModule);
   host.registerModule(invoicingModule);
+  host.registerModule(protocolModule);
   host.registerModule(bikeShopModule);
   return host;
 }
@@ -64,14 +66,24 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   await host.provisionScope({ tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
   // Roles: identical definitions in both tenants (vertical-defined).
+  // protocol:countersign is deliberately in NO role: the counter-signature is
+  // the CUSTOMER's act at pickup, granted entity-narrowed per customer below —
+  // not even the verkstadschef can counter-sign on the customer's behalf.
   const adminPerms = [
     CS_PERM.customerManage, CS_PERM.bikeManage,
     WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
     INV.read, INV.export,
+    PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
   ];
   for (const t of [world.t1, world.t2]) {
     host.admin.defineRole(t, { key: 'workshop-admin', permissions: adminPerms, source: 'vertical' });
-    host.admin.defineRole(t, { key: 'mechanic', permissions: [WO.read, WO.report], source: 'vertical' });
+    // The mechanic fills the condition report; SIGNING stays with the
+    // workshop lead — the fill/sign permission split (engine-protocol.md §4.6).
+    host.admin.defineRole(t, {
+      key: 'mechanic',
+      permissions: [WO.read, WO.report, PROTO.read, PROTO.fill],
+      source: 'vertical',
+    });
   }
   host.admin.assignRole({ principalId: world.greta, roleKey: 'workshop-admin', node: { tenantId: world.t1, scopeId: null } });
   host.admin.assignRole({ principalId: world.mans, roleKey: 'mechanic', node: { tenantId: world.t1, scopeId: world.s1 } });
@@ -111,22 +123,67 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
     writeFileSync(castPath, JSON.stringify(world, null, 2));
   }
 
-  // Portal grants (idempotent): entity-narrowed workorder:read per customer.
-  if (world.lisbethId) {
-    host.admin.grant({
-      principalId: world.lisbeth, permission: WO.read,
-      node: { tenantId: world.t1, scopeId: world.s1 },
-      entity: { entityType: 'customer', entityId: world.lisbethId },
-      grantedBy: world.greta,
+  // The tillståndsrapport template (idempotent, outside `fresh` so existing
+  // demo data gains it on restart): per-bike condition report, filled at
+  // intake/during the repair, signed by the workshop, counter-signed by the
+  // customer at pickup — 100% CykelService content; only the invariants are
+  // protocol machinery.
+  const stub = await host.getScope(world.greta, world.t1, world.s1);
+  const templates = await stub.invoke<{ key: string }[]>('protocol/list-templates');
+  if (!templates.some((t) => t.key === 'tillstandsrapport')) {
+    await stub.invoke('protocol/define-template', {
+      key: 'tillstandsrapport',
+      title: 'Tillståndsrapport — cykel',
+      content: {
+        sections: [
+          {
+            title: 'Vid inlämning',
+            items: [
+              { key: 'ramskador', label: 'Ramskador / lackskador noterade', type: 'text' },
+              { key: 'dack-monsterdjup', label: 'Däck: skick och mönster', type: 'text' },
+              { key: 'belysning-fungerar', label: 'Belysning fungerar', type: 'check' },
+              { key: 'tillbehor', label: 'Medföljande tillbehör (lås, korg, …)', type: 'text' },
+            ],
+          },
+          {
+            title: 'Efter reparation',
+            items: [
+              { key: 'bromsar-ok', label: 'Bromsar kontrollerade fram och bak', type: 'check' },
+              { key: 'vaxlar-ok', label: 'Växlar justerade och testade', type: 'check' },
+              { key: 'ekerspanning', label: 'Ekerspänning bakhjul', type: 'value', unit: 'Nm' },
+              { key: 'provkord', label: 'Provkörd efter reparation', type: 'check' },
+              { key: 'anmarkningar', label: 'Anmärkningar till kunden', type: 'text' },
+            ],
+          },
+        ],
+      },
     });
   }
+
+  // Portal grants (idempotent): entity-narrowed per customer. workorder:read
+  // lets the customer see their repairs; protocol:read + protocol:countersign
+  // let them review and counter-sign the condition report at pickup — the
+  // grants resolve along protocol → workorder → bike → customer.
+  const portalPerms = [WO.read, PROTO.read, PROTO.countersign];
+  if (world.lisbethId) {
+    for (const permission of portalPerms) {
+      host.admin.grant({
+        principalId: world.lisbeth, permission,
+        node: { tenantId: world.t1, scopeId: world.s1 },
+        entity: { entityType: 'customer', entityId: world.lisbethId },
+        grantedBy: world.greta,
+      });
+    }
+  }
   if (world.ottoId) {
-    host.admin.grant({
-      principalId: world.otto, permission: WO.read,
-      node: { tenantId: world.t1, scopeId: world.s1 },
-      entity: { entityType: 'customer', entityId: world.ottoId },
-      grantedBy: world.greta,
-    });
+    for (const permission of portalPerms) {
+      host.admin.grant({
+        principalId: world.otto, permission,
+        node: { tenantId: world.t1, scopeId: world.s1 },
+        entity: { entityType: 'customer', entityId: world.ottoId },
+        grantedBy: world.greta,
+      });
+    }
   }
 
   return world;

@@ -63,6 +63,8 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pill.punktering { background: #fdecea; color: var(--danger); }
 .pill.service { background: #eef7f0; color: var(--ok); }
 .pill.vaxlar { background: #e8eefc; color: #2456d6; }
+.pill.signed { background: #e7f5ec; color: var(--ok); }
+.pill.voided { background: #f0eef5; color: #6b5b8e; }
 .pill.bromsar { background: #fdf3e3; color: var(--warn); }
 
 .statusflow { display: flex; align-items: center; gap: 6px; margin: 10px 0 16px; }

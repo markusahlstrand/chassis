@@ -48,16 +48,30 @@ describe('FSM demo scenario (spec §8)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('1. provisions and applies all three module journals', () => {
+  it('1. provisions and applies all four module journals', () => {
     const db = new Database(join(dir, `${w.t1}__${w.s1}.sqlite`), { readonly: true });
     const rows = db
       .prepare('SELECT DISTINCT module_id FROM _substrat_migrations ORDER BY module_id')
       .all() as { module_id: string }[];
-    db.close();
+    // Milestone B: the extraction's migration consequence — the vertical's
+    // journal replays its shipped 0002 (legacy tables) and the 0003 move; the
+    // protocol engine journals its own 0001. Append-only means fresh scopes
+    // replay history: the legacy serviceco_protocol_* tables are created,
+    // copied (empty here) and dropped.
     expect(rows.map((r) => r.module_id)).toEqual([
       '@substrat-run/demo-fsm',
       '@substrat-run/engine-invoicing',
+      '@substrat-run/engine-protocol',
       '@substrat-run/engine-workorder',
+    ]);
+    const fsmVersions = db
+      .prepare("SELECT version FROM _substrat_migrations WHERE module_id = '@substrat-run/demo-fsm' ORDER BY version")
+      .all() as { version: string }[];
+    db.close();
+    expect(fsmVersions.map((v) => v.version)).toEqual([
+      '0001-init',
+      '0002-protocols',
+      '0003-protocols-to-engine',
     ]);
   });
 
@@ -251,30 +265,30 @@ describe('FSM demo scenario (spec §8)', () => {
   });
 
   it('11. fill is append-only (a correction is a new row); fill and sign are separate permissions', async () => {
-    await harald.invoke('serviceco/fill-protocol', {
+    await harald.invoke('protocol/fill', {
       instanceId: protocolId,
       itemKey: 'spanningslost',
       value: true,
     });
-    await harald.invoke('serviceco/fill-protocol', {
+    await harald.invoke('protocol/fill', {
       instanceId: protocolId,
       itemKey: 'isolationsmatning',
       value: '4.2',
     });
     // The correction before signing: a NEW row, never an update.
-    await harald.invoke('serviceco/fill-protocol', {
+    await harald.invoke('protocol/fill', {
       instanceId: protocolId,
       itemKey: 'isolationsmatning',
       value: '5.1',
       note: 'ommätt efter åtdragning',
     });
-    await harald.invoke('serviceco/fill-protocol', {
+    await harald.invoke('protocol/fill', {
       instanceId: protocolId,
       itemKey: 'jordfelsbrytare',
       value: true,
     });
 
-    const detail = await harald.invoke<ProtocolDetail>('serviceco/get-protocol', {
+    const detail = await harald.invoke<ProtocolDetail>('protocol/get', {
       instanceId: protocolId,
     });
     expect(detail.responses).toHaveLength(4); // full history kept
@@ -287,14 +301,14 @@ describe('FSM demo scenario (spec §8)', () => {
 
     // Responses validate against the pinned template.
     await expect(
-      harald.invoke('serviceco/fill-protocol', {
+      harald.invoke('protocol/fill', {
         instanceId: protocolId,
         itemKey: 'finns-inte',
         value: true,
       }),
     ).rejects.toThrow(/unknown item/);
     await expect(
-      harald.invoke('serviceco/fill-protocol', {
+      harald.invoke('protocol/fill', {
         instanceId: protocolId,
         itemKey: 'spanningslost',
         value: 'ja',
@@ -302,7 +316,7 @@ describe('FSM demo scenario (spec §8)', () => {
     ).rejects.toThrow(/must be boolean/);
 
     // The technician fills; only the arbetsledare signs (permission split).
-    await expect(harald.invoke('serviceco/sign-protocol', { instanceId: protocolId })).rejects.toThrow(
+    await expect(harald.invoke('protocol/sign', { instanceId: protocolId })).rejects.toThrow(
       /permission denied/,
     );
   });
@@ -311,7 +325,7 @@ describe('FSM demo scenario (spec §8)', () => {
     const signed = await anna.invoke<{
       instance: ProtocolInstanceRow;
       signature: ProtocolSignatureRow;
-    }>('serviceco/sign-protocol', { instanceId: protocolId });
+    }>('protocol/sign', { instanceId: protocolId });
     expect(signed.instance.status).toBe('signed');
     expect(signed.signature.method).toBe('in-app');
     expect(signed.signature.signed_by).toBe(w.anna);
@@ -319,19 +333,19 @@ describe('FSM demo scenario (spec §8)', () => {
 
     // The invariant: any write to a signed instance's responses fails.
     await expect(
-      harald.invoke('serviceco/fill-protocol', {
+      harald.invoke('protocol/fill', {
         instanceId: protocolId,
         itemKey: 'kontinuitet',
         value: '0.3',
       }),
     ).rejects.toThrow(/frozen/);
     // One signature per instance: signing again fails on the status invariant.
-    await expect(anna.invoke('serviceco/sign-protocol', { instanceId: protocolId })).rejects.toThrow(
+    await expect(anna.invoke('protocol/sign', { instanceId: protocolId })).rejects.toThrow(
       /only an open protocol/,
     );
 
     // The hash is verifiable against replayed state (engine-protocol.md §4.2).
-    const detail = await anna.invoke<ProtocolDetail>('serviceco/get-protocol', {
+    const detail = await anna.invoke<ProtocolDetail>('protocol/get', {
       instanceId: protocolId,
     });
     const replayed = await protocolContentHash(
@@ -368,7 +382,7 @@ describe('FSM demo scenario (spec §8)', () => {
   });
 
   it('13. templates version immutably: new content = v2, the signed instance stays pinned to v1', async () => {
-    const v2 = await anna.invoke<ProtocolTemplateRow>('serviceco/define-protocol-template', {
+    const v2 = await anna.invoke<ProtocolTemplateRow>('protocol/define-template', {
       key: 'egenkontroll-el',
       title: 'Egenkontroll — Elinstallation (utökad)',
       content: {
@@ -386,7 +400,7 @@ describe('FSM demo scenario (spec §8)', () => {
     expect(v2.version).toBe(2);
 
     // The signed document still refers to exactly what was signed.
-    const detail = await anna.invoke<ProtocolDetail>('serviceco/get-protocol', {
+    const detail = await anna.invoke<ProtocolDetail>('protocol/get', {
       instanceId: protocolId,
     });
     expect(detail.instance.template_version).toBe(1);
@@ -405,14 +419,14 @@ describe('FSM demo scenario (spec §8)', () => {
       entityId: order.id,
     });
     expect(inst.template_version).toBe(2); // new instances pin the new version
-    const voided = await anna.invoke<ProtocolInstanceRow>('serviceco/void-protocol', {
+    const voided = await anna.invoke<ProtocolInstanceRow>('protocol/void', {
       instanceId: inst.id,
       reason: 'startad på fel order',
     });
     expect(voided.status).toBe('voided');
     expect(voided.voided_reason).toBe('startad på fel order');
     await expect(
-      anna.invoke('serviceco/fill-protocol', { instanceId: inst.id, itemKey: 'markning', value: true }),
+      anna.invoke('protocol/fill', { instanceId: inst.id, itemKey: 'markning', value: true }),
     ).rejects.toThrow(/frozen/);
   });
 });

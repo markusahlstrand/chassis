@@ -15,6 +15,7 @@
     "@substrat-run/adapter-sqlite": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/engine-invoicing": "workspace:^",
+    "@substrat-run/engine-protocol": "workspace:^",
     "@substrat-run/engine-workorder": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
     "@hono/node-server": "^1.13.0",

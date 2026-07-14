@@ -25,6 +25,11 @@ import {
   type BillableLine,
   type WorkOrder,
 } from '@substrat-run/engine-workorder';
+import {
+  instantiateProtocol,
+  PROTOCOL_PERM as PROTO,
+  type ProtocolInstanceRow,
+} from '@substrat-run/engine-protocol';
 
 // ============================================================================
 // The CykelService vertical (spec/concept.md) — the v2 bike-shop skin. Same
@@ -32,6 +37,14 @@ import {
 // mechanic IS a technician, and the order's "facility" ref is a BIKE the
 // customer brings in. Everything here is vocabulary, price list, and
 // orchestration — the state machine stays in the engine.
+//
+// Milestone B (engine-protocol.md §2): this vertical's tillståndsrapport —
+// a per-bike condition report filled at intake/during the repair, SIGNED by
+// the workshop and COUNTER-SIGNED by the customer at pickup — is the second
+// protocol shape that forced the extraction of @substrat-run/engine-protocol.
+// The template content below is 100% CykelService vocabulary; every
+// invariant (sign → immutable, counter-sign on frozen content, append-only
+// responses, verifiable hash) lives in the engine.
 // ============================================================================
 
 export const CS_PERM = {
@@ -55,10 +68,14 @@ export const bikeShopManifest = moduleManifest.parse({
   ],
   // The permission walk for the portal is workorder → bike → customer. The
   // engine links workorder → <facility ref>; in this vertical that ref is a
-  // bike, so the vertical declares BOTH edges (spec/concept.md §3).
+  // bike, so the vertical declares BOTH edges (spec/concept.md §3). The
+  // protocol engine is entity-agnostic, so the vertical also declares
+  // protocol → workorder: the customer's entity-narrowed counter-sign grant
+  // resolves along protocol → workorder → bike → customer.
   entityRelations: [
     { entityType: 'bike', parentType: 'customer' },
     { entityType: 'workorder', parentType: 'bike' },
+    { entityType: 'protocol', parentType: 'workorder' },
   ],
   entitlementKey: 'cykelservice',
 });
@@ -280,6 +297,39 @@ const completeRepairOp: OperationHandler<
   return { order: result.order, billable, total: result.total };
 };
 
+/**
+ * Starting a tillståndsrapport is engine mechanics + VERTICAL policy:
+ * CykelService attaches condition reports at intake or during the repair,
+ * never after pickup. The invariants (version pinning, one open instance,
+ * events) live in the engine's in-scope function, composed here in the same
+ * transaction (K-16). Fill/sign/counter-sign/read carry no CykelService
+ * policy — the engine's default `protocol/*` bindings are used directly,
+ * exactly like `workorder/assign`.
+ */
+const startConditionReportInput = z.object({
+  orderId: z.string().min(1),
+  templateKey: z.string().min(1).default('tillstandsrapport'),
+});
+
+const startConditionReportOp: OperationHandler<
+  z.infer<typeof startConditionReportInput>,
+  ProtocolInstanceRow
+> = async (ctx, rawInput) => {
+  assertAllowed(await ctx.check(PROTO.create));
+  const input = startConditionReportInput.parse(rawInput ?? {});
+  const repair = listOrders(ctx).find((o) => o.id === input.orderId);
+  if (!repair) throw new Error(`repair not found: ${input.orderId}`);
+  if (repair.status !== 'planned' && repair.status !== 'in_progress') {
+    throw new Error(
+      `repair ${repair.number} is '${repair.status}' — condition reports attach at intake or during the repair`,
+    );
+  }
+  return instantiateProtocol(ctx, {
+    templateKey: input.templateKey,
+    entity: { entityType: 'workorder', entityId: repair.id },
+  });
+};
+
 /** Portal listing: per-entity proof walks (workorder → bike → customer). */
 const portalRepairsOp: OperationHandler<undefined, WorkOrder[]> = async (ctx) => {
   const all = listOrders(ctx);
@@ -299,9 +349,11 @@ const timelineOp: OperationHandler<
     .object({ entityType: z.string().min(1), entityId: z.string().min(1) })
     .parse(input);
   assertAllowed(await ctx.check(WO.read, entity));
+  // Append order is authoritative — rowid, not ULID (ids emitted in the same
+  // millisecond are not mutually ordered).
   return ctx.sql.query(
     `SELECT type, occurred_at, actor FROM _substrat_outbox
-     WHERE entity_type = ? AND entity_id = ? ORDER BY id`,
+     WHERE entity_type = ? AND entity_id = ? ORDER BY rowid`,
     [entity.entityType, entity.entityId],
   );
 };
@@ -316,6 +368,7 @@ export const bikeShopModule: ModuleRegistration = {
     'bike-shop/upsert-price': upsertPriceOp as never,
     'bike-shop/price-list': priceListOp as never,
     'bike-shop/create-repair': createRepairOp as never,
+    'bike-shop/start-condition-report': startConditionReportOp as never,
     'bike-shop/complete-repair': completeRepairOp as never,
     'bike-shop/portal-repairs': portalRepairsOp as never,
     'bike-shop/timeline': timelineOp as never,

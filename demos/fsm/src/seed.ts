@@ -12,8 +12,8 @@ import { ulid } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { servicecoModule, SC_PERM } from './module.js';
-import { PROTO_PERM as PROTO } from './protocol.js';
 
 export interface DemoWorld {
   t1: TenantId; // ElMontage AB
@@ -35,6 +35,10 @@ export function buildDemoHost(dir: string): SqliteScopeHost {
   const host = new SqliteScopeHost({ dir }); // default checker: the tuple engine
   host.registerModule(workorderModule);
   host.registerModule(invoicingModule);
+  // Registration order is a migration-ordering contract: the protocol
+  // engine's 0001-init must journal before serviceco's
+  // 0003-protocols-to-engine copies milestone-A data into its tables.
+  host.registerModule(protocolModule);
   host.registerModule(servicecoModule);
   return host;
 }
@@ -121,9 +125,9 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   // data gains it on restart): the electrical-trade egenkontroll — 100%
   // vertical content; only the invariants are protocol machinery.
   const stub = await host.getScope(world.anna, world.t1, world.s1);
-  const templates = await stub.invoke<{ key: string }[]>('serviceco/list-protocol-templates');
+  const templates = await stub.invoke<{ key: string }[]>('protocol/list-templates');
   if (!templates.some((t) => t.key === 'egenkontroll-el')) {
-    await stub.invoke('serviceco/define-protocol-template', {
+    await stub.invoke('protocol/define-template', {
       key: 'egenkontroll-el',
       title: 'Egenkontroll — Elinstallation',
       content: {

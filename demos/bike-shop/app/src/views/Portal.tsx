@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type Repair, type TimelineEntry } from '../api';
+import { ConditionReportPanel } from './ConditionReport';
 
 const PLAIN: Record<string, string> = {
   planned: 'Inlämnad',
@@ -56,16 +57,21 @@ export function PortalView() {
             </button>
           </div>
           {openId === r.id && (
-            <ul className="timeline" style={{ marginTop: 12 }}>
-              {timeline.map((e, i) => (
-                <li key={i}>
-                  {PORTAL_EVENTS[e.type]}
-                  <span className="when">
-                    {new Date(e.occurred_at).toLocaleString('sv-SE')}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="timeline" style={{ marginTop: 12 }}>
+                {timeline.map((e, i) => (
+                  <li key={i}>
+                    {PORTAL_EVENTS[e.type]}
+                    <span className="when">
+                      {new Date(e.occurred_at).toLocaleString('sv-SE')}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {/* Pickup moment: the condition report the workshop signed —
+                  frozen content the customer counter-signs, right here. */}
+              <ConditionReportPanel repair={r} portal />
+            </>
           )}
         </div>
       ))}

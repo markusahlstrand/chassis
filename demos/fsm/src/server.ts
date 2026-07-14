@@ -125,14 +125,14 @@ app.post('/api/workorders/:id/close', async (c) =>
 );
 
 app.get('/api/protocol-templates', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/list-protocol-templates')),
+  c.json(await (await stub(c)).invoke('protocol/list-templates')),
 );
 app.post('/api/protocol-templates', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/define-protocol-template', await c.req.json())),
+  c.json(await (await stub(c)).invoke('protocol/define-template', await c.req.json())),
 );
 app.get('/api/workorders/:id/protocols', async (c) =>
   c.json(
-    await (await stub(c)).invoke('serviceco/list-protocols', {
+    await (await stub(c)).invoke('protocol/list-for-entity', {
       entityType: 'workorder',
       entityId: c.req.param('id'),
     }),
@@ -148,22 +148,22 @@ app.post('/api/workorders/:id/protocols', async (c) =>
   ),
 );
 app.get('/api/protocols/:id', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/get-protocol', { instanceId: c.req.param('id') })),
+  c.json(await (await stub(c)).invoke('protocol/get', { instanceId: c.req.param('id') })),
 );
 app.post('/api/protocols/:id/responses', async (c) =>
   c.json(
-    await (await stub(c)).invoke('serviceco/fill-protocol', {
+    await (await stub(c)).invoke('protocol/fill', {
       instanceId: c.req.param('id'),
       ...(await c.req.json<Record<string, unknown>>()),
     }),
   ),
 );
 app.post('/api/protocols/:id/sign', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/sign-protocol', { instanceId: c.req.param('id') })),
+  c.json(await (await stub(c)).invoke('protocol/sign', { instanceId: c.req.param('id') })),
 );
 app.post('/api/protocols/:id/void', async (c) =>
   c.json(
-    await (await stub(c)).invoke('serviceco/void-protocol', {
+    await (await stub(c)).invoke('protocol/void', {
       instanceId: c.req.param('id'),
       ...(await c.req.json<Record<string, unknown>>()),
     }),

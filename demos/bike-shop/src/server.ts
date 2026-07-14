@@ -117,6 +117,50 @@ app.post('/api/repairs/:id/close', async (c) =>
   c.json(await (await stub(c)).invoke('workorder/close', { orderId: c.req.param('id') })),
 );
 
+app.get('/api/protocol-templates', async (c) =>
+  c.json(await (await stub(c)).invoke('protocol/list-templates')),
+);
+app.get('/api/repairs/:id/protocols', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('protocol/list-for-entity', {
+      entityType: 'workorder',
+      entityId: c.req.param('id'),
+    }),
+  ),
+);
+app.post('/api/repairs/:id/condition-report', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('bike-shop/start-condition-report', {
+      orderId: c.req.param('id'),
+    }),
+  ),
+);
+app.get('/api/protocols/:id', async (c) =>
+  c.json(await (await stub(c)).invoke('protocol/get', { instanceId: c.req.param('id') })),
+);
+app.post('/api/protocols/:id/responses', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('protocol/fill', {
+      instanceId: c.req.param('id'),
+      ...(await c.req.json<Record<string, unknown>>()),
+    }),
+  ),
+);
+app.post('/api/protocols/:id/sign', async (c) =>
+  c.json(await (await stub(c)).invoke('protocol/sign', { instanceId: c.req.param('id') })),
+);
+app.post('/api/protocols/:id/countersign', async (c) =>
+  c.json(await (await stub(c)).invoke('protocol/countersign', { instanceId: c.req.param('id') })),
+);
+app.post('/api/protocols/:id/void', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('protocol/void', {
+      instanceId: c.req.param('id'),
+      ...(await c.req.json<Record<string, unknown>>()),
+    }),
+  ),
+);
+
 app.get('/api/portal/repairs', async (c) =>
   c.json(await (await stub(c)).invoke('bike-shop/portal-repairs')),
 );
