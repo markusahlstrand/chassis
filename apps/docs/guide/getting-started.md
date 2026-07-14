@@ -6,7 +6,7 @@ No cloud account, no services — one directory of `.sqlite` files.
 
 ::: warning Pre-release
 Substrat is 0.x. The packages are developed in the
-[chassis monorepo](https://github.com/substrat-run/substrat) and interfaces change
+[substrat monorepo](https://github.com/substrat-run/substrat) and interfaces change
 without notice until the first vertical ships.
 :::
 
