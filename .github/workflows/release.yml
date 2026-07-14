@@ -19,15 +19,20 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          # Node 24 bundles npm 11.x — trusted publishing needs >= 11.5.1, and a
+          # bundled npm avoids the version skew a global upgrade introduces.
+          node-version: 24
+          # OIDC needs the registry configured here, not just at publish time.
+          registry-url: https://registry.npmjs.org
           cache: pnpm
-      # npm trusted publishing (OIDC, tokenless) needs npm >= 11.5.1; Node 22
-      # bundles 10.x. Provenance is automatic under trusted publishing.
-      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       # With pending changesets: opens/updates the "Version Packages" PR.
-      # Without: publishes any package whose version is not yet on npm, via
-      # the trusted-publisher config on each @substrat-run package (no token).
+      # Without: `pnpm release` publishes any package whose version is not yet on
+      # npm, tokenless via each package's trusted-publisher config (provenance is
+      # automatic). We publish with `pnpm publish -r` rather than
+      # `changeset publish`: with OIDC available, changesets publishes through npm
+      # but still passes pnpm's --git-checks flag, which npm 11 rejects outright
+      # (EUNKNOWNCONFIG). pnpm skips already-published versions on its own.
       - uses: changesets/action@v1
         with:
           publish: pnpm release

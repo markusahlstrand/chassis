@@ -14,7 +14,7 @@
     "fsm-demo": "pnpm --filter @substrat-run/demo-fsm",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm -r build && changeset publish"
+    "release": "pnpm -r build && pnpm publish -r --access public --no-git-checks"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
