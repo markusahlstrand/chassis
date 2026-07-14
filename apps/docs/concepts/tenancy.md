@@ -82,6 +82,10 @@ reconciliation sweep. The host maintains a **directory** (a separate database) a
 authoritative inventory of scopes; it's what `getScope` validates addressing against,
 and the input to migration sweeps and ops tooling.
 
+Provisioning is one step of a longer lifecycle — `active → suspended ⇄ active → archiving →
+archived` — which, along with entitlements, custom domains, and the rest of what sits *below*
+a vertical, is [The platform layer](/concepts/platform).
+
 ## Storage shapes
 
 `storageShape` records how a scope's data is physically hosted in production:
