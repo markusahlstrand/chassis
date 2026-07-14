@@ -125,6 +125,12 @@ sweeps, billing (active-scope meter, §9), and ops.
   as authoritative. A scope missing from the global index is a *sweep bug*; a scope
   missing from its tenant-root is *corruption* and pages someone.
 
+The directory is also what the **control plane** is an application on — the tenant
+registry, entitlement store, and admin audit log all live here, and the admin surface is
+deliberately outside the scope-host contract rather than a vertical (K-20).
+[control-plane.md](control-plane.md) is that design; note that as of today the tenant half
+of "complete inventory of tenants and scopes" above is **specified but not implemented**.
+
 ### 3.3 Provisioning lifecycle
 
 `provisioning → active → suspended ⇄ active → archiving → archived`
@@ -411,6 +417,67 @@ is why it lives on the `Scope` row.
   the scope DO: webhook ingress, auth callbacks, and WebSocket upgrades — realtime
   terminates on the scope DO, which is where the plan's "realtime nearly free" claim
   cashes out.
+
+### 5.6 Read paths (K-19)
+
+Strict serialization (K-6) queues reads behind writes as well as writes behind writes.
+The fix is **duration, not concurrency**: a scope's execution domain is a single isolate,
+so admitting reads concurrently would interleave them on one thread, not parallelize
+them — and SQLite reads inside the domain are synchronous local calls with no await
+points to interleave at. Reads get fast by getting *short*. A queue of 50 reads at 30µs
+each is invisible; at 2ms each it is not.
+
+Three read paths, in the order to reach for them.
+
+**1. In-scope reads — the default.** A read is a local indexed query against the scope
+database: one hop, serializable, tens of microseconds. Where a screen needs a shape the
+normalized tables don't serve cheaply (a dispatcher board joining jobs, customers, techs
+and totals), a consumer maintains a **denormalized projection table in the same scope
+database**, updated in the same transaction as the write it derives from. There is no
+staleness, because there is no second store. §7.3's ownership rules apply unchanged: a
+vertical projecting engine data keeps its **own side table keyed by the engine's id**
+(plan decision 28) — the projection is a new use of the side-table pattern, not a new
+mechanism. Nearly all interactive reads belong here, and this path should be exhausted
+before either of the next two is considered.
+
+**2. Outbox-fed external read model — the escape hatch.** The outbox (K-4) has one sink
+today (Pipelines → Iceberg). It may have N. A second sink maintains a denormalized read
+model in external storage (D1/KV) for a scope whose read volume genuinely outgrows its
+executor. Because emission is transactional with the write, the read model cannot miss a
+state change — the outbox is what makes an external projection trustworthy rather than a
+dual-write.
+
+Its cost, stated once so it is never rediscovered under pressure: **read-your-writes does
+not survive the crossing.** D1's Sessions API provides sequential consistency *within
+D1's version space* — a bookmark names a D1 version and a replica waits to catch up to it
+before answering — but in Shape A the authoritative write lands in the scope DO and
+reaches D1 only after the pump runs. At operation-return time there is no D1 bookmark
+meaning "after my write"; the two version spaces are unrelated. Recovering the guarantee
+requires either the pump mapping event id → D1 bookmark with the read path waiting on
+that watermark, or pinning a session's reads to the scope for a window after it writes.
+Adopting this path without choosing one is how a system acquires phantom-stale reads.
+
+**3. Tier 2 (Iceberg / R2 SQL).** Reporting, reconciliation, audit, cross-scope history.
+Columnar and seconds-scale by construction (plan §5.3) — **never a UI list view**. It is
+a history tier, not a read tier, and treating it as the latter is a category error.
+
+**Global read replication is not a platform read tier.** Rejected as a default on three
+grounds. (a) It contradicts K-7: replicating a `jurisdiction: 'eu'` scope's data to other
+regions breaks the residency guarantee, and D1 offers location *hints*, not jurisdiction
+guarantees (open question 7). (b) Read-your-writes does not cross the outbox, per above —
+the Sessions API cannot repair a boundary it cannot see. (c) A scope maps to one business,
+whose users are geographically clustered; **placing the execution domain well at
+provisioning beats replicating it**. Global replication is sanctioned *per surface*, for
+**public, read-heavy, staleness-tolerant** surfaces — customer portals, tracking links,
+availability views — where the projection is a derived subset rather than the operational
+record, and where traffic can exceed internal usage by an order of magnitude.
+
+**`readonly` on operations** *(additive; not yet implemented)*. Operations should declare
+`readonly: true` in the manifest. It changes nothing observable today. It is the hook
+every later option needs: routing a read to a read model, skipping outbox and migration
+machinery, admitting reads during a migration freeze, or relaxing the lock if that ever
+proves worthwhile. Declaring it now is free; retrofitting the distinction across a hundred
+shipped operations is not.
 
 ## 6. Event spine
 
@@ -783,7 +850,10 @@ externalization convention is day one; translations are not).
 2. Stub minting and transport: exact capability format (signed token vs DO-held session)
    — needs a security review pass of its own.
 3. Outbox drain semantics on Shape A vs B — same contract, different failure modes;
-   enumerate them before the contract tests are written.
+   enumerate them before the contract tests are written. The drain is explicitly allowed
+   **more than one sink** (§5.6: Pipelines → Iceberg, plus an optional read model): does
+   a failing or lagging sink block the others, is the watermark per-sink, and does a read
+   model sink need its own replay path when a projection schema changes?
 4. Skew-window declaration format in the manifest — per-migration or per-release?
 5. Tenant-root DO scope: is entitlement checking on its hot path (every module load) or
    cached in scope DOs with event invalidation?
@@ -818,6 +888,25 @@ externalization convention is day one; translations are not).
     centrally) vs Odoo/OCA OpenUpgrade (scripts mailed to the community, upgrades lag by a
     year) — plan §7.8;
     [platform-landscape drilldown](../research/platform-landscape-drilldown.md) §7.
+13. **The escape hatches are designed but untested.** §5.2 and §7.3 promise that a scope
+    which outgrows its execution domain *migrates to Shape B or splits* — and K-11's whole
+    justification for banning cross-module FKs is that this keeps those moves "ops changes,
+    not contract changes." Neither has ever been executed. A Shape A → Shape B migration is
+    documented as "explicit" (§3.1) but has no tested path, and a scope **split** — the
+    answer to a consistency domain drawn too large — would require physically moving data
+    and rewriting every `EntityRef` to it. Prove both once, on a throwaway scope, before
+    either is needed under load; the split is the one that would hurt most to discover is
+    impossible. Couples with question 8 (run the storage-shape benchmark, budgets first).
+14. **Platform-staff auth, and whether destructive admin actions need four eyes** (K-20).
+    The `PlatformActor` seam lets the control plane be built and tested behind a dev stub,
+    but exposing a cross-tenant console anywhere non-local needs the real thing — and
+    staff auth is a *different regime* from tenant-user auth (SSO, MFA, no self-service
+    signup, short sessions, a closed population, plausibly its own IdP tenant). Separate
+    question, same area: tenant `suspend` and scope `archive` are one-click outages for a
+    paying customer, so does the control plane need an approval step (four-eyes) on
+    destructive actions, and if so is that a session concern or a workflow in the console?
+    Unanswerable until the action list is real — which is the argument for building the
+    actions first. Couples with D-16 (identity is a swappable adapter).
 
 ## 14. Design log
 
@@ -839,3 +928,7 @@ externalization convention is day one; translations are not).
 | K-14 | 2026-07-13 | Shared `money` schema in @substrat-run/contracts: decimal-string amount + ISO 4217 code, branded; engines never invent money representations | Multi-currency evidence (SEK/NOK) + Tier 1/Tier 2 reconciliation needs uniform money handling |
 | K-15 | 2026-07-13 | UI composition (§7.4): build-time composition of manifest-declared `ui` contributions into one React app per vertical; entity-view registry for cross-engine rendering; headless-first engine UI with copy-and-own screens; `@substrat-run/shell` seeded from shadcn-admin; three surfaces (office/field/portal); runtime microfrontends rejected; web-component slot kept as future escape hatch | Federation solves team-scale deployment we don't have and costs theming/versioning/agent ergonomics; the manifest, proof-path checker, and EntityRef registry are exactly the primitives a pluggable UI needs |
 | K-16 | 2026-07-13 | In-scope composition (demos/fsm/spec/testrun.md §9.2): engines export plain functions taking `ctx`; a vertical's operation may call them — same transaction, same serialization; registered operations are default bindings of these functions. Plus `ctx.link(child, parent)` writing manifest-declared relation tuples, and kernel-managed at-least-once local event dispatch with a `_substrat_deliveries` journal | Vertical-owned orchestration (D-19) needs one-transaction composition (e.g. price-then-complete); invariants hold because everything still flows through ctx; `link` is the write path for D-23 rule 3 |
+| K-17 | 2026-07-14 | Vertical **substates** (§7.5): verticals refine engine states via a manifest `substates` declaration; engines mark which states admit them (`extensibleStates`), invariant-bearing states admit none. Transitions *within* an engine state are vertical-owned; transitions *between* engine states stay engine operations only. Kernel stores and validates the substate and emits spine events for substate changes | Implements plan decision 26. Delivers §3's "extra states" promise without letting a substate path skip an engine state; FSM status-flow nuance (`awaiting_parts`, `pending_customer_approval`) is exactly where "vertical not powerful enough" would otherwise materialize first. Substates *blocking* an engine transition is open question 11's guard, not substate semantics |
+| K-18 | 2026-07-14 | **Queryable custom fields** (§7.5): D-6's field registry carries two obligations — registration materializes a *typed* index (`value_text \| value_num \| value_date \| value_bool`; `filterable`/`sortable` fields get real SQLite indexes at registration), and engine list APIs accept registry-declared filter/sort predicates with correct pagination and counts, the kernel composing the join inside the scope DB | Implements plan decision 26. Types make comparison/sort correct (the `'9' > '10'` bug class); declaration is what makes indexing possible at all — freeform JSON indexes nothing (the SharePoint/unindexed-JSONB counterexample). Kernel-mediated typed queries do not violate §7.3: the ban is on *modules* entangling with each other's tables, not on the kernel mediating a declared query path |
+| K-19 | 2026-07-15 | Read-path tiering (§5.6): in-scope projections first (denormalized tables in the scope DB, committed with the write); outbox-fed external read model as the escape hatch; Tier 2 is history, never a UI read tier. Global read replication rejected as a platform tier, sanctioned per-surface for public stale-tolerant reads. Operations gain an additive `readonly` manifest flag | Serialization is a *duration* problem, not a concurrency one — one isolate cannot parallelize reads, so reads get fast by getting short. The rejection is load-bearing: replicas break K-7 residency, and D1 bookmarks cannot restore read-your-writes across the outbox boundary (D1 versions ≠ DO versions). `readonly` is free now, expensive to retrofit |
+| K-20 | 2026-07-15 | **Control plane** ([control-plane.md](control-plane.md), implements plan decision 30): the platform admin is a separate application on the directory, never a vertical and never holding a `ctx`. Builds the four things §3.2/§3.3/§5.4 specified and nobody implemented — `tenants` table, real scope lifecycle transitions, an entitlement store that reads `manifest.entitlementKey`, and a `PlatformActor` + append-only admin audit log wrapping every mutation (including `HostAdmin`'s current five unaudited methods). The only path into scope data stays §5.4's audited admin-query RPC. Billing deferred: meters 1–2 fall out free, 3–4 are uncomputable today | A super-admin crosses tenant boundaries by construction, so as module code it would dissolve K-3 — the fail-closed property the demo exists to demonstrate. The audit log is the platform's own `_substrat_outbox` and rests on the same argument (K-4): a surface that can act without a durable record of who acted is worse than no surface. Forces open question 5 (entitlement check on the module-load hot path or cached with event invalidation) to finally be answered by a benchmark |

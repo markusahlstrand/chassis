@@ -57,6 +57,11 @@ single-writer simplicity — a read-modify-write inside an operation cannot inte
 with another operation on the same scope — and it bounds the blast radius of any
 problem to one scope, not one customer.
 
+Serialization is **per scope, not per system**: a thousand scopes run a thousand
+operations at once, and only two operations *on the same scope* ever queue. What that
+means for throughput, and where reads go when a scope gets busy, is
+[Reads & scaling](/concepts/reads).
+
 The granularity rule: **the scope maps to the consistency domain, not the tenant.** A
 tenant with 300 housing associations is 300 scope databases plus a lightweight tenant
 root, not one 300-times-hotter database.

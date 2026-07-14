@@ -59,6 +59,7 @@ function guideSidebar() {
         { text: 'Operations & the scope host', link: '/concepts/scope-host' },
         { text: 'Permissions', link: '/concepts/permissions' },
         { text: 'Events & audit', link: '/concepts/events' },
+        { text: 'Reads & scaling', link: '/concepts/reads' },
         { text: 'Modules & the manifest', link: '/concepts/modules' },
         { text: 'Money', link: '/concepts/money' },
       ],
