@@ -30,9 +30,28 @@ Kernel scaffold under way: `@substrat-run/contracts` (Zod contracts — the sour
 host), and `@substrat-run/contract-tests` (the suite every adapter must pass). Run
 `pnpm install && pnpm test`.
 
+## Documentation
+
 The canonical planning document is [docs/master-plan.md](docs/master-plan.md) —
 thesis, architecture decisions, market landscape, concrete cases, commercial structure,
 risks, open questions, and the decision log. Everything else derives from it.
 
 The technical shape of those decisions — contracts, data models, lifecycles — lives in
 [docs/design/kernel-design.md](docs/design/kernel-design.md).
+
+Research feeding both:
+
+- [docs/research/platform-landscape-drilldown.md](docs/research/platform-landscape-drilldown.md) —
+  how the platform-with-modules incumbents (Odoo, SAP, Salesforce) and kernel-shaped
+  foundations (Medusa, Supabase) handle extension, upgrades, and tenancy; why Substrat is
+  a kernel, not an Odoo-class platform; and the lesson ledger mapping incumbent scar
+  tissue to design decisions.
+- [docs/research/fsm-vendor-feature-survey.md](docs/research/fsm-vendor-feature-survey.md) —
+  feature survey of the Swedish/Nordic field-service-management market the first engines
+  compete against.
+
+Acceptance runs — the recurring "can an agent build a vertical unaided up to the human
+checkpoints?" benchmark (master plan §5.6):
+
+- [docs/acceptance/agent-loop-001.md](docs/acceptance/agent-loop-001.md) — run 001,
+  CykelService (2026-07-14): PASS, with notes.

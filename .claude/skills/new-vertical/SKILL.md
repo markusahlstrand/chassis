@@ -90,7 +90,7 @@ which columns matter; keep the api.ts pattern (typed wrappers over the server ro
   may reuse a key (`customer:manage`); rename only when the meaning differs. Roles are
   vertical vocabulary — name them for the persona (`workshop-admin`), don't copy the
   reference's role names.
-- **Side-by-side demos**: pick the next free API port (fsm uses :8787, cykel :8788)
+- **Side-by-side demos**: pick the next free API port (fsm uses :8787, bike-shop :8788)
   and web port (:5173, :5174), and a vertical-specific localStorage key for the
   principal picker, so demos coexist.
 - **Declare every link edge you traverse**: engines link the refs you hand them

@@ -8,7 +8,8 @@ task statement") · Result: **PASS, with notes**
 
 - Given to the agent: one task statement — *build the CykelService vertical, the v2
   bike-shop skin from demos/fsm/spec/concept.md §2, as demos/cykel; follow repo
-  conventions; stop at the two human checkpoints.* No recipe, no API hints.
+  conventions; stop at the two human checkpoints.* No recipe, no API hints. (The
+  package was renamed to `demos/bike-shop` the same day, after the run.)
 - Available in the repo: `CLAUDE.md` conventions, the `new-vertical` skill,
   `tools/boundary-lint.mjs` in CI, the contracts/kernel/engine sources, and the
   ServiceCo reference (`demos/fsm`).
@@ -16,7 +17,7 @@ task statement") · Result: **PASS, with notes**
 
 ## What came back
 
-Complete vertical at `demos/cykel`: spec, manifest + migration + nine `cykel/*`
+Complete vertical at `demos/bike-shop`: spec, manifest + migration + nine `bike-shop/*`
 operations (pricing moment and portal proof-walk included), idempotent two-tenant seed
 world, thin Hono server (:8788), nine-step scenario test with denial assertions, and a
 copy-and-own React skin (:5174) — coexisting with the ServiceCo demo.
@@ -53,9 +54,9 @@ none violated an invariant.
 ## Checkpoints
 
 The run stopped, as required, at the two human checkpoints — migration diff (three
-`cykel_*` tables, version `0001-init`) and permission diff (`customer:manage`,
+`bike_shop_*` tables, version `0001-init`) and permission diff (`customer:manage`,
 `bike:manage`; roles `workshop-admin`, `mechanic`; two entity-narrowed portal grants;
-one cross-tenant attacker holding nothing). `demos/cykel` stays uncommitted until a
+one cross-tenant attacker holding nothing). `demos/bike-shop` stays uncommitted until a
 human approves both.
 
 ## Verdict against §9

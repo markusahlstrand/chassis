@@ -1,6 +1,6 @@
 # Substrat Kernel — Design Document
 
-Status: draft v0.1 · Last updated: 2026-07-12
+Status: draft v0.1 · Last updated: 2026-07-14
 
 > **Relationship to the master plan.** [docs/master-plan.md](../master-plan.md) is canonical
 > for strategy, architecture *decisions*, and the decision log — this document never
@@ -492,7 +492,7 @@ interface AttachmentApi {
   documents(ref: EntityRef): DocumentCollection;
   comments(ref: EntityRef): CommentThread;
   timeline(ref: EntityRef): ActivityTimeline;   // projection of spine events for ref
-  customFields(ref: EntityRef): TypedCustomFields; // JSONB + field-definition registry (D-6)
+  customFields(ref: EntityRef): TypedCustomFields; // registry-declared, typed, indexed (D-6, §7.5)
 }
 ```
 
@@ -529,9 +529,9 @@ Ownership rules:
    independently — kernel, then engines, then vertical. An engine upgrade never touches
    another module's tables.
 4. **Per-tenant flexibility never mutates engine schema.** Tenants get typed custom
-   fields (JSONB + registry, D-6), not per-tenant `ALTER TABLE`. Engine schema is
-   identical in every scope at a given version — what keeps skew-window reasoning
-   tractable.
+   fields (registry-declared, D-6; queryability obligations in §7.5), not per-tenant
+   `ALTER TABLE`. Engine schema is identical in every scope at a given version — what
+   keeps skew-window reasoning tractable.
 
 Honest limit: SQLite has no intra-database permissions, so within a scope, table
 ownership is convention + CI lint + the migration review checkpoint — not runtime
@@ -625,6 +625,70 @@ entirely, keeping the headless layer.
 **Escape hatch, not foundation:** a future `slot` contribution type accepting a web
 component gives isolated islands in other frameworks (one legacy widget, not a polyglot
 architecture). Additive — designed for, not built.
+
+### 7.5 Engine extension model (K-17, K-18; plan decision 26)
+
+The plan promises verticals "vocabulary, extra states, form fields" (§3) while engines
+own their state machines and schema as invariants. Two mechanisms make both true at
+once. Both are pinned now because they are contract surface: cheap to specify before
+the first engine ships, breaking changes after — and without a kernel-level convention,
+every engine improvises its own extension style, which is the per-engine snowflake
+problem the manifest exists to prevent. "If a vertical needs to fork an engine, the
+engine drew its line wrong" (§3) is a discipline statement; this section is its
+mechanism.
+
+**Substates (K-17).** Engine states are a coarse invariant lattice; verticals refine
+them, never bypass them:
+
+```ts
+// vertical manifest, additive to §7.1
+substates?: [{
+  entityType: string;   // 'workorder'
+  state: string;        // the engine state being refined: 'in_progress'
+  values: string[];     // ['awaiting_parts', 'pending_customer_approval'] — i18n keys
+}]
+```
+
+- The engine's state-machine declaration marks which states admit substates
+  (`extensibleStates`); invariant-bearing states (a signed protocol) mark none.
+- The kernel stores the current substate alongside the engine state and validates
+  writes against the manifest declaration; substate changes emit spine events like any
+  mutation, so timelines and Tier 2 see them.
+- Transitions **within** an engine state are vertical-owned (any declared substate to
+  any other of the same engine state); transitions **between** engine states remain
+  engine operations only — no substate path can skip `completed`. Making a substate
+  *block* an engine transition ("obligatorisk för status") is open question 11's
+  manifest-declared guard, not substate semantics.
+
+This is where the FSM incumbents' value concentrates (status-flow nuance:
+`awaiting_parts`, `pending_customer_approval`), so it is exactly where "vertical not
+powerful enough" would otherwise materialize first.
+
+**Queryable custom fields (K-18).** D-6's field-definition registry is not just write
+validation — registration is the moment the platform learns what to index. Two
+obligations attach to it:
+
+1. **Registration materializes a typed index.** Custom-field values are stored typed in
+   kernel-owned storage (`value_text | value_num | value_date | value_bool`, chosen by
+   the registry type), and fields declared `filterable`/`sortable` get real SQLite
+   indexes at registration. Types make comparison and sort semantics correct (the
+   `'9' > '10'` bug class); declarations make indexing possible at all — freeform JSON
+   can index nothing.
+2. **Engine list APIs accept registry-declared predicates.** Every engine list/query
+   operation takes custom-field filter predicates and sort keys, with correct pagination
+   and counts; kernel query machinery composes the join between engine tables and the
+   custom-field index inside the scope DB. The vertical never writes SQL — the same
+   posture as the Tier 2 gateway, and consistent with §7.3: the ban is on *modules*
+   entangling with each other's tables, not on the kernel mediating a declared, typed
+   query path. Contract-tested: the module suite includes a filtered/sorted/paginated
+   list over a custom field, on both adapters.
+
+Why this cannot wait: the everyday screen of every vertical is a filtered list over
+vertical-specific fields ("open orders where `district = 'Uppsala'`, sorted by contract
+priority, page 3"). Without obligation 2, verticals fetch-all-and-filter in application
+code — pagination and counts break silently — and the workaround screens ship before any
+retrofit does. Salesforce indexes declared custom fields for precisely this reason;
+SharePoint list views collapsing past a few thousand items is the counterexample.
 
 ## 8. Adapter matrix (D-14, D-18)
 
@@ -743,6 +807,17 @@ externalization convention is day one; translations are not).
     manifest-declared guard the kernel evaluates before the transition (all modules
     share the scope DB, so it's cheap). Decide when the protocol engine lands; the
     manifest change is additive.
+12. Engine upgrades × extension surface (§7.5): when an engine release changes its state
+    machine or fields, what happens to vertical manifests declaring substates within a
+    changed state, or custom fields feeding its list APIs? Needs a manifest revalidation
+    step in the upgrade pipeline — dangling declarations fail the *upgrade*, not runtime —
+    and an owner for fleet-wide execution across per-vertical deployments (couples with
+    question 9). §5.3 covers scope-level mechanics; this is the layer above: who initiates
+    an engine version rollout across verticals, including engines licensed to strangers.
+    Field evidence brackets the design space: Salesforce 2GP push upgrades (vendor executes
+    centrally) vs Odoo/OCA OpenUpgrade (scripts mailed to the community, upgrades lag by a
+    year) — plan §7.8;
+    [platform-landscape drilldown](../research/platform-landscape-drilldown.md) §7.
 
 ## 14. Design log
 

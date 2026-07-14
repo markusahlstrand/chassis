@@ -5,7 +5,7 @@
 > Working document. This is the canonical source; the operator narrative, the technical RFC,
 > and any pitch material are derivatives of this file and go stale — this file doesn't.
 
-Status: draft v0.1 · Last updated: 2026-07-12
+Status: draft v0.1 · Last updated: 2026-07-14
 
 Anonymized: **PropCo** = the anchor property-management company · **HouseCo** = the
 house-building company · **POSCo** = the point-of-sale company · **MediaCo** = the
@@ -74,8 +74,9 @@ work orders + time reporting, scheduling, ticketing/ärende, protocol/checklist 
 asset hierarchies, portal shells. Headless, versioned modules. Engines own **invariants**
 (state machines can't skip states; time entries are append-only; signed protocols are
 immutable; every mutation emits an event; every access passes the permission check).
-Verticals own everything with a user's fingerprints on it: vocabulary, extra states, form
-fields, triggers, UI, pricing logic, branschprotokoll content. Design test: **if a vertical
+Verticals own everything with a user's fingerprints on it: vocabulary, extra states
+(substates refining engine states — decision 26), form fields, triggers, UI, pricing
+logic, branschprotokoll content. Design test: **if a vertical
 ever needs to fork an engine, the engine drew its line wrong.**
 
 Composition rule: **star topology — engines talk to the kernel, never to each other.**
@@ -206,7 +207,10 @@ The DatoCMS/Salesforce metadata-driven-schema question dissolves once the kernel
 entities. Modules own their tables and Drizzle migrations (Odoo-addon pattern); tenants get
 typed custom fields (JSONB + field-definition registry) and a configurable protocol/checklist
 engine. Full EAV costs indexes, query plans, reporting, and type safety to buy flexibility
-no current vertical needs.
+no current vertical needs. Declared flexibility must stay queryable, though: registering
+a custom field materializes a typed index, and engine list APIs accept declared fields as
+filter/sort predicates (decision 26, kernel-design §7.5) — the obligations that keep
+"typed custom fields" from decaying into an unqueryable blob.
 
 ### 5.6 LLM-friendliness as a design requirement
 
@@ -462,7 +466,28 @@ multi-tenant vertical SaaS, in the EU. That intersection is the category.
   AI app generation — but proprietary, US-hosted, enterprise-priced, build-inside-our-world.
   Nobody has built the code-first, developer-owned, EU version.
 - **Odoo / Frappe(ERPNext)**: the platform-with-modules thesis executed; you inherit their
-  ORM, worldview, and upgrade treadmill. Platform, not kernel.
+  ORM, worldview, and upgrade treadmill. Platform, not kernel — and single-org shaped:
+  Odoo.sh is one project per GitHub repo with no reseller multi-tenancy ([FAQ](https://www.odoo.sh/faq));
+  partners who do run Odoo-based SaaS self-host per-tenant databases and build the
+  provisioning themselves. The treadmill is structural, not incidental: Community edition
+  has **no vendor upgrade path at all** (migration scripts are closed-source,
+  Enterprise-only), leaving upgrades to the OCA's chronically under-funded
+  [OpenUpgrade](https://github.com/OCA/OpenUpgrade) — hand-written per-module migration
+  scripts across full dependency chains, lagging releases by months to a year by the
+  [OCA's own account](https://www.odoo-community.org/blog/news-updates-1/openupgrade-187).
+  Real products on Odoo exist but are the exception; the ecosystem's gravity is
+  per-customer integrator implementations. Frappe is the nearest open-source
+  "apps on a framework" analogue, but its everything-is-a-DocType metadata model is the
+  dynamic-schema pole §5.5 rejects. Full drilldown with verified sources:
+  [platform-landscape research](research/platform-landscape-drilldown.md).
+- **Medusa (v2)**: nearest architectural relative on the kernel side — strict module
+  isolation ("a module is unaware of any resources other than its own"), cross-module
+  associations via link tables without foreign keys, per-module TypeScript migrations
+  ([docs](https://docs.medusajs.com/learn/fundamentals/modules/isolation)): independent
+  convergence on the engine model (§3, §5.5), shipping in production. But
+  e-commerce-scoped, no native multi-tenancy (builders run an instance per tenant), and
+  no enforcement layer — it validates the module architecture, not the tenancy or trust
+  product.
 
 ### 7.3 Unclaimed differentiators
 
@@ -602,6 +627,13 @@ Product mechanics to adopt:
   the moat, but the scaffolder should inject security defaults, the design system, and
   conventions at generation so agents *start* compliant instead of iterating against
   rejections. Cheap for us — it's skills + templates (§5.6).
+- **Push upgrades, not mailed scripts** (Salesforce 2GP vs Odoo/OCA OpenUpgrade): the two
+  ecosystems bracket the upgrade design space — Salesforce ISVs push managed-package
+  upgrades into every subscriber org centrally, without customer action; Odoo Community
+  outsources migration scripts to an under-funded nonprofit and upgrades lag releases by
+  up to a year. Engine upgrades must be a kernel workflow the engine owner executes
+  fleet-wide (kernel-design §5.3's journal + sweep is the substrate), never an artifact
+  verticals apply themselves (§11; kernel-design open question 12).
 
 Commercial lessons:
 
@@ -610,6 +642,12 @@ Commercial lessons:
   charge for long retention, field history, SIEM export, DSAR tooling.
 - **Never meter platform-native growth** (ServiceNow's custom-table true-up trap):
   per-table/per-config pricing punishes exactly the adoption the platform wants.
+- **Expect pressure on the seal** (SAP's 2025 retreat from binary clean-core to graded
+  A–D levels, admitting the strict rule was "too restrictive" for real installed bases):
+  even the right sealing rule gets renegotiated once builders hit it. The answer to every
+  future "one more hook" demand is extending the manifest vocabulary (as decision 26 did
+  with substates), never a schema exception — grade the extension surface, don't breach
+  it.
 - **Anti-anchor for end-user pricing** (Power Pages at $200/site/mo per 100 authenticated
   users): per-external-user metering is why enterprise portals stay unadopted; §9's
   bundled-MAU stance is the counter-position.
@@ -816,6 +854,13 @@ now; a negotiation after PropCo runs on it.
 - Document-product re-platforming (decision 17): when does it start, and who owns it given
   team spread (risk 4)? Extraction is case-1-timed; the re-platform must not become a
   third greenfield.
+- Engine upgrade execution across deployed verticals (§7.8 push-upgrades lesson;
+  [research drilldown §7](research/platform-landscape-drilldown.md)): kernel-design §5.3
+  pins per-scope migration mechanics within one deployment, but who runs an engine
+  version upgrade across verticals — including engines licensed to strangers (§9) — and
+  what revalidates vertical-declared substates and custom fields against the new engine
+  version? The most documented failure mode across every platform ecosystem studied;
+  kernel-design open question 12.
 
 ## 12. Decision log
 
@@ -846,6 +891,7 @@ now; a negotiation after PropCo runs on it.
 | 23 | 2026-07-13 | Permission evaluation = built-in **constrained relationship-tuple engine** (FGA-shaped): fixed four-rule derivation algebra (role expansion; tenancy-tree inheritance; manifest-declared entity parent edges, depth-capped; org/group membership); no negation, no configurable rewrites; tuples scope-local, evaluated inside the scope's serialization domain; checks return tuple **proof paths**. Roles/grants stay the authored surface; verticals never see tuples; OpenFGA remains the swap target | Resolves the §11 open question (built-in vs OpenFGA) with both: DO-per-scope serialization removes Zanzibar's consistency problem (no zookies), so the mini-engine is genuinely small; entity-level portal access (the FSM shape: end customers within a filial scope) needs graph resolution the identity layer cannot do; proof paths power explain / view-as / the reviewable permission diff (§7.8). Implements 16 |
 | 24 | 2026-07-13 | Name: **Substrat** (Swedish/German spelling of substrate), replacing Chassis (12); npm scope **`@substrat-run`** (org claimed on npm + GitHub; bare `@substrat` was taken), all packages renamed pre-publish; tagline unchanged: **The hard parts, hosted** | The thesis sentence already called the product "a hosted substrate" — the name is the positioning; native sv/de word keeps 12's pronunciation criterion; unscoped npm `chassis` is taken and the `@chassis` scope uncertain; adjacency to Parity's Substrate accepted as a fading brand (retired into polkadot-sdk). Groundplane fallback retired |
 | 25 | 2026-07-13 | Dual licensing implemented (per §9): kernel, adapters, contract-tests, and engines under **AGPL-3.0-only + commercial**; **contracts (and future SDK) under Apache-2.0**; contributions under CLA; see LICENSING.md | AGPL makes the escrow/self-host exit real while blocking proprietary freeloading; the *interface* packages verticals import must never copyleft-capture customer applications (the moat is runtime enforcement, not schemas — §4) — the Grafana pattern (AGPL core, Apache client libs). Copyright line follows the kernel-legal-home decision (§11) |
+| 26 | 2026-07-14 | Engine extension model pinned (kernel-design §7.5, K-17/K-18): verticals refine engine state machines via manifest-declared **substates** (within-state transitions vertical-owned; between-state transitions stay engine-only), and custom-field **registration materializes typed indexes** with engine list APIs accepting declared fields as filter/sort predicates | Closes the gap between §3's vertical-power promise ("extra states") and decision 6's no-EAV stance — without a mechanism, "verticals never fork engines" is discipline, not design. SAP's clean-core convergence (decades of in-core Z-table pain → sanctioned extension points) validates sealed engine schema + typed extension points; SharePoint/unindexed-JSONB is the counterexample the queryability obligation avoids |
 
 ## 13. Next actions
 
