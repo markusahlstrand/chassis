@@ -1,7 +1,7 @@
 {
   "name": "@substrat-run/engine-invoicing",
-  "version": "0.0.1",
-  "description": "Substrat engine: fakturaunderlag \u2014 consumes billable events, snapshots lines with provenance, immutable once exported",
+  "version": "0.1.0",
+  "description": "Substrat engine: fakturaunderlag — consumes billable events, snapshots lines with provenance, immutable once exported",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
