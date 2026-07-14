@@ -90,6 +90,18 @@ pairs (the Odoo addon treadmill, avoided) and keeps each engine independently li
 Corollary test: **if two engines need chatty synchronous communication, they are one
 engine drawn wrong** — which is why "work orders + time reporting" is one engine, not two.
 
+Engine reuse is the plan's least-proven hypothesis: no field precedent shows hardened
+domain engines shared across verticals without forking (the
+[platform-landscape research](research/platform-landscape-drilldown.md) found none —
+Medusa's module pattern, the closest analogue, is unproven outside e-commerce). Two
+disciplines de-risk it. **Engines are extracted, not designed**: domain machinery lives as
+vertical code until a second vertical with a different shape needs it; the extraction
+(case 2's ärende engine, §8.5) is the proof, never a prior bet. And the placement spectrum
+(§6, decision 27) bounds the form: an engine is only right in the middle of
+build → template → engine → integrate — shared invariants, reshapeable behavior. If either
+half fails for a capability, it exits the engine form rather than forcing verticals to
+fork.
+
 **Verticals**. The businesses. Branschmoduler, workflows, GTM, customer relationships.
 Owned by whoever builds and sells them (initially: the friend's companies). Built at AI
 speed on kernel + engines.
@@ -363,6 +375,34 @@ playbook, applied deliberately.
 
 Principle: **build contracts and control planes, buy engines.** Build what is the moat and
 what nobody sells in the needed shape; adopt substrate everywhere else.
+
+Behind every row sits one axis — the **placement spectrum** (decision 27):
+**build bespoke → copy a template → adopt an engine → integrate via API.** Moving right, a
+capability gains inherited guarantees and maintenance and loses reshapeability: an
+integration's functionality is fixed (you get auth or payments exactly as the provider
+ships them); an engine's behavior is reshapeable within invariants (substates, custom
+fields, workflows — decision 26); a template is fully mutable and fully unmaintained;
+bespoke is simply yours. Two tests place each capability:
+
+1. **Guarantee-surface coupling.** Does its data participate in the permission tree, audit
+   log, tenant isolation, GDPR machinery, reporting? If yes it must live inside — kernel
+   contract or engine — because an external API can exchange *outcomes* but cannot enforce
+   our permissions on *its* objects. This is why documents are a kernel service despite a
+   world full of document APIs (a second enforcement regime is the exact leak the kernel
+   exists to prevent — table below), and why entitlement *checks* are kernel while the
+   billing *rail* is an adapter.
+2. **Reshaping need.** Do verticals need to change the behavior — states, fields,
+   vocabulary, flows? High need with shared invariants → engine. High need without shared
+   invariants → template or vertical code. No need → integrate: auth, payments, e-signing,
+   SMS are commodity semantics with someone else's compliance moat.
+
+Capabilities can straddle: scheduling is an engine (double-booking and working-time
+invariants live on our data) while calendar *sync* (CalDAV/Google) is an integration;
+billing splits three ways (table below). The spectrum also bounds engine ambition: an
+engine is only the right form in the middle, where invariants are shared and behavior is
+not. A capability that drifts to either end — so divergent per vertical that the shared
+invariants vanish, or so commoditized that an API wins — should exit the engine form in
+the direction the spectrum points.
 
 | Component | Call | Notes |
 |---|---|---|
@@ -667,6 +707,38 @@ Architecture, for later:
   SaaS control plane is the eventual answer if "EU regions on US clouds" stops satisfying
   buyers (§7.3). The adapter rule (§5.7) keeps this reachable without redesign.
 
+### 7.9 Non-goals: where Substrat is the wrong tool
+
+The mirror of §7.7's ICP, kept explicit so the boundary stays reviewable (decision 27).
+Each of these is a "no" from the placement spectrum (§6) or the cost curve (§7.7), not a
+missing feature:
+
+- **Enterprise applications proper.** Fortune-500 procurement buys walled-garden trust —
+  certifications, integrator armies, indemnification; the platform-landscape research's
+  cleanest finding is that winning that tier has historically required owning the runtime
+  (Salesforce/SAP/ServiceNow). The code-ownership + eject stance is the right trade for
+  SME/midmarket EU verticals and deliberately the wrong one there.
+- **Data- or scale-heavy single tenants.** The scope-per-customer shape caps around 10 GB
+  of hot state per scope (§5.2); a tenant with hundreds of millions of hot rows in one org
+  does not fit the architecture. Tier 2 widens analytical reads, not the per-scope write
+  path.
+- **Deep-domain-moat products.** Accounting, payroll, reskontra/inkasso, core banking:
+  the moat is decades of domain logic, not foundation cost — §7.5's boundary generalized.
+  Integrate (Fortnox/Visma), never rebuild.
+- **Products whose foundation isn't the binding constraint.** Consumer-scale apps,
+  ML-first products, realtime-collaboration-first tools, dev tools: different physics; the
+  kernel's guarantees aren't their bottleneck, so the platform fee buys them little.
+- **Internal tooling.** Retool/Superblocks/Power Apps own that shape; without nested
+  tenancy or a per-tenant compliance surface, the kernel's product is mostly dead weight.
+- **A general prompt-to-app backend.** The median generated app has no tenants (§7.4);
+  unopinionated wins there. Only the B2B slice, and only post-operator-proof.
+
+The pattern behind the list: Substrat fits where apps are **structurally repetitive but
+operationally rich** — workflow-shaped B2B products whose foundation (tenancy, permissions,
+audit, GDPR) is the expensive, identical 80%, and whose differentiation is vocabulary,
+states, and compliance content. Where the foundation isn't the cost driver, or a single
+tenant's scale or a domain's depth is, the substrate stops paying rent.
+
 ## 8. Concrete cases and sequencing
 
 ### 8.1 Case 1 — Förvaltar-OS for PropCo (anchor)
@@ -892,6 +964,7 @@ now; a negotiation after PropCo runs on it.
 | 24 | 2026-07-13 | Name: **Substrat** (Swedish/German spelling of substrate), replacing Chassis (12); npm scope **`@substrat-run`** (org claimed on npm + GitHub; bare `@substrat` was taken), all packages renamed pre-publish; tagline unchanged: **The hard parts, hosted** | The thesis sentence already called the product "a hosted substrate" — the name is the positioning; native sv/de word keeps 12's pronunciation criterion; unscoped npm `chassis` is taken and the `@chassis` scope uncertain; adjacency to Parity's Substrate accepted as a fading brand (retired into polkadot-sdk). Groundplane fallback retired |
 | 25 | 2026-07-13 | Dual licensing implemented (per §9): kernel, adapters, contract-tests, and engines under **AGPL-3.0-only + commercial**; **contracts (and future SDK) under Apache-2.0**; contributions under CLA; see LICENSING.md | AGPL makes the escrow/self-host exit real while blocking proprietary freeloading; the *interface* packages verticals import must never copyleft-capture customer applications (the moat is runtime enforcement, not schemas — §4) — the Grafana pattern (AGPL core, Apache client libs). Copyright line follows the kernel-legal-home decision (§11) |
 | 26 | 2026-07-14 | Engine extension model pinned (kernel-design §7.5, K-17/K-18): verticals refine engine state machines via manifest-declared **substates** (within-state transitions vertical-owned; between-state transitions stay engine-only), and custom-field **registration materializes typed indexes** with engine list APIs accepting declared fields as filter/sort predicates | Closes the gap between §3's vertical-power promise ("extra states") and decision 6's no-EAV stance — without a mechanism, "verticals never fork engines" is discipline, not design. SAP's clean-core convergence (decades of in-core Z-table pain → sanctioned extension points) validates sealed engine schema + typed extension points; SharePoint/unindexed-JSONB is the counterexample the queryability obligation avoids |
+| 27 | 2026-07-14 | Placement spectrum pinned (§6): every capability sits on build → template → engine → integrate, placed by two tests — guarantee-surface coupling (data inside the permission/audit/GDPR surface must live inside) and reshaping need (integration fixes functionality; engines reshape it within invariants). Corollaries: **engines are extracted at the second vertical, never designed ahead** (§3), and non-goals are explicit (§7.9: no enterprise-proper, no heavy single tenants, no deep-domain moats, no internal tools) | Engine reuse is the plan's least-proven hypothesis (platform-landscape research: no precedent for cross-vertical domain engines outside e-commerce), so the second-vertical extraction becomes the proof gate rather than an assumption; the spectrum explains every §6 build/buy call from one axis and gives future capabilities a placement rule instead of case-by-case debate |
 
 ## 13. Next actions
 
