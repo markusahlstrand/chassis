@@ -7,6 +7,12 @@ export default withMermaid(defineConfig({
     'The hard parts, hosted. A runtime-enforced substrate for building vertical B2B SaaS.',
   lastUpdated: true,
 
+  vite: {
+    // mermaid ships ESM that default-imports CJS deps (dayjs); without
+    // pre-bundling, the browser throws and the whole app fails to mount.
+    optimizeDeps: { include: ['mermaid', 'dayjs'] },
+  },
+
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/what-is-substrat', activeMatch: '/guide/' },
@@ -63,6 +69,7 @@ function guideSidebar() {
         { text: 'What is an engine?', link: '/engines/' },
         { text: 'Work orders', link: '/engines/workorder' },
         { text: 'Invoicing', link: '/engines/invoicing' },
+        { text: 'Protocols', link: '/engines/protocol' },
       ],
     },
     {

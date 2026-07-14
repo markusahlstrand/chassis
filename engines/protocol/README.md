@@ -9,6 +9,8 @@ The engine owns only the invariants. Template *content* — which protocols exis
 what they contain — is 100% vertical-owned, and an instance binds to any `EntityRef`
 (a work order today, anything tomorrow).
 
+**Full documentation: https://substrat.ahlstrand.es/engines/protocol**
+
 ## Invariants the engine owns
 
 1. **Sign freezes** — any write to a signed instance's responses fails.

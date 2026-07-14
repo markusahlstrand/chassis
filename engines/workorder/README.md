@@ -7,6 +7,8 @@ machine, append-only reporting, and a billable snapshot frozen at completion.
 It deliberately knows nothing about pricing (the vertical's job) or invoicing (a
 sibling engine, reached only via events).
 
+**Full documentation: https://substrat.ahlstrand.es/engines/workorder**
+
 ## Invariants the engine owns
 
 - **The state machine cannot skip states.**

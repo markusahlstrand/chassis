@@ -23,6 +23,9 @@ Substrat is a hosted substrate for vertical business software: a multi-tenant ke
 - `node tools/boundary-lint.mjs` — the layer rules below, enforced mechanically (runs in CI)
 - `pnpm fsm-demo dev` — run the ServiceCo demo (API :8787 + web :5173)
 - One vitest scenario per demo vertical: `pnpm --filter @substrat-run/demo-fsm test`
+- `pnpm --filter @substrat-run/docs run deploy` — build + ship the docs site to
+  [substrat.ahlstrand.es](https://substrat.ahlstrand.es) (Cloudflare Pages). The `run`
+  is required: pnpm's built-in `deploy` shadows the script.
 
 ## The three-layer rule (never violated)
 

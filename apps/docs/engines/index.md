@@ -84,8 +84,11 @@ host.defineOperation('acme/create-order', async (ctx, input) => {
 |---|---|---|
 | [Work orders](/engines/workorder) | `@substrat-run/engine-workorder` | the order state machine, append-only time & material reporting |
 | [Invoicing](/engines/invoicing) | `@substrat-run/engine-invoicing` | invoice-basis accumulation from billable events, immutability on export |
+| [Protocols](/engines/protocol) | `@substrat-run/engine-protocol` | protocols/checklists with the sign → immutable invariant, verifiable content hash |
 
-Both are **product seeds**, extracted from the first demo vertical (a Swedish field-service
-firm) — small deliberately, hardened as real verticals consume them. Planned next, in
-the order verticals force them: scheduling/dispatch, ticketing (ärende), and a
-protocol/checklist engine.
+All three are **product seeds**, extracted from the demo verticals — small deliberately,
+hardened as real verticals consume them. The protocol engine is the extraction proof
+itself: it was forced out of vertical code only when a *second* vertical (a bike shop's
+per-bike condition report) needed the same sign-immutability invariant in a different
+shape. Planned next, in the order verticals force them: scheduling/dispatch and
+ticketing (ärende).

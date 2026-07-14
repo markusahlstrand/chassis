@@ -9,6 +9,8 @@ with frozen prices and provenance, ready to hand to whatever actually issues inv
 (typically an accounting connector). It is **not** a ledger, not accounts receivable,
 not payment tracking.
 
+**Full documentation: https://substrat.ahlstrand.es/engines/invoicing**
+
 ## Snapshot, not join
 
 The engine consumes `workorder.completed` with **zero imports** from the work-order
