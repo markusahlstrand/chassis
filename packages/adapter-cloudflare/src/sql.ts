@@ -5,11 +5,14 @@ import type { ScopedSql, SqlValue } from '@substrat-run/kernel';
  * (`query`/`exec`). DO SQL is synchronous — `exec` returns a cursor eagerly —
  * so this mirrors the better-sqlite3 wrapper in `adapter-sqlite` one-to-one.
  *
- * Note (from the step-0 spike): the DO runtime FORBIDS manual `BEGIN`/`COMMIT`
- * via SQL and directs callers to `storage.transactionSync()`, which auto-rolls
- * back on a synchronous throw but commits at the first `await`. The ScopeDO
- * therefore brackets each operation's synchronous execution in `transactionSync`
- * and buffers emitted events until success — it never issues raw transaction SQL.
+ * Note (from the spikes): the DO runtime FORBIDS manual `BEGIN`/`COMMIT` via SQL.
+ * Use `ctx.storage.transaction(async () => …)` — the ASYNC transaction API — which
+ * commits on success and rolls back on a throw EVEN ACROSS an `await` (verified in
+ * workerd). The ScopeDO therefore wraps each operation exactly like the pure
+ * adapter's `BEGIN IMMEDIATE … COMMIT/ROLLBACK`: domain writes and outbox emits
+ * commit or roll back together, with read-your-own-writes intact and no buffering.
+ * (`transactionSync` also exists but is synchronous-only — it commits at the first
+ * await, so it is not used for the async operation body.)
  */
 export function doScopedSql(sql: SqlStorage): ScopedSql {
   return {
