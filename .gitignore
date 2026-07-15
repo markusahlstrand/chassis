@@ -5,3 +5,7 @@ coverage/
 .DS_Store
 **/.vitepress/cache/
 .data/
+
+# Cloudflare Workers build/dev artifacts
+.wrangler/
+dist-worker/

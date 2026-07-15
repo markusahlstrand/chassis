@@ -5,13 +5,17 @@
   "description": "FSM demo vertical (ServiceCo) — see spec/testrun.md",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "vitest run",
     "server": "tsx src/server.ts",
     "dev": "concurrently -n api,web -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\"",
-    "demo": "pnpm run dev"
+    "demo": "pnpm run dev",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:dry-run": "wrangler deploy --dry-run --outdir dist-worker"
   },
   "dependencies": {
+    "@substrat-run/adapter-cloudflare": "workspace:^",
     "@substrat-run/adapter-sqlite": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/engine-invoicing": "workspace:^",
@@ -24,10 +28,12 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
     "@types/better-sqlite3": "^7.6.0",
     "concurrently": "^9.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "wrangler": "^4.110.0"
   }
 }
