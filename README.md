@@ -25,10 +25,37 @@ We build the substrate. You build the verticals.
 
 ## Status
 
-Kernel scaffold under way: `@substrat-run/contracts` (Zod contracts — the source of truth),
-`@substrat-run/kernel` (contract interfaces), `@substrat-run/adapter-sqlite` (pure-SQLite scope
-host), and `@substrat-run/contract-tests` (the suite every adapter must pass). Run
-`pnpm install && pnpm test`.
+Working end to end. The kernel and its contracts are real code with a conformance suite,
+and a full demo vertical runs on **two adapters** — locally on pure SQLite and **deployed
+on Cloudflare** (Durable Objects + D1) behind Better Auth, from one shared codebase.
+
+- **Contracts & kernel** — `@substrat-run/contracts` (Zod contracts, the source of truth)
+  and `@substrat-run/kernel` (the scope-host contract + the tuple permission checker).
+- **Adapters** — `@substrat-run/adapter-sqlite` (pure-SQLite scope host; local dev, CI,
+  self-host) and `@substrat-run/adapter-cloudflare` (Durable-Object scope host + a durable
+  control plane; production). `@substrat-run/contract-tests` is the suite both must pass
+  **unchanged** — the two-adapter discipline (decision 14).
+- **Engines** — `engine-workorder`, `engine-invoicing`, `engine-protocol`: headless domain
+  machinery that owns invariants, shared across verticals.
+- **Verticals** — the demos below.
+
+Run `pnpm install && pnpm test`.
+
+## Demos
+
+Reference verticals — the same vertical code on the kernel, proving the guarantees hold
+(and, for ServiceCo, that a vertical deploys unchanged from local SQLite to Cloudflare):
+
+- **[ServiceCo — field service](demos/fsm/README.md)** — the flagship. A Swedish
+  service/installation firm: work orders, time/material reporting, egenkontroll protocols,
+  fakturaunderlag. Runs on pure SQLite locally **and deployed on Cloudflare** (Durable
+  Objects + D1) behind Better Auth, from one shared route table + auth seam — only the
+  adapter beneath differs. Architecture and request-flow diagrams in its README.
+- **[Kallkälla Kaffe — e-commerce](demos/shop/)** — an online coffee roaster (catalog,
+  cart, stock, discounts, orders) with Better Auth logins; proves the attachment contracts
+  aren't field-service-shaped.
+- **[CykelService — bike shop](demos/bike-shop/)** — an agent-scaffolded vertical (the same
+  engines re-vocabularied to a bike workshop), from [acceptance run 001](docs/acceptance/agent-loop-001.md).
 
 ## Documentation
 
