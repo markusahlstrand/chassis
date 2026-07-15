@@ -68,16 +68,16 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   const staff = platformActorId.parse(ulid());
 
   // Tenant registry (§4.1): create-then-provision, idempotent on every start.
-  host.admin.createTenant(staff, {
+  await host.admin.createTenant(staff, {
     id: world.t1, slug: 'kedja-kugghjul', name: 'Kedja & Kugghjul Cykelverkstad AB',
   });
-  host.admin.createTenant(staff, { id: world.t2, slug: 'trampolin', name: 'Trampolin Cykel AB' });
+  await host.admin.createTenant(staff, { id: world.t2, slug: 'trampolin', name: 'Trampolin Cykel AB' });
 
   // Entitlements (§4.3): default-deny — grant the SKU flags for the modules the
   // workshop runs before its operations resolve.
   for (const t of [world.t1, world.t2]) {
     for (const key of ['workorder', 'invoicing', 'protocol', 'cykelservice']) {
-      host.admin.grantEntitlement(staff, t, key);
+      await host.admin.grantEntitlement(staff, t, key);
     }
   }
 
@@ -95,18 +95,18 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
     PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
   ];
   for (const t of [world.t1, world.t2]) {
-    host.admin.defineRole(staff, t, { key: 'workshop-admin', permissions: adminPerms, source: 'vertical' });
+    await host.admin.defineRole(staff, t, { key: 'workshop-admin', permissions: adminPerms, source: 'vertical' });
     // The mechanic fills the condition report; SIGNING stays with the
     // workshop lead — the fill/sign permission split (engine-protocol.md §4.6).
-    host.admin.defineRole(staff, t, {
+    await host.admin.defineRole(staff, t, {
       key: 'mechanic',
       permissions: [WO.read, WO.report, PROTO.read, PROTO.fill],
       source: 'vertical',
     });
   }
-  host.admin.assignRole(staff, { principalId: world.greta, roleKey: 'workshop-admin', node: { tenantId: world.t1, scopeId: null } });
-  host.admin.assignRole(staff, { principalId: world.mans, roleKey: 'mechanic', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole(staff, { principalId: world.rutger, roleKey: 'workshop-admin', node: { tenantId: world.t2, scopeId: null } });
+  await host.admin.assignRole(staff, { principalId: world.greta, roleKey: 'workshop-admin', node: { tenantId: world.t1, scopeId: null } });
+  await host.admin.assignRole(staff, { principalId: world.mans, roleKey: 'mechanic', node: { tenantId: world.t1, scopeId: world.s1 } });
+  await host.admin.assignRole(staff, { principalId: world.rutger, roleKey: 'workshop-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {
     const stub = await host.getScope(world.greta, world.t1, world.s1);
@@ -186,7 +186,7 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   const portalPerms = [WO.read, PROTO.read, PROTO.countersign];
   if (world.lisbethId) {
     for (const permission of portalPerms) {
-      host.admin.grant(staff, {
+      await host.admin.grant(staff, {
         principalId: world.lisbeth, permission,
         node: { tenantId: world.t1, scopeId: world.s1 },
         entity: { entityType: 'customer', entityId: world.lisbethId },
@@ -196,7 +196,7 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   }
   if (world.ottoId) {
     for (const permission of portalPerms) {
-      host.admin.grant(staff, {
+      await host.admin.grant(staff, {
         principalId: world.otto, permission,
         node: { tenantId: world.t1, scopeId: world.s1 },
         entity: { entityType: 'customer', entityId: world.ottoId },

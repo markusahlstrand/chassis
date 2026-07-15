@@ -68,14 +68,14 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
 
   const staff = platformActorId.parse(ulid());
 
-  host.admin.createTenant(staff, { id: world.t1, slug: 'kallkalla', name: 'Kallkälla Kaffe AB' });
-  host.admin.createTenant(staff, { id: world.t2, slug: 'bonfeber', name: 'Bönfeber Rosteri AB' });
+  await host.admin.createTenant(staff, { id: world.t1, slug: 'kallkalla', name: 'Kallkälla Kaffe AB' });
+  await host.admin.createTenant(staff, { id: world.t2, slug: 'bonfeber', name: 'Bönfeber Rosteri AB' });
 
   // Entitlements (§4.3): default-deny — grant the SKU flags for the modules the
   // shop runs before its operations resolve.
   for (const t of [world.t1, world.t2]) {
     for (const key of ['invoicing', 'shop']) {
-      host.admin.grantEntitlement(staff, t, key);
+      await host.admin.grantEntitlement(staff, t, key);
     }
   }
 
@@ -93,19 +93,19 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
   const publicPerms = [SHOP_PERM.browse]; // anonymous visitors: read the catalogue only
 
   for (const t of [world.t1, world.t2]) {
-    host.admin.defineRole(staff, t, { key: 'shop-admin', permissions: adminPerms, source: 'vertical' });
-    host.admin.defineRole(staff, t, { key: 'warehouse', permissions: warehousePerms, source: 'vertical' });
-    host.admin.defineRole(staff, t, { key: 'shopper', permissions: shopperPerms, source: 'vertical' });
-    host.admin.defineRole(staff, t, { key: 'public', permissions: publicPerms, source: 'vertical' });
+    await host.admin.defineRole(staff, t, { key: 'shop-admin', permissions: adminPerms, source: 'vertical' });
+    await host.admin.defineRole(staff, t, { key: 'warehouse', permissions: warehousePerms, source: 'vertical' });
+    await host.admin.defineRole(staff, t, { key: 'shopper', permissions: shopperPerms, source: 'vertical' });
+    await host.admin.defineRole(staff, t, { key: 'public', permissions: publicPerms, source: 'vertical' });
   }
 
-  host.admin.assignRole(staff, { principalId: world.astrid, roleKey: 'shop-admin', node: { tenantId: world.t1, scopeId: null } });
-  host.admin.assignRole(staff, { principalId: world.gustav, roleKey: 'warehouse', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole(staff, { principalId: world.elin, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole(staff, { principalId: world.otto, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole(staff, { principalId: world.guest, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole(staff, { principalId: world.public, roleKey: 'public', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole(staff, { principalId: world.rurik, roleKey: 'shop-admin', node: { tenantId: world.t2, scopeId: null } });
+  await host.admin.assignRole(staff, { principalId: world.astrid, roleKey: 'shop-admin', node: { tenantId: world.t1, scopeId: null } });
+  await host.admin.assignRole(staff, { principalId: world.gustav, roleKey: 'warehouse', node: { tenantId: world.t1, scopeId: world.s1 } });
+  await host.admin.assignRole(staff, { principalId: world.elin, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
+  await host.admin.assignRole(staff, { principalId: world.otto, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
+  await host.admin.assignRole(staff, { principalId: world.guest, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
+  await host.admin.assignRole(staff, { principalId: world.public, roleKey: 'public', node: { tenantId: world.t1, scopeId: world.s1 } });
+  await host.admin.assignRole(staff, { principalId: world.rurik, roleKey: 'shop-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {
     const stub = await host.getScope(world.astrid, world.t1, world.s1);
@@ -148,7 +148,7 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
 
   // Portal grants (idempotent): entity-narrowed order:read per customer.
   if (world.elinCustomerId) {
-    host.admin.grant(staff, {
+    await host.admin.grant(staff, {
       principalId: world.elin, permission: SHOP_PERM.orderRead,
       node: { tenantId: world.t1, scopeId: world.s1 },
       entity: { entityType: 'customer', entityId: world.elinCustomerId },
@@ -156,7 +156,7 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
     });
   }
   if (world.ottoCustomerId) {
-    host.admin.grant(staff, {
+    await host.admin.grant(staff, {
       principalId: world.otto, permission: SHOP_PERM.orderRead,
       node: { tenantId: world.t1, scopeId: world.s1 },
       entity: { entityType: 'customer', entityId: world.ottoCustomerId },

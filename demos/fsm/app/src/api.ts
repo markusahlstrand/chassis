@@ -160,19 +160,95 @@ export function setPrincipal(principal: string | null): void {
   else localStorage.removeItem('fsm-principal');
 }
 
+/**
+ * Two backends share this app. The node/sqlite dev server authenticates via the
+ * `x-principal` header (persona picker); the Cloudflare Worker authenticates via
+ * a Better Auth session cookie. In Better-Auth mode we must NOT send x-principal
+ * (the cookie is the identity), so App probes `/api/me` on mount and calls
+ * `setHeaderAuth` to pick the mode. Defaults to header mode for the node demo.
+ */
+let headerAuth = true;
+export function setHeaderAuth(on: boolean): void {
+  headerAuth = on;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const principal = currentPrincipal();
+  const sendHeader = headerAuth && principal;
   const res = await fetch(`/api${path}`, {
+    credentials: 'same-origin',
     ...init,
     headers: {
       'content-type': 'application/json',
-      ...(principal ? { 'x-principal': principal } : {}),
+      ...(sendHeader ? { 'x-principal': principal } : {}),
       ...init?.headers,
     },
   });
   const body = (await res.json()) as T & { error?: string };
   if (!res.ok) throw new Error(body.error ?? `${res.status}`);
   return body;
+}
+
+/** The resolved Better-Auth identity behind the current cookie (from `GET /api/me`). */
+export interface Session {
+  principal: string;
+  display: string;
+  role: string;
+  via: string;
+}
+
+/**
+ * Probe which backend/auth mode we're talking to:
+ *  - 200 → Better Auth, signed in (`session` set)
+ *  - 401 → Better Auth, not signed in (`session` null)
+ *  - 404 / network fail → node dev server (no `/api/me` route) → header mode
+ */
+export type MeResult =
+  | { mode: 'better-auth'; session: Session | null }
+  | { mode: 'header' };
+
+export async function me(): Promise<MeResult> {
+  try {
+    const res = await fetch('/api/me', { credentials: 'same-origin' });
+    if (res.status === 404) return { mode: 'header' };
+    if (res.status === 401) return { mode: 'better-auth', session: null };
+    if (res.ok) return { mode: 'better-auth', session: (await res.json()) as Session };
+    // Route exists (Better Auth) but returned another status → treat as no session.
+    return { mode: 'better-auth', session: null };
+  } catch {
+    // Network failure / no backend reachable → fall back to the node header flow.
+    return { mode: 'header' };
+  }
+}
+
+/** Better Auth email+password sign-in; throws with the server message on failure. */
+export async function signIn(email: string, password: string): Promise<void> {
+  const res = await fetch('/api/auth/sign-in/email', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    let message = `${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(message);
+  }
+}
+
+/** Better Auth sign-out; clears the session cookie. */
+export async function signOut(): Promise<void> {
+  await fetch('/api/auth/sign-out', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
 }
 
 export const api = {

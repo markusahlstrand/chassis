@@ -81,6 +81,7 @@ function guideSidebar() {
         { text: '@substrat-run/contracts', link: '/reference/contracts' },
         { text: '@substrat-run/kernel', link: '/reference/kernel' },
         { text: '@substrat-run/adapter-sqlite', link: '/reference/adapter-sqlite' },
+        { text: '@substrat-run/adapter-cloudflare', link: '/reference/adapter-cloudflare' },
         { text: '@substrat-run/contract-tests', link: '/reference/contract-tests' },
       ],
     },

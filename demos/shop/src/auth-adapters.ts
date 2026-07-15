@@ -74,7 +74,7 @@ export function betterAuthAdapter(auth: Auth, host: SqliteScopeHost, world: Shop
       if (!session?.user) return null;
       const user = session.user;
       const mapped =
-        host.admin.resolveIdentity('better-auth', user.id) ??
+        (await host.admin.resolveIdentity('better-auth', user.id)) ??
         (await provisionShopper(host, world, user));
       return {
         principal: mapped.principal,
@@ -115,7 +115,7 @@ export async function seedPersonaLogins(
           | undefined)?.id;
       }
       if (userId) {
-        host.admin.linkIdentity(staff, {
+        await host.admin.linkIdentity(staff, {
           provider: 'better-auth',
           externalId: userId,
           principal: world[p.key],
@@ -152,19 +152,19 @@ async function provisionShopper(
     orgRef: `better-auth:${user.id}`,
   });
 
-  host.admin.assignRole(staff, {
+  await host.admin.assignRole(staff, {
     principalId: principal,
     roleKey: 'shopper',
     node: { tenantId: world.t1, scopeId: world.s1 },
   });
-  host.admin.grant(staff, {
+  await host.admin.grant(staff, {
     principalId: principal,
     permission: SHOP_PERM.orderRead,
     node: { tenantId: world.t1, scopeId: world.s1 },
     entity: { entityType: 'customer', entityId: customer.id },
     grantedBy: world.astrid,
   });
-  host.admin.linkIdentity(staff, {
+  await host.admin.linkIdentity(staff, {
     provider: 'better-auth',
     externalId: user.id,
     principal,

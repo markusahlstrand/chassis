@@ -5,3 +5,11 @@ coverage/
 .DS_Store
 **/.vitepress/cache/
 .data/
+
+# Cloudflare Workers build/dev artifacts
+.wrangler/
+dist-worker/
+# Local dev secrets for wrangler (BETTER_AUTH_SECRET etc.)
+.dev.vars
+**/.dev.vars
+demos/fsm/wrangler.jsonc

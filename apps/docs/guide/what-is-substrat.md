@@ -82,8 +82,10 @@ Substrat is pre-release (0.x). What exists today:
 | Kernel interfaces (scope host, permission checker) | [`@substrat-run/kernel`](/reference/kernel) | Working |
 | Pure-SQLite scope host (local dev, CI, self-host) | [`@substrat-run/adapter-sqlite`](/reference/adapter-sqlite) | Working |
 | Adapter conformance suite | [`@substrat-run/contract-tests`](/reference/contract-tests) | Working |
+| Cloudflare scope host (Durable Objects, production) | [`@substrat-run/adapter-cloudflare`](/reference/adapter-cloudflare) | Working — same suite, real workerd |
 | Work-order engine | [`@substrat-run/engine-workorder`](/engines/workorder) | Seed |
 | Invoicing engine | [`@substrat-run/engine-invoicing`](/engines/invoicing) | Seed |
-| Cloudflare adapter (Durable Objects, production) | — | Planned |
+| Protocol / checklist engine | [`@substrat-run/engine-protocol`](/engines/protocol) | Seed |
+| ServiceCo vertical — runs on both adapters, deployed on Cloudflare | [`demos/fsm`](https://github.com/substrat-run/substrat/tree/main/demos/fsm) | Working |
 
 Interfaces change without notice until the first vertical ships.
