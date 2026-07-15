@@ -6,12 +6,14 @@ import type {
   DomainEvent,
   DomainEventInput,
   EntityRef,
+  IdentityLink,
   Jurisdiction,
   ModuleManifest,
   Node,
   PermissionKey,
   PlatformActorId,
   PrincipalId,
+  ResolvedIdentity,
   RoleAssignment,
   RoleDefinition,
   ScopeId,
@@ -210,6 +212,18 @@ export interface HostAdmin {
   revokeEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
   /** The tenant's held SKU flags (control-plane.md §5 meter 2). */
   listEntitlements(tenantId: TenantId): string[];
+
+  // -- identity (D-16; control-plane.md §6) ----------------------------------
+  // The neutral seam an auth adapter maps into. An external identity
+  // (provider + externalId — Better Auth, an OIDC issuer, …) binds to a
+  // principal and its home tenant/scope. The kernel never learns HOW a caller
+  // authenticated, only WHO they are; the mechanism stays a swappable edge
+  // adapter. Authentication only — authorization remains roles/grants.
+
+  /** Bind an external identity to a principal + home node. Idempotent on (provider, externalId); audited. */
+  linkIdentity(actor: PlatformActorId, input: IdentityLink): void;
+  /** Resolve an external identity to its principal + home node — the auth adapter's read path. */
+  resolveIdentity(provider: string, externalId: string): ResolvedIdentity | undefined;
 
   /**
    * The append-only admin audit trail, newest-comparable last (ULID order is

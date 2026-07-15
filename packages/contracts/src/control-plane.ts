@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { instant, platformActorId, scopeId, tenantId } from './ids.js';
+import { instant, platformActorId, principalId, scopeId, tenantId } from './ids.js';
 
 // The control plane — the shared layer across N per-vertical deployments (D-30,
 // control-plane.md). This file carries the audit contract that every effecting
@@ -23,8 +23,33 @@ export const adminAction = z.enum([
   'unarchiveScope', // §4.2 — an explicit restore, never a silent flag flip
   'grantEntitlement', // §4.3 — the SKU flag turned on for a tenant
   'revokeEntitlement', // §4.3
+  'linkIdentity', // D-16 — bind an external identity to a principal
 ]);
 export type AdminAction = z.infer<typeof adminAction>;
+
+/**
+ * The neutral identity seam (D-16; control-plane.md §6 "principal derivation").
+ * An auth adapter at the edge (Better Auth, an OIDC issuer, …) authenticates a
+ * user and maps its external identity to a Substrat principal + home node. The
+ * kernel never learns HOW a caller authenticated, only WHO they are — the
+ * mechanism stays a swappable adapter. Authentication only: authorization is
+ * roles/grants, and `provider` keeps N adapters (and OIDC upstreams) distinct.
+ */
+export const identityLink = z.object({
+  provider: z.string().min(1), // 'better-auth' | 'oidc:<issuer>' | …
+  externalId: z.string().min(1), // the provider's stable user id (e.g. the OIDC `sub`)
+  principal: principalId,
+  tenantId,
+  scopeId: scopeId.optional(), // omitted = tenant-level home
+});
+export type IdentityLink = z.infer<typeof identityLink>;
+
+export const resolvedIdentity = z.object({
+  principal: principalId,
+  tenantId,
+  scopeId: scopeId.nullable(),
+});
+export type ResolvedIdentity = z.infer<typeof resolvedIdentity>;
 
 /**
  * An append-only admin audit row (control-plane.md §4.4). Every field except

@@ -7,10 +7,12 @@ import {
   domainEvent,
   domainEventInput,
   eventId,
+  identityLink,
   instant,
   moduleManifest,
   objectRef,
   principalId,
+  resolvedIdentity,
   roleDefinition,
   tenant as tenantSchema,
   type AdminAction,
@@ -20,10 +22,12 @@ import {
   type DomainEvent,
   type DomainEventInput,
   type EntityRef,
+  type IdentityLink,
   type Node,
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
+  type ResolvedIdentity,
   type RoleAssignment,
   type RoleDefinition,
   type ScopeId,
@@ -218,6 +222,20 @@ export class SqliteScopeHost implements ScopeHost {
         tenant_id TEXT NOT NULL,
         entitlement_key TEXT NOT NULL,
         PRIMARY KEY (tenant_id, entitlement_key)
+      );
+      -- The identity seam (D-16; control-plane.md §6). An external identity
+      -- (provider + external_id — an auth adapter at the edge) maps to a
+      -- principal + home node. Provider-keyed so Better Auth, an OIDC issuer, or
+      -- several at once coexist. Authentication input only — authorization stays
+      -- in the tuples above.
+      CREATE TABLE IF NOT EXISTS _substrat_identities (
+        provider     TEXT NOT NULL,
+        external_id  TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        tenant_id    TEXT NOT NULL,
+        scope_id     TEXT,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (provider, external_id)
       );
       -- Append-only control-plane audit trail (control-plane.md §4.4). Lives in
       -- the directory, not a scope DB: it records cross-tenant staff actions and
@@ -843,6 +861,48 @@ export class SqliteScopeHost implements ScopeHost {
             )
             .all(tenantId) as { entitlement_key: string }[]
         ).map((r) => r.entitlement_key),
+      linkIdentity: (actor: PlatformActorId, input: IdentityLink) => {
+        const parsed = identityLink.parse(input);
+        const info = this.directory
+          .prepare(
+            `INSERT OR IGNORE INTO _substrat_identities
+               (provider, external_id, principal_id, tenant_id, scope_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            parsed.provider,
+            parsed.externalId,
+            parsed.principal,
+            parsed.tenantId,
+            parsed.scopeId ?? null,
+            new Date().toISOString(),
+          );
+        // Idempotent: an identity already bound is a no-op, and a no-op is not audited.
+        if (info.changes === 0) return;
+        this.recordAdmin(
+          actor,
+          'linkIdentity',
+          { tenantId: parsed.tenantId, scopeId: parsed.scopeId },
+          null,
+          { provider: parsed.provider, externalId: parsed.externalId, principal: parsed.principal },
+        );
+      },
+      resolveIdentity: (provider: string, externalId: string): ResolvedIdentity | undefined => {
+        const row = this.directory
+          .prepare(
+            `SELECT principal_id, tenant_id, scope_id FROM _substrat_identities
+             WHERE provider = ? AND external_id = ?`,
+          )
+          .get(provider, externalId) as
+          | { principal_id: string; tenant_id: string; scope_id: string | null }
+          | undefined;
+        if (!row) return undefined;
+        return resolvedIdentity.parse({
+          principal: row.principal_id,
+          tenantId: row.tenant_id,
+          scopeId: row.scope_id,
+        });
+      },
       auditLog: (filter?: { tenantId?: TenantId }): AdminLogEntry[] => {
         const rows = (
           filter?.tenantId
