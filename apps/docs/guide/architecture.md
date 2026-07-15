@@ -33,8 +33,8 @@ The invariants this picture encodes:
 A **scope** is one isolation domain — a housing association, a branch office, a client
 company, a brand. Each scope has:
 
-- **its own database** (one SQLite file locally; a SQLite-backed Durable Object in the
-  planned Cloudflare adapter),
+- **its own database** (one SQLite file locally; a SQLite-backed Durable Object on the
+  Cloudflare adapter),
 - **strict serialization** — one operation at a time, run to completion. No interleaved
   read-modify-writes, no lost updates, no need for row locking in module code,
 - **a structured-clone boundary** — inputs and results are cloned even in-process, so
@@ -59,13 +59,15 @@ Platform specifics live only in **adapters**:
 | Adapter | Backing | Use |
 |---|---|---|
 | [`@substrat-run/adapter-sqlite`](/reference/adapter-sqlite) | one SQLite file per scope, per-scope actor | local dev, CI, self-host |
-| `@substrat-run/adapter-cloudflare` (planned) | Durable Object per scope | production |
+| [`@substrat-run/adapter-cloudflare`](/reference/adapter-cloudflare) | SQLite-backed Durable Object per scope + a durable control-plane DO | production |
 
 The rule is testable and non-negotiable: **a module's contract tests must pass unchanged
-on both adapters.** The pure-SQLite adapter is not a mock — it implements the same
-semantics (serialization, clone boundary, fail-closed addressing, stamped envelopes) and
-passes the same [conformance suite](/reference/contract-tests). This is what makes local
-development deterministic, CI cloud-free, and the self-host/escrow story literally true.
+on both adapters** — and they do: the shared [conformance suite](/reference/contract-tests)
+runs green on the pure-SQLite adapter in Node *and* on the Cloudflare adapter in real
+`workerd` against Durable Objects. Neither is a mock; both implement the same semantics
+(serialization, clone boundary, fail-closed addressing, stamped envelopes). This is what
+makes local development deterministic, CI cloud-free, and the self-host/escrow story
+literally true — and it's how a vertical moves from laptop to Cloudflare with no code change.
 
 ## Modules: how everything joins
 

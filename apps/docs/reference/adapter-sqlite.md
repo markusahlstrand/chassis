@@ -31,7 +31,7 @@ await host.close();
 
 ## How the semantics map
 
-| Contract guarantee | Implementation here | In production (planned CF adapter) |
+| Contract guarantee | Implementation here | In production ([the Cloudflare adapter](/reference/adapter-cloudflare)) |
 |---|---|---|
 | strict serialization per scope | in-process actor, one queue per scope | Durable Object single-threaded execution |
 | scope storage isolation | one SQLite file per scope | one DO (SQLite-backed) per scope |
