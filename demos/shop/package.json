@@ -12,11 +12,12 @@
     "demo": "pnpm run dev"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.0",
     "@substrat-run/adapter-sqlite": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/engine-invoicing": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
-    "@hono/node-server": "^1.13.0",
+    "better-auth": "^1.6.23",
     "better-sqlite3": "^12.0.0",
     "hono": "^4.6.0",
     "zod": "^3.25.0"

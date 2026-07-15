@@ -35,7 +35,10 @@ const NODE_BUILTINS = new Set([
   'util', 'v8', 'vm', 'worker_threads', 'zlib',
 ]);
 const HTTP_CLIENTS = new Set(['undici', 'node-fetch', 'axios', 'got', 'ky']);
-const HARNESS = new Set(['seed.ts', 'server.ts', 'index.ts']);
+// Harness = edge/server wiring, not module code reachable from a
+// ModuleRegistration. auth.ts / auth-adapters.ts wire an authentication adapter
+// (Better Auth, OIDC, …) at the server edge — legitimately node/DB-touching.
+const HARNESS = new Set(['seed.ts', 'server.ts', 'index.ts', 'auth.ts', 'auth-adapters.ts']);
 
 function* walk(dir) {
   let entries;
