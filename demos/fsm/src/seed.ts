@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  platformActorId,
   principalId,
   scopeId,
   tenantId,
@@ -65,8 +66,24 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     forskolanId: raw.forskolanId ?? '', kontorId: raw.kontorId ?? '',
   };
 
-  await host.provisionScope({ tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
-  await host.provisionScope({ tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
+  // Control-plane dev actor (control-plane.md §6): locally the platform actor is
+  // a stub. Every admin mutation below is stamped with it in the audit trail.
+  const staff = platformActorId.parse(ulid());
+
+  // Tenant registry (§4.1): create-then-provision, idempotent on every start.
+  host.admin.createTenant(staff, { id: world.t1, slug: 'elmontage', name: 'ElMontage AB' });
+  host.admin.createTenant(staff, { id: world.t2, slug: 'rorservice', name: 'RörService AB' });
+
+  // Entitlements (§4.3): default-deny, so grant the SKU flags for the modules
+  // ServiceCo runs before its operations resolve. This is the SKU model in use.
+  for (const t of [world.t1, world.t2]) {
+    for (const key of ['workorder', 'invoicing', 'protocol', 'serviceco']) {
+      host.admin.grantEntitlement(staff, t, key);
+    }
+  }
+
+  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
+  await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
   // Roles: identical definitions in both tenants (vertical-defined).
   const officePerms = [
@@ -76,18 +93,18 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
   ];
   for (const t of [world.t1, world.t2]) {
-    host.admin.defineRole(t, { key: 'office-admin', permissions: officePerms, source: 'vertical' });
+    host.admin.defineRole(staff, t, { key: 'office-admin', permissions: officePerms, source: 'vertical' });
     // Technicians fill protocols; SIGNING stays with the office (arbetsledare) —
     // the fill/sign permission split from engine-protocol.md §4.6.
-    host.admin.defineRole(t, {
+    host.admin.defineRole(staff, t, {
       key: 'technician',
       permissions: [WO.read, WO.report, PROTO.read, PROTO.fill],
       source: 'vertical',
     });
   }
-  host.admin.assignRole({ principalId: world.anna, roleKey: 'office-admin', node: { tenantId: world.t1, scopeId: null } });
-  host.admin.assignRole({ principalId: world.harald, roleKey: 'technician', node: { tenantId: world.t1, scopeId: world.s1 } });
-  host.admin.assignRole({ principalId: world.mallory, roleKey: 'office-admin', node: { tenantId: world.t2, scopeId: null } });
+  host.admin.assignRole(staff, { principalId: world.anna, roleKey: 'office-admin', node: { tenantId: world.t1, scopeId: null } });
+  host.admin.assignRole(staff, { principalId: world.harald, roleKey: 'technician', node: { tenantId: world.t1, scopeId: world.s1 } });
+  host.admin.assignRole(staff, { principalId: world.mallory, roleKey: 'office-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {
     const stub = await host.getScope(world.anna, world.t1, world.s1);
@@ -162,7 +179,7 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
 
   // Portal grants (idempotent): entity-narrowed workorder:read per customer.
   if (world.grundenId) {
-    host.admin.grant({
+    host.admin.grant(staff, {
       principalId: world.berit, permission: WO.read,
       node: { tenantId: world.t1, scopeId: world.s1 },
       entity: { entityType: 'customer', entityId: world.grundenId },
@@ -170,7 +187,7 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     });
   }
   if (world.kontorshotelletId) {
-    host.admin.grant({
+    host.admin.grant(staff, {
       principalId: world.styrbjorn, permission: WO.read,
       node: { tenantId: world.t1, scopeId: world.s1 },
       entity: { entityType: 'customer', entityId: world.kontorshotelletId },

@@ -33,21 +33,27 @@ a native module. With pnpm 10+, allow its build script:
 ```ts
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { UNSAFE_allowAllChecker } from '@substrat-run/kernel';
-import { tenantId, scopeId, principalId } from '@substrat-run/contracts';
+import { tenantId, scopeId, principalId, platformActorId } from '@substrat-run/contracts';
 
 const host = new SqliteScopeHost({
   dir: './data', // one .sqlite file per scope + _directory.sqlite
   checker: UNSAFE_allowAllChecker, // omit for the secure default: deny everything
 });
 
+const actor = platformActorId.parse('01JZX6ZH2E8Q4W9T3M5N7P0R2T'); // control-plane staff subject
 const tenant = tenantId.parse('01JZX6ZH2E8Q4W9T3M5N7P0R2S');
 const scope = scopeId.parse('01JZX6ZH2EAB4CD9EF3GH5JK2M');
 
-await host.provisionScope({ tenantId: tenant, scopeId: scope, jurisdiction: 'eu' });
+// A scope belongs to a tenant, so the tenant record comes first. Entitlements are
+// default-deny: grant the module's SKU flag or its operations won't resolve.
+host.admin.createTenant(actor, { id: tenant, slug: 'acme', name: 'Acme' });
+host.admin.grantEntitlement(actor, tenant, 'notes');
+await host.provisionScope(actor, { tenantId: tenant, scopeId: scope, jurisdiction: 'eu' });
 ```
 
-Provisioning is idempotent and journaled. The `jurisdiction` is fixed at creation,
-forever — data residency is a provisioning decision, not a runtime flag.
+Every control-plane call takes a platform `actor` and is audited. Provisioning is
+idempotent and journaled, and requires an existing active tenant. The `jurisdiction` is
+fixed at creation, forever — data residency is a provisioning decision, not a runtime flag.
 
 ::: tip The checker choice is the security posture
 `UNSAFE_allowAllChecker` grants everything to everyone and is named accordingly — use it
@@ -155,8 +161,8 @@ no IDs travel through your business logic.
 Scope databases are plain SQLite files in WAL mode — debugging is opening a file:
 
 ```sh
-sqlite3 ./data/<scopeId>.sqlite 'SELECT * FROM notes;'
-sqlite3 ./data/<scopeId>.sqlite 'SELECT type, tenant_id, actor, occurred_at FROM _substrat_events;'
+sqlite3 ./data/<tenantId>__<scopeId>.sqlite 'SELECT * FROM notes;'
+sqlite3 ./data/<tenantId>__<scopeId>.sqlite 'SELECT type, tenant_id, actor, occurred_at FROM _substrat_outbox;'
 ```
 
 The event row carries the full kernel-stamped envelope — that's your audit trail,

@@ -1,0 +1,592 @@
+<style>
+  :root {
+    /* light — cool paper, spruce ink, one amber counter */
+    --paper: #eef1ee;
+    --surface: #f9faf8;
+    --surface-2: #ffffff;
+    --ink: #14231c;
+    --ink-soft: #46574e;
+    --ink-faint: #77857c;
+    --line: #d3dcd5;
+    --line-strong: #b9c5bc;
+    --spruce: #1c4636;
+    --spruce-bright: #266a4f;
+    --amber: #a9640f;
+    --amber-soft: #f2e4cf;
+    --ok: #2f8f5b;
+    --low: #b0730f;
+    --out: #8b948d;
+    --shadow: 0 1px 2px rgba(20, 35, 28, .06), 0 8px 24px rgba(20, 35, 28, .07);
+    --shadow-lift: 0 2px 6px rgba(20, 35, 28, .09), 0 18px 44px rgba(20, 35, 28, .12);
+    --sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+    --serif: Georgia, "Times New Roman", serif;
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --r: 3px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0d1512;
+      --surface: #131e18;
+      --surface-2: #17241d;
+      --ink: #e9efe9;
+      --ink-soft: #a4b3a8;
+      --ink-faint: #71807636;
+      --ink-faint: #74837a;
+      --line: #253229;
+      --line-strong: #33443a;
+      --spruce: #3f9068;
+      --spruce-bright: #52ab7e;
+      --amber: #d1902f;
+      --amber-soft: #33291a;
+      --ok: #46b87a;
+      --low: #d1902f;
+      --out: #6c766f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 26px rgba(0, 0, 0, .34);
+      --shadow-lift: 0 2px 8px rgba(0, 0, 0, .38), 0 20px 48px rgba(0, 0, 0, .46);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #eef1ee; --surface: #f9faf8; --surface-2: #ffffff;
+    --ink: #14231c; --ink-soft: #46574e; --ink-faint: #77857c;
+    --line: #d3dcd5; --line-strong: #b9c5bc;
+    --spruce: #1c4636; --spruce-bright: #266a4f; --amber: #a9640f; --amber-soft: #f2e4cf;
+    --ok: #2f8f5b; --low: #b0730f; --out: #8b948d;
+    --shadow: 0 1px 2px rgba(20,35,28,.06), 0 8px 24px rgba(20,35,28,.07);
+    --shadow-lift: 0 2px 6px rgba(20,35,28,.09), 0 18px 44px rgba(20,35,28,.12);
+  }
+  :root[data-theme="dark"] {
+    --paper: #0d1512; --surface: #131e18; --surface-2: #17241d;
+    --ink: #e9efe9; --ink-soft: #a4b3a8; --ink-faint: #74837a;
+    --line: #253229; --line-strong: #33443a;
+    --spruce: #3f9068; --spruce-bright: #52ab7e; --amber: #d1902f; --amber-soft: #33291a;
+    --ok: #46b87a; --low: #d1902f; --out: #6c766f;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 26px rgba(0,0,0,.34);
+    --shadow-lift: 0 2px 8px rgba(0,0,0,.38), 0 20px 48px rgba(0,0,0,.46);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  a { color: inherit; text-decoration: none; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .eyebrow {
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700;
+  }
+  :focus-visible { outline: 2px solid var(--spruce-bright); outline-offset: 2px; border-radius: 2px; }
+
+  /* ---- top bar ---- */
+  header.bar {
+    position: sticky; top: 0; z-index: 40;
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar-in { display: flex; align-items: center; gap: 28px; height: 64px; }
+  .brand { display: flex; align-items: baseline; gap: 9px; font-weight: 800; letter-spacing: .01em; }
+  .brand .mark {
+    font-size: 15px; letter-spacing: .22em; text-transform: uppercase;
+  }
+  .brand .drop { width: 8px; height: 8px; border-radius: 0 50% 50% 50%; background: var(--spruce); transform: rotate(45deg); display: inline-block; }
+  nav.main { display: flex; gap: 22px; margin-left: 8px; }
+  nav.main a { font-size: 13.5px; color: var(--ink-soft); font-weight: 600; padding: 4px 0; border-bottom: 2px solid transparent; }
+  nav.main a:hover, nav.main a.active { color: var(--ink); border-color: var(--amber); }
+  .bar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .icon-btn {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+    border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink);
+    font-family: var(--sans); font-size: 13px; font-weight: 700;
+    padding: 8px 13px; border-radius: 999px;
+  }
+  .icon-btn:hover { border-color: var(--spruce); }
+  .cart-count { font-family: var(--mono); background: var(--spruce); color: #fff; border-radius: 999px; font-size: 11px; min-width: 18px; height: 18px; display: inline-grid; place-items: center; padding: 0 5px; }
+  :root[data-theme="dark"] .cart-count, @media (prefers-color-scheme: dark) { }
+  .theme-toggle { width: 38px; height: 38px; border-radius: 999px; display: grid; place-items: center; padding: 0; }
+
+  /* ---- hero ---- */
+  .hero { padding: 46px 0 30px; }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
+  .lot-tag {
+    display: inline-flex; align-items: center; gap: 8px; background: var(--amber-soft); color: var(--amber);
+    font-size: 11.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 999px;
+  }
+  .lot-tag .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+  h1.lot {
+    font-size: clamp(34px, 5vw, 54px); line-height: 1.02; margin: 16px 0 4px;
+    letter-spacing: -.02em; font-weight: 800; text-wrap: balance;
+  }
+  .origin { font-size: 15px; color: var(--ink-soft); font-weight: 600; letter-spacing: .01em; }
+  .notes { font-family: var(--serif); font-size: 18px; line-height: 1.55; color: var(--ink-soft); max-width: 46ch; margin: 18px 0 22px; }
+  .notes b { color: var(--ink); font-weight: 700; font-style: italic; }
+
+  .spec-row { display: flex; gap: 26px; flex-wrap: wrap; margin: 4px 0 24px; }
+  .spec { display: flex; flex-direction: column; gap: 4px; }
+  .spec .k { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+  .spec .v { font-size: 14px; font-weight: 700; }
+  .roast { display: inline-flex; gap: 4px; align-items: center; }
+  .roast i { width: 20px; height: 5px; border-radius: 2px; background: var(--line-strong); display: inline-block; }
+  .roast i.on { background: var(--amber); }
+
+  /* scarcity meter */
+  .scarcity { margin: 2px 0 22px; max-width: 340px; }
+  .scarcity .bar { height: 7px; background: var(--line); border-radius: 999px; overflow: hidden; }
+  .scarcity .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--amber), var(--spruce-bright)); }
+  .scarcity .lab { display: flex; justify-content: space-between; margin-top: 7px; font-size: 12px; color: var(--ink-soft); }
+  .scarcity .lab b { color: var(--amber); font-family: var(--mono); }
+
+  .buy { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .price { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+  .price small { font-size: 13px; color: var(--ink-faint); font-weight: 500; }
+  .btn {
+    cursor: pointer; border: 0; font-family: var(--sans); font-weight: 700; font-size: 14px;
+    padding: 13px 22px; border-radius: var(--r); background: var(--spruce); color: #fff;
+    letter-spacing: .02em; transition: transform .12s ease, background .15s ease;
+  }
+  .btn:hover { background: var(--spruce-bright); }
+  .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line-strong); }
+  .btn.ghost:hover { border-color: var(--spruce); background: transparent; }
+  .btn[disabled] { background: var(--line-strong); color: var(--surface-2); cursor: not-allowed; }
+
+  /* variant chips */
+  .variant { margin: 22px 0; display: flex; flex-direction: column; gap: 14px; }
+  .vgroup { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .vgroup > .k { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; width: 74px; }
+  .chip {
+    cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink);
+    font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 999px; font-family: var(--sans);
+  }
+  .chip[aria-pressed="true"] { border-color: var(--spruce); background: var(--spruce); color: #fff; }
+  .chip:hover:not([aria-pressed="true"]) { border-color: var(--spruce); }
+
+  /* ---- coffee bag (CSS-drawn) ---- */
+  .bagwrap { display: grid; place-items: center; }
+  .bag {
+    position: relative; width: 220px; height: 300px; border-radius: 6px 6px 8px 8px;
+    background: var(--bag, #24463a); box-shadow: var(--shadow-lift);
+    padding: 20px 18px; color: #eef1ee; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .bag::before { /* tin-tie fold */
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 26px;
+    background: rgba(0,0,0,.22); border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .bag::after { /* seam sheen */
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(105deg, rgba(255,255,255,.10), rgba(255,255,255,0) 34%, rgba(0,0,0,.12));
+  }
+  .bag .valve { position: absolute; right: 20px; bottom: 20px; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.12); }
+  .bag .valve::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: rgba(255,255,255,.16); }
+  .bag .bmark { position: relative; margin-top: 6px; font-size: 10px; letter-spacing: .24em; text-transform: uppercase; font-weight: 800; opacity: .85; }
+  .bag .blabel { position: relative; margin-top: auto; }
+  .bag .borigin { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; opacity: .8; }
+  .bag .bname { font-size: 25px; font-weight: 800; letter-spacing: -.01em; line-height: 1.05; margin: 4px 0 8px; }
+  .bag .broast { display: inline-flex; gap: 3px; }
+  .bag .broast i { width: 15px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.28); }
+  .bag .broast i.on { background: #e7b56a; }
+  .bag.mini { width: 100%; height: 210px; padding: 16px 15px; }
+  .bag.mini .bname { font-size: 20px; }
+  .bag.mini .valve { width: 20px; height: 20px; right: 15px; bottom: 15px; }
+
+  /* ---- catalog ---- */
+  section.catalog { padding: 20px 0 40px; }
+  .sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 22px 0 20px; }
+  .sec-head h2 { font-size: 24px; letter-spacing: -.01em; margin: 6px 0 0; font-weight: 800; }
+  .filters { display: flex; gap: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow);
+    transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+  }
+  .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lift); border-color: var(--line-strong); }
+  .card.sold { opacity: .62; }
+  .card.sold:hover { transform: none; box-shadow: var(--shadow); }
+  .card .c-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .card .c-name { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+  .card .c-origin { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin-top: 2px; }
+  .card .c-notes { font-family: var(--serif); font-size: 14.5px; color: var(--ink-soft); line-height: 1.5; }
+  .card .c-foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; gap: 10px; }
+  .card .c-price { font-family: var(--mono); font-weight: 700; font-size: 17px; }
+  .card .c-price small { font-size: 11px; color: var(--ink-faint); font-weight: 400; }
+  .add { cursor: pointer; border: 1px solid var(--spruce); background: transparent; color: var(--spruce); font-weight: 700; font-family: var(--sans); font-size: 13px; padding: 9px 15px; border-radius: var(--r); }
+  .add:hover { background: var(--spruce); color: #fff; }
+  .add[disabled] { border-color: var(--line-strong); color: var(--out); cursor: not-allowed; background: transparent; }
+
+  .stock { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+  .stock .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .stock.ok { color: var(--ok); } .stock.ok .dot { background: var(--ok); }
+  .stock.low { color: var(--low); } .stock.low .dot { background: var(--low); }
+  .stock.out { color: var(--out); } .stock.out .dot { background: var(--out); }
+  .stock .num { font-weight: 700; }
+
+  /* ---- faktura band ---- */
+  .band { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+  .band-in { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; padding: 34px 0; }
+  .feat h3 { font-size: 15px; margin: 10px 0 6px; font-weight: 800; }
+  .feat p { font-family: var(--serif); font-size: 14.5px; color: var(--ink-soft); margin: 0; line-height: 1.55; max-width: 34ch; }
+  .feat .fi { width: 34px; height: 34px; border-radius: 8px; background: var(--amber-soft); color: var(--amber); display: grid; place-items: center; font-weight: 800; font-family: var(--mono); }
+
+  /* ---- footer ---- */
+  footer { padding: 44px 0 30px; color: var(--ink-soft); }
+  .foot-in { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; align-items: center; }
+  .sub-note { font-size: 12px; color: var(--ink-faint); display: inline-flex; align-items: center; gap: 8px; }
+  .sub-note .drop { width: 7px; height: 7px; border-radius: 0 50% 50% 50%; background: var(--spruce); transform: rotate(45deg); }
+
+  /* ---- cart drawer ---- */
+  .overlay { position: fixed; inset: 0; background: rgba(10,18,14,.42); opacity: 0; pointer-events: none; transition: opacity .22s ease; z-index: 50; }
+  .overlay.open { opacity: 1; pointer-events: auto; }
+  aside.cart {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(400px, 92vw); z-index: 60;
+    background: var(--surface-2); border-left: 1px solid var(--line);
+    transform: translateX(100%); transition: transform .26s cubic-bezier(.22,.61,.36,1);
+    display: flex; flex-direction: column; box-shadow: var(--shadow-lift);
+  }
+  aside.cart.open { transform: translateX(0); }
+  .cart-h { display: flex; align-items: center; justify-content: space-between; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+  .cart-h h3 { margin: 0; font-size: 15px; letter-spacing: .04em; text-transform: uppercase; }
+  .x { cursor: pointer; background: none; border: 0; color: var(--ink-soft); font-size: 22px; line-height: 1; padding: 4px; }
+  .lines { flex: 1; overflow-y: auto; padding: 8px 22px; }
+  .line { display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .line .thumb { width: 44px; height: 54px; border-radius: 3px; background: var(--bag, #24463a); box-shadow: var(--shadow); }
+  .line .l-name { font-size: 14px; font-weight: 700; }
+  .line .l-var { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
+  .line .l-price { font-family: var(--mono); font-weight: 700; font-size: 14px; }
+  .line .rm { display: block; margin-top: 4px; font-size: 11px; color: var(--ink-faint); cursor: pointer; background: none; border: 0; text-align: right; width: 100%; }
+  .line .rm:hover { color: var(--amber); }
+  .empty { color: var(--ink-faint); font-family: var(--serif); font-size: 15px; text-align: center; padding: 50px 20px; }
+  .cart-f { border-top: 1px solid var(--line); padding: 18px 22px 22px; display: flex; flex-direction: column; gap: 12px; }
+  .code { display: flex; gap: 8px; }
+  .code input { flex: 1; font-family: var(--mono); font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--ink); }
+  .code button { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-weight: 700; font-size: 12px; padding: 0 14px; border-radius: var(--r); cursor: pointer; font-family: var(--sans); }
+  .code button:hover { border-color: var(--spruce); }
+  .totals { font-size: 13.5px; display: flex; flex-direction: column; gap: 6px; }
+  .totals .r { display: flex; justify-content: space-between; }
+  .totals .r span:last-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .totals .r.disc { color: var(--ok); }
+  .totals .r.tot { font-weight: 800; font-size: 16px; border-top: 1px dashed var(--line-strong); padding-top: 10px; margin-top: 4px; }
+  .faktura-note { font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 7px; align-items: baseline; }
+  .faktura-note b { color: var(--ink-soft); }
+
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 30px; }
+    .bagwrap { order: -1; }
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .band-in { grid-template-columns: 1fr; gap: 22px; }
+    nav.main { display: none; }
+  }
+  @media (max-width: 560px) {
+    .grid { grid-template-columns: 1fr; }
+    .sec-head { flex-direction: column; align-items: flex-start; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#" aria-label="Kallkälla Kaffe">
+      <span class="drop" aria-hidden="true"></span>
+      <span class="mark">Kallkälla</span>
+    </a>
+    <nav class="main">
+      <a href="#kaffe" class="active">Kaffe</a>
+      <a href="#">Bryggutrustning</a>
+      <a href="#">Prenumeration</a>
+      <a href="#">Vårt rosteri</a>
+    </nav>
+    <div class="bar-right">
+      <button class="icon-btn theme-toggle" id="theme" aria-label="Växla mörkt/ljust läge" title="Växla tema">◐</button>
+      <button class="icon-btn" id="cartBtn" aria-label="Öppna varukorg">
+        Varukorg <span class="cart-count" id="count">0</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- HERO: the featured micro-lot — scarcity is the thesis -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <span class="lot-tag"><span class="pip" aria-hidden="true"></span>Micro-lot · Nyskördat</span>
+        <h1 class="lot">Gichichi AA</h1>
+        <div class="origin">Kenya · Nyeri · Tvättad · SL28 / SL34</div>
+        <p class="notes">Uppträder med <b>svarta vinbär</b>, blodgrapefrukt och en klar rabarbersyra. En av årets mest livfulla kenyaner — rostad ljust för att bära frukten.</p>
+
+        <div class="spec-row">
+          <div class="spec"><span class="k">Rostning</span><span class="v roast" aria-label="Ljusrost"><i class="on"></i><i></i><i></i></span></div>
+          <div class="spec"><span class="k">Höjd</span><span class="v num">1 750 m</span></div>
+          <div class="spec"><span class="k">Process</span><span class="v">Tvättad</span></div>
+        </div>
+
+        <div class="scarcity" aria-label="12 av 40 påsar kvar">
+          <div class="bar"><i style="width:30%"></i></div>
+          <div class="lab"><span>Begränsad skörd</span><span><b>12</b> av 40 påsar kvar</span></div>
+        </div>
+
+        <div class="variant" id="heroVariant">
+          <div class="vgroup">
+            <span class="k">Malning</span>
+            <button class="chip" data-g="grind" aria-pressed="true">Hela bönor</button>
+            <button class="chip" data-g="grind" aria-pressed="false">Bryggmalet</button>
+            <button class="chip" data-g="grind" aria-pressed="false">Espresso</button>
+          </div>
+          <div class="vgroup">
+            <span class="k">Storlek</span>
+            <button class="chip" data-g="size" data-mult="1" data-label="250 g" aria-pressed="true">250 g</button>
+            <button class="chip" data-g="size" data-mult="3.6" data-label="1 kg" aria-pressed="false">1 kg</button>
+          </div>
+        </div>
+
+        <div class="buy">
+          <div class="price" id="heroPrice">189 kr <small>/ 250 g</small></div>
+          <button class="btn" id="heroAdd"
+            data-id="gichichi" data-name="Gichichi AA" data-base="189" data-bag="#24463a">Lägg i varukorg</button>
+        </div>
+      </div>
+
+      <div class="bagwrap">
+        <div class="bag" style="--bag:#24463a" role="img" aria-label="Kaffepåse: Gichichi AA från Kenya">
+          <div class="bmark">Kallkälla Kaffe · Stockholm</div>
+          <span class="valve" aria-hidden="true"></span>
+          <div class="blabel">
+            <div class="borigin">Kenya · Nyeri</div>
+            <div class="bname">Gichichi<br>AA</div>
+            <span class="broast" aria-hidden="true"><i class="on"></i><i></i><i></i></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CATALOG -->
+  <section class="catalog wrap" id="kaffe">
+    <div class="sec-head">
+      <div>
+        <div class="eyebrow">Rostat i veckan</div>
+        <h2>Vårt kaffe just nu</h2>
+      </div>
+      <div class="filters">
+        <button class="chip" aria-pressed="true">Alla</button>
+        <button class="chip" aria-pressed="false">Ljusrost</button>
+        <button class="chip" aria-pressed="false">Mörkrost</button>
+      </div>
+    </div>
+
+    <div class="grid" id="grid"><!-- cards injected --></div>
+  </section>
+
+  <!-- mot faktura / trust band -->
+  <section class="band">
+    <div class="wrap band-in">
+      <div class="feat">
+        <div class="fi">kr</div>
+        <h3>Betala mot faktura</h3>
+        <p>Café och kontor handlar på 30 dagars faktura. Underlaget skapas automatiskt vid beställning.</p>
+      </div>
+      <div class="feat">
+        <div class="fi">↻</div>
+        <h3>Prenumeration</h3>
+        <p>Färskrostat på din tröskel varannan vecka. Pausa eller byt sort när du vill.</p>
+      </div>
+      <div class="feat">
+        <div class="fi">✦</div>
+        <h3>Spårbart ursprung</h3>
+        <p>Varje lot är märkt med gård, höjd och skördedatum — från källa till kopp.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap foot-in">
+      <div class="brand"><span class="drop" aria-hidden="true"></span><span class="mark">Kallkälla</span></div>
+      <span class="sub-note"><span class="drop" aria-hidden="true"></span>En Substrat-demo · headless commerce, lagersaldo &amp; fakturaunderlag på plattformen</span>
+    </div>
+  </footer>
+</main>
+
+<div class="overlay" id="overlay"></div>
+<aside class="cart" id="cart" aria-label="Varukorg" aria-hidden="true">
+  <div class="cart-h">
+    <h3>Din varukorg</h3>
+    <button class="x" id="closeCart" aria-label="Stäng">×</button>
+  </div>
+  <div class="lines" id="lines"><div class="empty">Din varukorg är tom.<br>Lägg till en påse färskrostat.</div></div>
+  <div class="cart-f">
+    <div class="code">
+      <input id="codeInput" placeholder="Rabattkod" aria-label="Rabattkod" value="" />
+      <button id="applyCode">Lös in</button>
+    </div>
+    <div class="totals" id="totals">
+      <div class="r"><span>Delsumma</span><span id="sub">0 kr</span></div>
+      <div class="r disc" id="discRow" hidden><span id="discLab">Rabatt</span><span id="disc">0 kr</span></div>
+      <div class="r tot"><span>Att betala</span><span id="tot">0 kr</span></div>
+    </div>
+    <div class="faktura-note"><b>Mot faktura</b><span>· 30 dagar. Fakturaunderlaget skapas vid köp.</span></div>
+    <button class="btn" id="checkout" style="width:100%">Till kassan</button>
+  </div>
+</aside>
+
+<script>
+(function () {
+  "use strict";
+
+  var COFFEES = [
+    { id:"gichichi", name:"Gichichi AA", origin:"Kenya · Nyeri", notes:"Svarta vinbär, blodgrapefrukt, rabarber.", roast:1, base:189, bag:"#24463a", stock:{k:"low", n:12, t:"12 kvar"} },
+    { id:"chelbesa", name:"Chelbesa", origin:"Etiopien · Gedeb", notes:"Jasmin, persika, bergamott.", roast:1, base:165, bag:"#2f5551", stock:{k:"ok", n:40, t:"I lager"} },
+    { id:"lasnubes", name:"Las Nubes", origin:"Colombia · Huila", notes:"Mörk choklad, rött äpple, karamell.", roast:2, base:149, bag:"#2c3e52", stock:{k:"ok", n:33, t:"I lager"} },
+    { id:"esperanza", name:"La Esperanza", origin:"Guatemala · Huehuetenango", notes:"Hasselnöt, kakao, apelsin.", roast:2, base:155, bag:"#6b3f34", stock:{k:"low", n:7, t:"7 kvar"} },
+    { id:"monteverde", name:"Monte Verde", origin:"Brasilien · Cerrado", notes:"Nougat, mjölkchoklad, mandel.", roast:3, base:139, bag:"#3a2a22", stock:{k:"ok", n:52, t:"I lager"} },
+    { id:"idido", name:"Idido", origin:"Etiopien · Yirgacheffe", notes:"Blåbär, mörk choklad, vinig. Natural.", roast:1, base:179, bag:"#3e2e43", stock:{k:"out", n:0, t:"Slutsåld"} }
+  ];
+  var DISCOUNTS = { "KALLKALLA10": { kind:"pct", value:10, label:"Rabattkod KALLKALLA10 (−10%)" } };
+
+  var kr = function (n) { return n.toLocaleString("sv-SE") + " kr"; };
+  var el = function (t, c, h) { var e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+
+  function roastDots(level, cls) {
+    var s = "";
+    for (var i = 1; i <= 3; i++) s += "<i" + (i <= level ? " class=\"on\"" : "") + "></i>";
+    return "<span class=\"" + (cls || "roast") + "\" aria-hidden=\"true\">" + s + "</span>";
+  }
+
+  /* ---- render catalog ---- */
+  var grid = document.getElementById("grid");
+  COFFEES.forEach(function (c) {
+    var sold = c.stock.k === "out";
+    var card = el("div", "card" + (sold ? " sold" : ""));
+    card.innerHTML =
+      '<div class="c-top">' +
+        '<div><div class="c-name">' + c.name + '</div><div class="c-origin">' + c.origin + '</div></div>' +
+        roastDots(c.roast) +
+      '</div>' +
+      '<div class="bagwrap"><div class="bag mini" style="--bag:' + c.bag + '">' +
+        '<div class="bmark">Kallkälla</div><span class="valve"></span>' +
+        '<div class="blabel"><div class="borigin">' + c.origin + '</div><div class="bname">' + c.name + '</div>' +
+        roastDots(c.roast, "broast") + '</div></div></div>' +
+      '<div class="c-notes">' + c.notes + '</div>' +
+      '<div class="stock ' + c.stock.k + '"><span class="dot"></span>' +
+        (c.stock.k === "out" ? "Slutsåld" : "<span class=\"num\">" + c.stock.t + "</span>") + '</div>' +
+      '<div class="c-foot"><div class="c-price num">' + kr(c.base) + ' <small>/ 250 g</small></div>' +
+        '<button class="add" ' + (sold ? "disabled" : "") + ' data-id="' + c.id + '">' +
+        (sold ? "Bevaka" : "Lägg i korg") + '</button></div>';
+    if (!sold) {
+      card.querySelector(".add").addEventListener("click", function () {
+        addToCart({ id: c.id, name: c.name, base: c.base, bag: c.bag, grind: "Hela bönor", size: "250 g", mult: 1 });
+        openCart();
+      });
+    }
+    grid.appendChild(card);
+  });
+
+  /* ---- hero variant selector ---- */
+  var heroState = { grind: "Hela bönor", mult: 1, size: "250 g" };
+  document.querySelectorAll("#heroVariant .chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      var g = chip.getAttribute("data-g");
+      chip.parentElement.querySelectorAll(".chip").forEach(function (s) { s.setAttribute("aria-pressed", "false"); });
+      chip.setAttribute("aria-pressed", "true");
+      if (g === "grind") heroState.grind = chip.textContent.trim();
+      else { heroState.mult = parseFloat(chip.getAttribute("data-mult")); heroState.size = chip.getAttribute("data-label"); }
+      var p = Math.round(189 * heroState.mult);
+      document.getElementById("heroPrice").innerHTML = kr(p) + ' <small>/ ' + heroState.size + '</small>';
+    });
+  });
+  document.getElementById("heroAdd").addEventListener("click", function () {
+    addToCart({ id: "gichichi", name: "Gichichi AA", base: 189, bag: "#24463a", grind: heroState.grind, size: heroState.size, mult: heroState.mult });
+    openCart();
+  });
+
+  /* ---- filter chips (visual only) ---- */
+  document.querySelectorAll(".filters .chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      chip.parentElement.querySelectorAll(".chip").forEach(function (s) { s.setAttribute("aria-pressed", "false"); });
+      chip.setAttribute("aria-pressed", "true");
+    });
+  });
+
+  /* ---- cart ---- */
+  var cart = [], code = null;
+  var linesEl = document.getElementById("lines");
+
+  function addToCart(item) {
+    var key = item.id + "|" + item.grind + "|" + item.size;
+    var found = cart.find(function (l) { return l.key === key; });
+    if (found) found.qty += 1;
+    else cart.push({ key: key, id: item.id, name: item.name, price: Math.round(item.base * item.mult), grind: item.grind, size: item.size, bag: item.bag, qty: 1 });
+    render();
+  }
+  function removeLine(key) { cart = cart.filter(function (l) { return l.key !== key; }); render(); }
+
+  function render() {
+    var count = cart.reduce(function (a, l) { return a + l.qty; }, 0);
+    document.getElementById("count").textContent = count;
+
+    if (!cart.length) {
+      linesEl.innerHTML = '<div class="empty">Din varukorg är tom.<br>Lägg till en påse färskrostat.</div>';
+    } else {
+      linesEl.innerHTML = "";
+      cart.forEach(function (l) {
+        var row = el("div", "line");
+        row.innerHTML =
+          '<div class="thumb" style="--bag:' + l.bag + '"></div>' +
+          '<div><div class="l-name">' + l.name + '</div><div class="l-var">' + l.grind + ' · ' + l.size + ' · ×' + l.qty + '</div></div>' +
+          '<div><div class="l-price num">' + kr(l.price * l.qty) + '</div><button class="rm" data-k="' + l.key + '">Ta bort</button></div>';
+        row.querySelector(".rm").addEventListener("click", function () { removeLine(l.key); });
+        linesEl.appendChild(row);
+      });
+    }
+
+    var sub = cart.reduce(function (a, l) { return a + l.price * l.qty; }, 0);
+    var discRow = document.getElementById("discRow");
+    var discAmt = 0;
+    if (code && DISCOUNTS[code] && sub > 0) {
+      discAmt = Math.round(sub * DISCOUNTS[code].value / 100);
+      discRow.hidden = false;
+      document.getElementById("discLab").textContent = DISCOUNTS[code].label;
+      document.getElementById("disc").textContent = "−" + kr(discAmt);
+    } else {
+      discRow.hidden = true;
+    }
+    document.getElementById("sub").textContent = kr(sub);
+    document.getElementById("tot").textContent = kr(sub - discAmt);
+  }
+
+  document.getElementById("applyCode").addEventListener("click", function () {
+    var v = document.getElementById("codeInput").value.trim().toUpperCase();
+    var inp = document.getElementById("codeInput");
+    if (DISCOUNTS[v]) { code = v; inp.style.borderColor = "var(--ok)"; }
+    else { code = null; inp.style.borderColor = "var(--amber)"; }
+    render();
+  });
+  document.getElementById("checkout").addEventListener("click", function () {
+    if (cart.length) document.getElementById("checkout").textContent = "Skapar order + fakturaunderlag…";
+  });
+
+  /* ---- drawer open/close ---- */
+  var cartEl = document.getElementById("cart"), overlay = document.getElementById("overlay");
+  function openCart() { cartEl.classList.add("open"); overlay.classList.add("open"); cartEl.setAttribute("aria-hidden", "false"); }
+  function closeCart() { cartEl.classList.remove("open"); overlay.classList.remove("open"); cartEl.setAttribute("aria-hidden", "true"); }
+  document.getElementById("cartBtn").addEventListener("click", openCart);
+  document.getElementById("closeCart").addEventListener("click", closeCart);
+  overlay.addEventListener("click", closeCart);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeCart(); });
+
+  /* ---- theme toggle ---- */
+  document.getElementById("theme").addEventListener("click", function () {
+    var root = document.documentElement;
+    var dark = root.getAttribute("data-theme") === "dark" ||
+      (!root.getAttribute("data-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    root.setAttribute("data-theme", dark ? "light" : "dark");
+  });
+
+  render();
+})();
+</script>

@@ -1,19 +1,26 @@
 import type {
+  AdminLogEntry,
   CapabilityGrant,
+  CreateTenantInput,
   Decision,
   DomainEvent,
   DomainEventInput,
   EntityRef,
+  IdentityLink,
   Jurisdiction,
   ModuleManifest,
   Node,
   PermissionKey,
+  PlatformActorId,
   PrincipalId,
+  ResolvedIdentity,
   RoleAssignment,
   RoleDefinition,
   ScopeId,
   StorageShape,
+  Tenant,
   TenantId,
+  TenantStatus,
 } from '@substrat-run/contracts';
 
 /**
@@ -128,16 +135,102 @@ export interface ModuleRegistration {
 }
 
 /**
- * Admin surface for enforcement input (design doc §4; testrun spec §9.2.5).
- * v0 is host-level; the human-checkpoint review workflow wraps this later.
+ * Admin surface for enforcement input (design doc §4; control-plane.md §4.4).
+ *
+ * Every mutation is a control-plane action: it takes a `PlatformActorId` — the
+ * authenticated staff subject, typed distinctly from a tenant `PrincipalId` so
+ * the compiler refuses to confuse them — and writes an append-only audit row
+ * stamped platform-side (actor, action, target, before/after, timestamp). The
+ * actor is never a principal in any tenant, and the record is never supplied by
+ * the caller. This is the one surface that must not be retrofitted (K-20): a
+ * surface that can act without a durable record of who acted is worse than none.
+ *
+ * Locally the actor is a dev stub (control-plane.md §6); real staff auth (SSO,
+ * MFA) gates EXPOSING this surface, not building it — D-16 cashed in.
  */
 export interface HostAdmin {
-  defineRole(tenantId: TenantId, role: RoleDefinition): void;
-  assignRole(assignment: RoleAssignment): void;
-  grant(grant: CapabilityGrant): void;
+  defineRole(actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition): void;
+  assignRole(actor: PlatformActorId, assignment: RoleAssignment): void;
+  grant(actor: PlatformActorId, grant: CapabilityGrant): void;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
-  grantToOrg(orgId: string, permission: PermissionKey, node: Node, entity?: EntityRef): void;
-  addMember(tenantId: TenantId, principal: PrincipalId, orgId: string): void;
+  grantToOrg(
+    actor: PlatformActorId,
+    orgId: string,
+    permission: PermissionKey,
+    node: Node,
+    entity?: EntityRef,
+  ): void;
+  addMember(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId, orgId: string): void;
+
+  // -- tenant registry (control-plane.md §4.1) -------------------------------
+
+  /**
+   * Persist a tenant. Idempotent on the id — re-creating an existing tenant is a
+   * no-op, not an error (control-plane.md §4.1). `status` starts `active` and
+   * `createdAt` is stamped host-side. This is what replaces "a tenant is a ULID
+   * nobody used before" with a real record.
+   */
+  createTenant(actor: PlatformActorId, input: CreateTenantInput): void;
+  /**
+   * Transition a tenant's status. `suspended` fails `getScope` closed for every
+   * scope under the tenant (K-3's path) — the containment lever for non-payment
+   * or an incident, reversible without deleting anything.
+   */
+  setTenantStatus(actor: PlatformActorId, tenantId: TenantId, status: TenantStatus): void;
+  /** The tenant registry — the directory's inventory (control-plane.md §4.5 console item 1). */
+  listTenants(): Tenant[];
+  getTenant(tenantId: TenantId): Tenant | undefined;
+
+  // -- scope lifecycle (control-plane.md §4.2) -------------------------------
+  // The §3.3 transitions that existed only on paper. Each fails closed on an
+  // illegal transition, is audited, and (for suspend/archive) makes getScope
+  // fail closed for that scope. `provisionScope` is the entry transition and
+  // lives on ScopeHost (it is async — it applies migrations).
+
+  /** active → suspended. Reversible containment (incident, dispute). */
+  suspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  /** suspended → active. */
+  unsuspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  /** active|suspended → archived. Stops the active-scope meter (§9). */
+  archiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  /**
+   * archived → active. A RESTORE, never a flag flip (control-plane.md §4.2):
+   * §9's meter can only charge on "active scope" if un-archiving is a deliberate,
+   * audited act. Jurisdiction is untouched — it is fixed at provisioning (K-7).
+   */
+  unarchiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+
+  // -- entitlements (control-plane.md §4.3) ----------------------------------
+  // What finally makes `manifest.entitlementKey` mean something (D-20). An
+  // entitlement is a per-tenant SKU flag; a module whose key the tenant does not
+  // hold does not load for that tenant — its operations do not resolve, exactly
+  // as if it had never been registered. Granting one is the point of the console.
+
+  /** Turn a SKU flag on for a tenant. Idempotent; audited. */
+  grantEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
+  /** Turn it off. A tenant's scopes lose access to that module's operations. */
+  revokeEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
+  /** The tenant's held SKU flags (control-plane.md §5 meter 2). */
+  listEntitlements(tenantId: TenantId): string[];
+
+  // -- identity (D-16; control-plane.md §6) ----------------------------------
+  // The neutral seam an auth adapter maps into. An external identity
+  // (provider + externalId — Better Auth, an OIDC issuer, …) binds to a
+  // principal and its home tenant/scope. The kernel never learns HOW a caller
+  // authenticated, only WHO they are; the mechanism stays a swappable edge
+  // adapter. Authentication only — authorization remains roles/grants.
+
+  /** Bind an external identity to a principal + home node. Idempotent on (provider, externalId); audited. */
+  linkIdentity(actor: PlatformActorId, input: IdentityLink): void;
+  /** Resolve an external identity to its principal + home node — the auth adapter's read path. */
+  resolveIdentity(provider: string, externalId: string): ResolvedIdentity | undefined;
+
+  /**
+   * The append-only admin audit trail, newest-comparable last (ULID order is
+   * chronological). Read path for the console history and the permission-diff
+   * human checkpoint (control-plane.md §4.5).
+   */
+  auditLog(filter?: { tenantId?: TenantId }): AdminLogEntry[];
 }
 
 export interface ProvisionScopeInput {
@@ -155,8 +248,13 @@ export interface ScopeHost {
    */
   getScope(principal: PrincipalId, tenantId: TenantId, scopeId: ScopeId): Promise<ScopeStub>;
 
-  /** Idempotent; journaled. Jurisdiction is fixed here forever (K-7). */
-  provisionScope(input: ProvisionScopeInput): Promise<void>;
+  /**
+   * The entry scope-lifecycle transition (control-plane.md §4.2): idempotent,
+   * journaled, audited. Requires an existing ACTIVE tenant — a scope with no
+   * tenant record is the "tenant is an FK string" hole §4.1 closes, so it fails
+   * closed. Jurisdiction is fixed here forever (K-7).
+   */
+  provisionScope(actor: PlatformActorId, input: ProvisionScopeInput): Promise<void>;
 
   /** Enforcement-input writes: roles, assignments, grants, membership. */
   readonly admin: HostAdmin;

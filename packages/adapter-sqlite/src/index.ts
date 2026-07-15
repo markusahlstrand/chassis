@@ -2,25 +2,39 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
+  adminLogEntry,
+  createTenantInput,
   domainEvent,
   domainEventInput,
   eventId,
+  identityLink,
   instant,
   moduleManifest,
   objectRef,
   principalId,
+  resolvedIdentity,
   roleDefinition,
+  tenant as tenantSchema,
+  type AdminAction,
+  type AdminLogEntry,
   type CapabilityGrant,
+  type CreateTenantInput,
   type DomainEvent,
   type DomainEventInput,
   type EntityRef,
+  type IdentityLink,
   type Node,
   type PermissionKey,
+  type PlatformActorId,
   type PrincipalId,
+  type ResolvedIdentity,
   type RoleAssignment,
   type RoleDefinition,
   type ScopeId,
+  type ScopeStatus,
+  type Tenant,
   type TenantId,
+  type TenantStatus,
 } from '@substrat-run/contracts';
 import {
   ulid,
@@ -107,6 +121,26 @@ const KERNEL_DDL = `
   );
 `;
 
+interface TenantRow {
+  tenant_id: string;
+  slug: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
+
+interface AdminLogRow {
+  id: string;
+  actor: string;
+  action: string;
+  tenant_id: string;
+  scope_id: string | null;
+  vertical: string | null;
+  before: string | null;
+  after: string | null;
+  at: string;
+}
+
 interface OutboxRow {
   id: string;
   type: string;
@@ -138,6 +172,8 @@ export class SqliteScopeHost implements ScopeHost {
   /** operation names whose default binding some manifest withdrew (K-17). */
   private readonly withdrawn = new Map<string, string>(); // operation → withdrawing module
   private readonly relations = new Map<string, Set<string>>();
+  /** operation name → its owning module's entitlementKey (§4.3 gate). */
+  private readonly operationEntitlement = new Map<string, string>();
   private readonly roles = new Map<string, RoleDefinition>(); // 'tenantId/roleKey'
   private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
 
@@ -147,6 +183,15 @@ export class SqliteScopeHost implements ScopeHost {
     this.directory = new Database(join(this.dir, '_directory.sqlite'));
     this.directory.pragma('journal_mode = WAL');
     this.directory.exec(`
+      -- The tenant registry (control-plane.md §4.1). Before this a tenant was an
+      -- FK string on scope rows; now it is a real record with a lifecycle status.
+      CREATE TABLE IF NOT EXISTS tenants (
+        tenant_id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS scopes (
         scope_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -170,6 +215,41 @@ export class SqliteScopeHost implements ScopeHost {
         permissions TEXT NOT NULL,
         source TEXT NOT NULL,
         PRIMARY KEY (tenant_id, role_key)
+      );
+      -- Per-tenant SKU flags (control-plane.md §4.3). A module loads for a tenant
+      -- only if the tenant holds its manifest.entitlementKey — default-deny.
+      CREATE TABLE IF NOT EXISTS _substrat_entitlements (
+        tenant_id TEXT NOT NULL,
+        entitlement_key TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, entitlement_key)
+      );
+      -- The identity seam (D-16; control-plane.md §6). An external identity
+      -- (provider + external_id — an auth adapter at the edge) maps to a
+      -- principal + home node. Provider-keyed so Better Auth, an OIDC issuer, or
+      -- several at once coexist. Authentication input only — authorization stays
+      -- in the tuples above.
+      CREATE TABLE IF NOT EXISTS _substrat_identities (
+        provider     TEXT NOT NULL,
+        external_id  TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        tenant_id    TEXT NOT NULL,
+        scope_id     TEXT,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (provider, external_id)
+      );
+      -- Append-only control-plane audit trail (control-plane.md §4.4). Lives in
+      -- the directory, not a scope DB: it records cross-tenant staff actions and
+      -- is stamped host-side. Never UPDATEd, never DELETEd.
+      CREATE TABLE IF NOT EXISTS _substrat_admin_log (
+        id TEXT PRIMARY KEY,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        scope_id TEXT,
+        vertical TEXT,
+        before TEXT,
+        after TEXT,
+        at TEXT NOT NULL
       );
     `);
     this.loadRoles();
@@ -260,6 +340,9 @@ export class SqliteScopeHost implements ScopeHost {
     }
     for (const [name, handler] of Object.entries(registration.operations ?? {})) {
       this.defineOperation(name, handler);
+      // Record which SKU flag gates this operation (§4.3). Bare defineOperation
+      // bindings (tests, glue) carry no manifest and stay ungated.
+      this.operationEntitlement.set(name, manifest.entitlementKey);
     }
   }
 
@@ -269,11 +352,25 @@ export class SqliteScopeHost implements ScopeHost {
     this.operations.set(name, handler as OperationHandler<never, unknown>);
   }
 
-  async provisionScope(input: ProvisionScopeInput): Promise<void> {
-    this.directory
+  async provisionScope(actor: PlatformActorId, input: ProvisionScopeInput): Promise<void> {
+    // Mandatory active tenant (control-plane.md §4.1/§4.2): a scope with no
+    // tenant record is the "tenant is an FK string" hole the registry closes —
+    // fail closed, never silently create the scope orphaned.
+    const tenantRow = this.directory
+      .prepare('SELECT status FROM tenants WHERE tenant_id = ?')
+      .get(input.tenantId) as { status: string } | undefined;
+    if (!tenantRow) {
+      throw new Error(`cannot provision scope under unknown tenant: ${input.tenantId}`);
+    }
+    if (tenantRow.status !== 'active') {
+      throw new Error(
+        `cannot provision scope under non-active tenant (status: ${tenantRow.status}): ${input.tenantId}`,
+      );
+    }
+    const info = this.directory
       .prepare(
-        `INSERT OR IGNORE INTO scopes (scope_id, tenant_id, storage_shape, jurisdiction, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO scopes (scope_id, tenant_id, storage_shape, jurisdiction, status, created_at)
+         VALUES (?, ?, ?, ?, 'active', ?)`,
       )
       .run(
         input.scopeId,
@@ -284,6 +381,16 @@ export class SqliteScopeHost implements ScopeHost {
       );
     const rt = this.runtime(input.tenantId, input.scopeId);
     await this.applyPendingMigrations(rt);
+    // Audit a real provision only; an idempotent re-provision changed nothing.
+    if (info.changes > 0) {
+      this.recordAdmin(
+        actor,
+        'provisionScope',
+        { tenantId: input.tenantId, scopeId: input.scopeId },
+        null,
+        { storageShape: input.storageShape ?? 'A', jurisdiction: input.jurisdiction ?? null },
+      );
+    }
   }
 
   async getScope(
@@ -292,10 +399,28 @@ export class SqliteScopeHost implements ScopeHost {
     scopeId: ScopeId,
   ): Promise<ScopeStub> {
     const row = this.directory
-      .prepare('SELECT tenant_id FROM scopes WHERE scope_id = ?')
-      .get(scopeId) as { tenant_id: string } | undefined;
+      .prepare('SELECT tenant_id, status FROM scopes WHERE scope_id = ?')
+      .get(scopeId) as { tenant_id: string; status: string } | undefined;
     if (!row || row.tenant_id !== tenantId) {
       throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
+    }
+
+    // Lifecycle gates (control-plane.md §4.1/§4.2), all the K-3 fail-closed path.
+    // The tenant record is mandatory: every scope has a tenant with a status
+    // (provisioning enforces it), so a missing one is corruption, not a legacy
+    // scope. A non-active tenant fails every scope under it; a non-active scope
+    // fails on its own — this is what makes suspend/archive actually contain.
+    const tenantRow = this.directory
+      .prepare('SELECT status FROM tenants WHERE tenant_id = ?')
+      .get(tenantId) as { status: string } | undefined;
+    if (!tenantRow) {
+      throw new Error(`scope has no tenant record: (${tenantId}, ${scopeId})`);
+    }
+    if (tenantRow.status !== 'active') {
+      throw new Error(`tenant not active (status: ${tenantRow.status}): ${tenantId}`);
+    }
+    if (row.status !== 'active') {
+      throw new Error(`scope not active (status: ${row.status}): ${scopeId}`);
     }
 
     const rt = this.runtime(tenantId, scopeId);
@@ -309,6 +434,18 @@ export class SqliteScopeHost implements ScopeHost {
       invoke: <O, I>(operation: string, input?: I): Promise<O> => {
         const handler = operations.get(operation);
         if (!handler) return Promise.reject(new Error(`unknown operation: ${operation}`));
+        // Entitlement gate (control-plane.md §4.3): a module loads for a tenant
+        // only if the tenant holds its SKU flag. Checked per invoke — the simple,
+        // uncached path (K-OQ5); a DO-cached variant is a later benchmark call.
+        // Fails closed the same way withdrawal does: the operation is unavailable.
+        const requiredKey = this.operationEntitlement.get(operation);
+        if (requiredKey && !this.tenantHoldsEntitlement(tenantId, requiredKey)) {
+          return Promise.reject(
+            new Error(
+              `operation not entitled: ${operation} — tenant does not hold '${requiredKey}'`,
+            ),
+          );
+        }
         return rt.actor.enqueue(async () => {
           const clonedInput = structuredClone(input);
           rt.db.exec('BEGIN IMMEDIATE');
@@ -443,7 +580,91 @@ export class SqliteScopeHost implements ScopeHost {
   // Admin surface (enforcement input, §9.2.5)
   // -------------------------------------------------------------------------
 
+  /**
+   * The single audit choke point (control-plane.md §4.4). EVERY control-plane
+   * mutation — here and `provisionScope` — routes through this one method, so
+   * "no mutation without a durable record" holds by construction rather than by
+   * remembering a call per method. `before` is captured only where cheaply
+   * readable; idempotent upserts with no cheap prior state pass `before: null`.
+   */
+  private recordAdmin(
+    actor: PlatformActorId,
+    action: AdminAction,
+    target: { tenantId: TenantId; scopeId?: ScopeId | null; vertical?: string | null },
+    before: unknown,
+    after: unknown,
+  ): void {
+    this.directory
+      .prepare(
+        `INSERT INTO _substrat_admin_log
+           (id, actor, action, tenant_id, scope_id, vertical, before, after, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        ulid(),
+        actor,
+        action,
+        target.tenantId,
+        target.scopeId ?? null,
+        target.vertical ?? null,
+        before == null ? null : JSON.stringify(before),
+        after == null ? null : JSON.stringify(after),
+        new Date().toISOString(),
+      );
+  }
+
+  private tenantHoldsEntitlement(tenantId: TenantId, key: string): boolean {
+    return (
+      this.directory
+        .prepare('SELECT 1 FROM _substrat_entitlements WHERE tenant_id = ? AND entitlement_key = ?')
+        .get(tenantId, key) !== undefined
+    );
+  }
+
   private buildAdmin(): HostAdmin {
+    const mapTenant = (r: TenantRow): Tenant =>
+      tenantSchema.parse({
+        id: r.tenant_id,
+        slug: r.slug,
+        name: r.name,
+        status: r.status,
+        createdAt: r.created_at,
+      });
+    const readTenant = (id: TenantId): Tenant | undefined => {
+      const r = this.directory.prepare('SELECT * FROM tenants WHERE tenant_id = ?').get(id) as
+        | TenantRow
+        | undefined;
+      return r ? mapTenant(r) : undefined;
+    };
+
+    // Scope lifecycle transition (control-plane.md §4.2): validate ownership,
+    // enforce the legal transition graph (fail closed on an illegal one), flip
+    // the status, and audit before/after. un-archive is just another entry here
+    // — an explicit, audited restore, never a silent flag flip.
+    const transitionScope = (
+      actor: PlatformActorId,
+      action: AdminAction,
+      tenantId: TenantId,
+      scopeId: ScopeId,
+      from: ScopeStatus[],
+      to: ScopeStatus,
+    ) => {
+      const row = this.directory
+        .prepare('SELECT tenant_id, status FROM scopes WHERE scope_id = ?')
+        .get(scopeId) as { tenant_id: string; status: string } | undefined;
+      if (!row || row.tenant_id !== tenantId) {
+        throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
+      }
+      if (!from.includes(row.status as ScopeStatus)) {
+        throw new Error(
+          `illegal scope transition for ${action}: ${row.status} → ${to} ` +
+            `(allowed from: ${from.join('|')})`,
+        );
+      }
+      this.directory.prepare('UPDATE scopes SET status = ? WHERE scope_id = ?').run(to, scopeId);
+      this.recordAdmin(actor, action, { tenantId, scopeId }, { status: row.status }, { status: to });
+    };
+
     const writeTenantTuple = (
       tenantId: string,
       subject: string,
@@ -505,8 +726,9 @@ export class SqliteScopeHost implements ScopeHost {
     };
 
     return {
-      defineRole: (tenantId: TenantId, role: RoleDefinition) => {
+      defineRole: (actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition) => {
         const parsed = roleDefinition.parse(role);
+        const before = this.roles.get(`${tenantId}/${parsed.key}`) ?? null;
         this.directory
           .prepare(
             `INSERT OR REPLACE INTO _substrat_roles (tenant_id, role_key, permissions, source)
@@ -514,8 +736,9 @@ export class SqliteScopeHost implements ScopeHost {
           )
           .run(tenantId, parsed.key, JSON.stringify(parsed.permissions), String(parsed.source));
         this.roles.set(`${tenantId}/${parsed.key}`, parsed);
+        this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
       },
-      assignRole: (assignment: RoleAssignment) => {
+      assignRole: (actor: PlatformActorId, assignment: RoleAssignment) => {
         const subject = `principal:${assignment.principalId}`;
         if (assignment.node.scopeId) {
           writeScopeTuple(
@@ -532,8 +755,15 @@ export class SqliteScopeHost implements ScopeHost {
             `tenant:${assignment.node.tenantId}`,
           );
         }
+        this.recordAdmin(
+          actor,
+          'assignRole',
+          { tenantId: assignment.node.tenantId, scopeId: assignment.node.scopeId },
+          null,
+          assignment,
+        );
       },
-      grant: (grant: CapabilityGrant) => {
+      grant: (actor: PlatformActorId, grant: CapabilityGrant) => {
         writeGrant(
           `principal:${grant.principalId}`,
           grant.permission,
@@ -541,12 +771,159 @@ export class SqliteScopeHost implements ScopeHost {
           grant.entity,
           grant.expiresAt,
         );
+        this.recordAdmin(
+          actor,
+          'grant',
+          { tenantId: grant.node.tenantId, scopeId: grant.node.scopeId },
+          null,
+          grant,
+        );
       },
-      grantToOrg: (orgId, permission, node, entity) => {
+      grantToOrg: (actor, orgId, permission, node, entity) => {
         writeGrant(`org:${orgId}`, permission, node, entity);
+        this.recordAdmin(
+          actor,
+          'grantToOrg',
+          { tenantId: node.tenantId, scopeId: node.scopeId },
+          null,
+          { orgId, permission, node, entity },
+        );
       },
-      addMember: (tenantId, principal, orgId) => {
+      addMember: (actor, tenantId, principal, orgId) => {
         writeTenantTuple(tenantId, `principal:${principal}`, 'member', `org:${orgId}`);
+        this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
+      },
+      createTenant: (actor: PlatformActorId, input: CreateTenantInput) => {
+        const parsed = createTenantInput.parse(input);
+        const info = this.directory
+          .prepare(
+            `INSERT OR IGNORE INTO tenants (tenant_id, slug, name, status, created_at)
+             VALUES (?, ?, ?, 'active', ?)`,
+          )
+          .run(parsed.id, parsed.slug, parsed.name, new Date().toISOString());
+        // Idempotent: re-creating an existing tenant is a no-op, and a no-op is
+        // not audited — nothing changed.
+        if (info.changes === 0) return;
+        this.recordAdmin(actor, 'createTenant', { tenantId: parsed.id }, null, readTenant(parsed.id));
+      },
+      setTenantStatus: (actor: PlatformActorId, tenantId: TenantId, status: TenantStatus) => {
+        const before = readTenant(tenantId);
+        if (!before) throw new Error(`unknown tenant: ${tenantId}`);
+        this.directory
+          .prepare('UPDATE tenants SET status = ? WHERE tenant_id = ?')
+          .run(status, tenantId);
+        this.recordAdmin(
+          actor,
+          'setTenantStatus',
+          { tenantId },
+          { status: before.status },
+          { status },
+        );
+      },
+      listTenants: (): Tenant[] =>
+        (this.directory.prepare('SELECT * FROM tenants ORDER BY tenant_id').all() as TenantRow[]).map(
+          mapTenant,
+        ),
+      getTenant: (tenantId: TenantId): Tenant | undefined => readTenant(tenantId),
+      suspendScope: (actor, tenantId, scopeId) =>
+        transitionScope(actor, 'suspendScope', tenantId, scopeId, ['active'], 'suspended'),
+      unsuspendScope: (actor, tenantId, scopeId) =>
+        transitionScope(actor, 'unsuspendScope', tenantId, scopeId, ['suspended'], 'active'),
+      archiveScope: (actor, tenantId, scopeId) =>
+        transitionScope(actor, 'archiveScope', tenantId, scopeId, ['active', 'suspended'], 'archived'),
+      unarchiveScope: (actor, tenantId, scopeId) =>
+        transitionScope(actor, 'unarchiveScope', tenantId, scopeId, ['archived'], 'active'),
+      grantEntitlement: (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
+        const info = this.directory
+          .prepare(
+            `INSERT OR IGNORE INTO _substrat_entitlements (tenant_id, entitlement_key)
+             VALUES (?, ?)`,
+          )
+          .run(tenantId, entitlementKey);
+        // Idempotent: granting a held flag changed nothing, so it is not audited.
+        if (info.changes === 0) return;
+        this.recordAdmin(actor, 'grantEntitlement', { tenantId }, null, { entitlementKey });
+      },
+      revokeEntitlement: (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
+        const info = this.directory
+          .prepare(
+            'DELETE FROM _substrat_entitlements WHERE tenant_id = ? AND entitlement_key = ?',
+          )
+          .run(tenantId, entitlementKey);
+        if (info.changes === 0) return; // nothing held, nothing changed
+        this.recordAdmin(actor, 'revokeEntitlement', { tenantId }, { entitlementKey }, null);
+      },
+      listEntitlements: (tenantId: TenantId): string[] =>
+        (
+          this.directory
+            .prepare(
+              'SELECT entitlement_key FROM _substrat_entitlements WHERE tenant_id = ? ORDER BY entitlement_key',
+            )
+            .all(tenantId) as { entitlement_key: string }[]
+        ).map((r) => r.entitlement_key),
+      linkIdentity: (actor: PlatformActorId, input: IdentityLink) => {
+        const parsed = identityLink.parse(input);
+        const info = this.directory
+          .prepare(
+            `INSERT OR IGNORE INTO _substrat_identities
+               (provider, external_id, principal_id, tenant_id, scope_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            parsed.provider,
+            parsed.externalId,
+            parsed.principal,
+            parsed.tenantId,
+            parsed.scopeId ?? null,
+            new Date().toISOString(),
+          );
+        // Idempotent: an identity already bound is a no-op, and a no-op is not audited.
+        if (info.changes === 0) return;
+        this.recordAdmin(
+          actor,
+          'linkIdentity',
+          { tenantId: parsed.tenantId, scopeId: parsed.scopeId },
+          null,
+          { provider: parsed.provider, externalId: parsed.externalId, principal: parsed.principal },
+        );
+      },
+      resolveIdentity: (provider: string, externalId: string): ResolvedIdentity | undefined => {
+        const row = this.directory
+          .prepare(
+            `SELECT principal_id, tenant_id, scope_id FROM _substrat_identities
+             WHERE provider = ? AND external_id = ?`,
+          )
+          .get(provider, externalId) as
+          | { principal_id: string; tenant_id: string; scope_id: string | null }
+          | undefined;
+        if (!row) return undefined;
+        return resolvedIdentity.parse({
+          principal: row.principal_id,
+          tenantId: row.tenant_id,
+          scopeId: row.scope_id,
+        });
+      },
+      auditLog: (filter?: { tenantId?: TenantId }): AdminLogEntry[] => {
+        const rows = (
+          filter?.tenantId
+            ? this.directory
+                .prepare('SELECT * FROM _substrat_admin_log WHERE tenant_id = ? ORDER BY id')
+                .all(filter.tenantId)
+            : this.directory.prepare('SELECT * FROM _substrat_admin_log ORDER BY id').all()
+        ) as AdminLogRow[];
+        return rows.map((r) =>
+          adminLogEntry.parse({
+            id: r.id,
+            actor: r.actor,
+            action: r.action,
+            tenantId: r.tenant_id,
+            scopeId: r.scope_id,
+            vertical: r.vertical,
+            before: r.before === null ? null : JSON.parse(r.before),
+            after: r.after === null ? null : JSON.parse(r.after),
+            at: r.at,
+          }),
+        );
       },
     };
   }

@@ -15,6 +15,12 @@ export type ScopeId = z.infer<typeof scopeId>;
 export const principalId = z.string().regex(ULID).brand<'PrincipalId'>();
 export type PrincipalId = z.infer<typeof principalId>;
 
+// A platform-staff actor — the subject of every control-plane mutation (D-30, K-20).
+// Branded DISTINCTLY from PrincipalId on purpose: a platform actor is not a principal
+// in any tenant, and the compiler must refuse to confuse the two.
+export const platformActorId = z.string().regex(ULID).brand<'PlatformActorId'>();
+export type PlatformActorId = z.infer<typeof platformActorId>;
+
 export const eventId = z.string().regex(ULID).brand<'EventId'>();
 export type EventId = z.infer<typeof eventId>;
 

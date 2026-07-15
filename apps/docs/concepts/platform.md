@@ -8,11 +8,12 @@ where it does.
 
 ::: info Status
 The platform layer is specified in full and implemented in part. Shipping today in the
-pure-SQLite adapter: **scope provisioning**, the **directory**, and the **host admin**
-surface (roles, grants, org membership). Everything marked *(planned)* below — tenant
-registry, lifecycle transitions, the entitlement gate, custom-domain routing, and the ops
-console — is designed and not yet built. This page marks the difference rather than
-blurring it.
+pure-SQLite adapter: **scope provisioning**, the **directory**, the **tenant registry**,
+**tenant + scope lifecycle transitions** (with fail-closed gating), the **entitlement
+gate**, and the **host admin** surface — every mutation of which takes a platform actor and
+writes an append-only **audit log**. Everything marked *(planned)* below — custom-domain
+routing and the ops **console** UI — is designed and not yet built. This page marks the
+difference rather than blurring it.
 :::
 
 ## One platform, N deployments
@@ -26,11 +27,11 @@ between what's shared and what isn't is the design:
 |---|---|---|
 | **Routing** | Resolves `hostname → (tenant, scope, vertical)` *(planned)* | — |
 | **Custom domains** | Hostname issuance, DNS validation, certificate lifecycle — part of scope provisioning *(planned)* | — |
-| **Tenancy** | Tenant registry *(planned)*, scope directory, provisioning lifecycle | — |
+| **Tenancy** | Tenant registry, scope directory, provisioning lifecycle | — |
 | **Identity** | Auth callbacks, principal derivation, capability minting | — |
-| **Entitlements** | The store and the module-load gate *(planned)* | The `entitlementKey` each manifest declares |
+| **Entitlements** | The store and the module-load gate | The `entitlementKey` each manifest declares |
 | **History & analytics** | The event spine and its history tier | — |
-| **Admin** | Directory, audit log, ops console *(planned)* | — |
+| **Admin** | Directory, audit log; ops console *(planned)* | — |
 | **Execution** | — | **The scope's code**: kernel + engines + your modules, and their migrations |
 
 Everything a vertical would hate to rebuild is already shared. The only per-vertical thing
@@ -75,8 +76,9 @@ it's *unreachable*.
 `provisioning → active → suspended ⇄ active → archiving → archived`
 
 Provisioning is idempotent and journaled, safe to re-run and safe to drive from a
-reconciliation sweep ([Tenants & scopes](/concepts/tenancy)). The rest of the lifecycle
-*(planned)* is control-plane work:
+reconciliation sweep ([Tenants & scopes](/concepts/tenancy)). Provisioning requires an
+existing **active tenant** — a scope can never be orphaned. The rest of the lifecycle is
+control-plane work; every transition is validated (an illegal one fails closed) and audited:
 
 - **Suspend** fails `getScope` closed for every scope under the tenant. It's how an incident
   or a non-payment is contained without deleting anything — the same fail-closed path that
@@ -89,7 +91,8 @@ reconciliation sweep ([Tenants & scopes](/concepts/tenancy)). The rest of the li
 ## Entitlements gate modules, not features
 
 Every [manifest](/concepts/modules) declares an `entitlementKey`. The platform holds a set of
-entitlements per tenant, and checks it **at module load** *(planned)*.
+entitlements per tenant, and checks it **when a scope invokes an operation** — default-deny,
+uncached today (a DO-cached variant is an open benchmark).
 
 A module whose key the tenant does not hold **does not register** — its operations simply do
 not resolve, exactly as if the module had never existed. This is the same mechanism as a
@@ -126,7 +129,8 @@ scope-shaped data, and can perfectly well be a vertical on Substrat like any oth
 ## What this means for you
 
 - **Don't build tenancy, domains, audit, or identity.** They're below you. Verticals that
-  rebuild them are a smell that the kernel drew a line wrong.
+  rebuild them are a smell that the kernel drew a line wrong. Authentication in particular is
+  a swappable edge adapter — see [authentication &amp; identity](/concepts/identity).
 - **Your scopes carry your code only.** Your migrations are ordered against your modules and
   the engines you depend on — never against a stranger's vertical.
 - **You upgrade on your schedule.** Per-vertical deployments exist so that engine versions,

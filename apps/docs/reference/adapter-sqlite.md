@@ -22,7 +22,8 @@ const host = new SqliteScopeHost({
   checker: UNSAFE_allowAllChecker,  // omit for the secure default: deny everything
 });
 
-await host.provisionScope({ tenantId, scopeId, jurisdiction: 'eu' }); // idempotent
+host.admin.createTenant(actor, { id: tenantId, slug, name });        // tenant first
+await host.provisionScope(actor, { tenantId, scopeId, jurisdiction: 'eu' }); // idempotent
 const stub = await host.getScope(principal, tenantId, scopeId);
 await stub.invoke('workorder/create', input);
 await host.close();
@@ -47,7 +48,7 @@ Cloudflare adapter must pass unchanged.
 Scope databases run in WAL mode and can be opened read-only with any SQLite tool:
 
 ```sh
-sqlite3 ./data/<scopeId>.sqlite '.tables'
+sqlite3 ./data/<tenantId>__<scopeId>.sqlite '.tables'
 sqlite3 ./data/_directory.sqlite 'SELECT * FROM scopes;'
 ```
 

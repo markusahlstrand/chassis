@@ -2,8 +2,9 @@
 
 `@substrat-run/engine-invoicing` — accumulates **invoice bases** (Swedish: *fakturaunderlag*)
 from billable events and makes them **immutable once exported**. It is the reference
-example of star-topology composition: it consumes the work-order engine's events with
-zero imports from it.
+example of star-topology composition *and* cross-domain reuse: it builds invoice bases
+from events in more than one domain — work-order completions and retail orders — with
+zero imports from either producer.
 
 ## What it is — and isn't
 
@@ -15,13 +16,22 @@ accounting systems, reached through connectors.
 
 ## How lines arrive: snapshot, not join
 
-The engine declares one consumption in its manifest:
+The engine declares its consumptions in its manifest — **additively**, one domain at a time:
 
 ```ts
 events: {
-  consumes: [{ type: 'workorder.completed', schemaVersion: 1 }],
+  consumes: [
+    { type: 'workorder.completed', schemaVersion: 1 },  // the original producer
+    { type: 'commerce.order-placed', schemaVersion: 1 }, // added for the shop vertical
+  ],
 }
 ```
+
+Each event has its **own** consumer with its **own** Zod view of the payload. Adding the
+second was a pure additive change (D-28): a new `consumes` entry, a new parser, a new
+handler — no migration, no permission, the `workorder.completed` path untouched. That is
+engine reuse across verticals, demonstrated — the same immutability and snapshot machinery
+serves a field-service firm and a coffee roaster.
 
 When a work order completes, the consumer:
 
@@ -49,8 +59,12 @@ doesn't — which is exactly what an invoice basis must guarantee. Provenance is
 `EntityRef` columns, so every line can answer "where did you come from?" without the
 engine ever querying the work-order tables.
 
-Consumers are delivered **at-least-once** and run under a system actor; the find-or-create
-plus the kernel's delivery journal keep the handler idempotent.
+The `commerce.order-placed` consumer is the same four steps with its own payload parse and
+`source_type: 'order'` (a discount arrives as a negative line, so the underlag total stays
+net) — snapshot-not-join is domain-agnostic.
+
+Consumers are delivered **at-least-once** and run under a system actor; find-or-create, the
+kernel's delivery journal, and a source-id guard keep the handlers idempotent on redelivery.
 
 ## The immutability invariant
 

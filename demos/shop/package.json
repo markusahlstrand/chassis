@@ -1,0 +1,32 @@
+{
+  "name": "@substrat-run/demo-shop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "E-commerce demo vertical (Kallkälla Kaffe) — see spec/concept.md",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "server": "tsx src/server.ts",
+    "dev": "concurrently -n api,web -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\"",
+    "demo": "pnpm run dev"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@substrat-run/adapter-sqlite": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/engine-invoicing": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
+    "better-auth": "^1.6.23",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.6.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "concurrently": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
