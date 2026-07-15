@@ -19,6 +19,11 @@ import * as schema from './auth-schema.js';
  *
  * The instance is rebuilt per request: the coordinator is stateless (durable
  * state lives in D1 and the DOs), matching how `hostFor` rebuilds the host.
+ *
+ * `origin` is derived from the incoming request URL by the caller and used as the
+ * baseURL + trusted origin, so Better Auth's origin/CSRF check passes on ANY
+ * deployment (localhost dev, *.workers.dev, a custom domain) with no config. An
+ * explicit `BASE_URL` env var, if set, is also trusted.
  */
 export interface AuthEnv {
   AUTH_DB: D1Database;
@@ -26,15 +31,16 @@ export interface AuthEnv {
   BASE_URL?: string;
 }
 
-export function buildAuth(env: AuthEnv) {
-  const baseURL = env.BASE_URL ?? 'http://localhost:8799';
+export function buildAuth(env: AuthEnv, origin?: string) {
+  const baseURL = origin ?? env.BASE_URL ?? 'http://localhost:8799';
+  const trustedOrigins = [...new Set([baseURL, env.BASE_URL].filter((o): o is string => !!o))];
   const db = drizzle(env.AUTH_DB, { schema });
   return betterAuth({
     database: drizzleAdapter(db, { provider: 'sqlite', schema }),
     emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 8 },
     secret: env.BETTER_AUTH_SECRET ?? 'dev-only-secret-substrat-fsm-demo-32chars',
     baseURL,
-    trustedOrigins: [baseURL, 'http://localhost:8799'],
+    trustedOrigins,
   });
 }
 

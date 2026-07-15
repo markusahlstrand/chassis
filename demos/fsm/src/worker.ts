@@ -73,14 +73,18 @@ function hostFor(env: Env): CloudflareScopeHost {
   return host;
 }
 
+/** The request's own origin — Better Auth trusts it as baseURL, so login works on
+ * any deployment (localhost, *.workers.dev, custom domain) with no config. */
+const originOf = (req: Request): string => new URL(req.url).origin;
+
 /**
  * The mounted auth seam: Better Auth (session cookie). The kernel only ever
  * receives the resolved `PrincipalId`. The `x-principal` dev-header adapter is
  * an impersonation bypass by design, so it is mounted ONLY when
  * `ALLOW_DEV_HEADER=true` (local dev) — secure by default, off in production.
  */
-function authFor(env: Env): { auth: Auth; host: CloudflareScopeHost; adapters: AuthAdapter[] } {
-  const auth = buildAuth(env);
+function authFor(env: Env, origin: string): { auth: Auth; host: CloudflareScopeHost; adapters: AuthAdapter[] } {
+  const auth = buildAuth(env, origin);
   const host = hostFor(env);
   const adapters: AuthAdapter[] = [betterAuthAdapter(auth, host, NODE)];
   if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter(NODE));
@@ -91,7 +95,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // Edge authentication (M3): Better Auth owns identity/credentials/sessions in
 // D1, mounted under /api/auth/*. A per-request instance (stateless coordinator).
-app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env).handler(c.req.raw));
+app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env, originOf(c.req.raw)).handler(c.req.raw));
 
 // One-time (idempotent) provisioning of the demo world.
 app.post('/api/seed', async (c) => {
@@ -127,7 +131,7 @@ app.post('/api/seed', async (c) => {
   // Seed a Better Auth login for each persona and bind it to that persona's
   // fixed principal through the neutral identity seam (idempotent). Logging in
   // *is* that principal — the kernel enforces exactly its permissions.
-  const auth = buildAuth(c.env);
+  const auth = buildAuth(c.env, originOf(c.req.raw));
   const logins: Record<string, string> = {};
   for (const p of PERSONAS) {
     let userId: string | undefined;
@@ -158,7 +162,7 @@ app.post('/api/seed', async (c) => {
 // A protected data route resolves the caller across the mounted adapters, then
 // getScope for the fixed demo tenant/scope. No adapter matched → 401 (fail closed).
 async function stub(c: { env: Env; req: { raw: Request } }) {
-  const { host, adapters } = authFor(c.env);
+  const { host, adapters } = authFor(c.env, originOf(c.req.raw));
   const result = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!result) throw new HTTPException(401, { message: 'unauthorized' });
   return host.getScope(result.principal, T, S);
@@ -166,7 +170,7 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
 
 // The resolved identity behind the current request (principal, display, role), or 401.
 app.get('/api/me', async (c) => {
-  const { adapters } = authFor(c.env);
+  const { adapters } = authFor(c.env, originOf(c.req.raw));
   const result = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!result) return c.json({ error: 'unauthorized' }, 401);
   return c.json({
