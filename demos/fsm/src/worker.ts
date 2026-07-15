@@ -57,6 +57,8 @@ interface Env {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
   AUTH_DB: D1Database;
+  /** Static-asset server for the built SPA (./app/dist), bound in wrangler.jsonc. */
+  ASSETS: Fetcher;
   BETTER_AUTH_SECRET?: string;
   BASE_URL?: string;
   /** Local dev only: when 'true', trust the `x-principal` header. NEVER set in prod. */
@@ -89,14 +91,6 @@ const app = new Hono<{ Bindings: Env }>();
 // Edge authentication (M3): Better Auth owns identity/credentials/sessions in
 // D1, mounted under /api/auth/*. A per-request instance (stateless coordinator).
 app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env).handler(c.req.raw));
-
-app.get('/', (c) =>
-  c.json({
-    ok: true,
-    vertical: 'ServiceCo (fsm) on Cloudflare Durable Objects',
-    hint: 'POST /api/seed once, then GET/POST /api/customers and /api/workorders',
-  }),
-);
 
 // One-time (idempotent) provisioning of the demo world.
 app.post('/api/seed', async (c) => {
@@ -204,6 +198,13 @@ app.post('/api/workorders', async (c) =>
 app.get('/api/workorders/:id', async (c) =>
   c.json(await (await stub(c)).invoke('workorder/get', { orderId: c.req.param('id') })),
 );
+
+// Serve the built SPA (./app/dist) for everything that isn't an /api/* route.
+// This MUST come after all API routes so Hono handles /api/* (especially
+// /api/auth/*) first; the catch-all then delegates to the ASSETS binding, which
+// returns index.html for unknown client routes (SPA fallback). Single origin →
+// Better Auth's session cookie is same-origin, no CORS.
+app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 
 // Fail closed → JSON. An unauthenticated request is a 401; a permission or
 // invariant violation is a 4xx, not a 500.
