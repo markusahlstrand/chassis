@@ -16,6 +16,11 @@ export const adminAction = z.enum([
   'addMember',
   'createTenant', // §4.1
   'setTenantStatus', // §4.1 — before/after carry the transitioned status
+  'provisionScope', // §4.2 — the first scope-lifecycle transition (→ active)
+  'suspendScope', // §4.2
+  'unsuspendScope', // §4.2
+  'archiveScope', // §4.2
+  'unarchiveScope', // §4.2 — an explicit restore, never a silent flag flip
 ]);
 export type AdminAction = z.infer<typeof adminAction>;
 

@@ -82,8 +82,9 @@ export function permissionContractSuite(
         manifest: permModManifest,
         operations: { 'perm/link': linkOp, 'perm/probe': probeOp },
       });
-      await host.provisionScope({ tenantId: t1, scopeId: s1 });
-      await host.provisionScope({ tenantId: t1, scopeId: s2 });
+      host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
+      await host.provisionScope(staff, { tenantId: t1, scopeId: s1 });
+      await host.provisionScope(staff, { tenantId: t1, scopeId: s2 });
 
       host.admin.defineRole(staff, t1, {
         key: 'admin',

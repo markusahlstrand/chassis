@@ -73,8 +73,8 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   });
   host.admin.createTenant(staff, { id: world.t2, slug: 'trampolin', name: 'Trampolin Cykel AB' });
 
-  await host.provisionScope({ tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
-  await host.provisionScope({ tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
+  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
+  await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
   // Roles: identical definitions in both tenants (vertical-defined).
   // protocol:countersign is deliberately in NO role: the counter-signature is

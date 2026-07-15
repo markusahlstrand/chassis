@@ -397,8 +397,11 @@ export function scopeHostContractSuite(
       });
       host.registerModule({ manifest: withdrawLateManifest });
 
-      await host.provisionScope({ tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
-      await host.provisionScope({ tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
+      // A scope requires an existing active tenant (§4.1) — create then provision.
+      host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
+      host.admin.createTenant(staff, { id: t2, slug: 'tenant-two', name: 'Tenant Two' });
+      await host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
+      await host.provisionScope(staff, { tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
     });
 
     afterAll(async () => {
@@ -407,8 +410,14 @@ export function scopeHostContractSuite(
 
     it('provisioning is idempotent', async () => {
       await expect(
-        host.provisionScope({ tenantId: t1, scopeId: s1, jurisdiction: 'eu' }),
+        host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' }),
       ).resolves.toBeUndefined();
+    });
+
+    it('refuses to provision a scope under a tenant with no record (§4.1)', async () => {
+      await expect(
+        host.provisionScope(staff, { tenantId: tenantId.parse(ulid()), scopeId: scopeId.parse(ulid()) }),
+      ).rejects.toThrow(/unknown tenant/);
     });
 
     it('fails closed on a mismatched (tenantId, scopeId) pair (K-3)', async () => {
@@ -657,7 +666,7 @@ export function scopeHostContractSuite(
     });
 
     it('suspends a tenant: getScope fails closed for its scopes; reactivation restores (§4.1)', async () => {
-      await host.provisionScope({ tenantId: t3, scopeId: s3, jurisdiction: 'eu' });
+      await host.provisionScope(staff, { tenantId: t3, scopeId: s3, jurisdiction: 'eu' });
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
 
       host.admin.setTenantStatus(staff, t3, 'suspended');
@@ -684,11 +693,46 @@ export function scopeHostContractSuite(
       ).toThrow(/unknown tenant/);
     });
 
-    it('does not gate scopes provisioned without a tenant record (legacy path)', async () => {
-      // t1/s1 were provisioned with no createTenant — no record, no suspension
-      // to enforce, so the pair still resolves. Backward-compatible by design.
-      expect(host.admin.getTenant(t1)).toBeUndefined();
-      await expect(host.getScope(alice, t1, s1)).resolves.toBeDefined();
+    // -- scope lifecycle (control-plane.md §4.2) ------------------------------
+
+    it('suspend/unsuspend a scope gates getScope for that scope alone (§4.2)', async () => {
+      // s3 is active (reactivated above). Suspending it fails closed…
+      host.admin.suspendScope(staff, t3, s3);
+      await expect(host.getScope(alice, t3, s3)).rejects.toThrow(/scope not active/);
+      // …while a sibling scope under the same tenant is untouched.
+      const sibling = scopeId.parse(ulid());
+      await host.provisionScope(staff, { tenantId: t3, scopeId: sibling, jurisdiction: 'eu' });
+      await expect(host.getScope(alice, t3, sibling)).resolves.toBeDefined();
+      // Unsuspend restores.
+      host.admin.unsuspendScope(staff, t3, s3);
+      await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
+    });
+
+    it('archive then un-archive is an explicit audited restore (§4.2)', async () => {
+      host.admin.archiveScope(staff, t3, s3);
+      await expect(host.getScope(alice, t3, s3)).rejects.toThrow(/scope not active/);
+      host.admin.unarchiveScope(staff, t3, s3);
+      await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
+
+      const transitions = host.admin
+        .auditLog({ tenantId: t3 })
+        .filter((r) => r.action === 'archiveScope' || r.action === 'unarchiveScope');
+      expect(transitions.map((r) => r.action)).toEqual(
+        expect.arrayContaining(['archiveScope', 'unarchiveScope']),
+      );
+      for (const r of transitions) {
+        expect(r.scopeId).toBe(s3);
+        expect(r.actor).toBe(staff);
+      }
+    });
+
+    it('rejects an illegal scope transition, fail closed (§4.2)', () => {
+      // s3 is active — you cannot un-archive an active scope.
+      expect(() => host.admin.unarchiveScope(staff, t3, s3)).toThrow(/illegal scope transition/);
+    });
+
+    it('rejects a lifecycle transition on a scope not under the named tenant', () => {
+      expect(() => host.admin.suspendScope(staff, t1, s3)).toThrow(/unknown scope for tenant/);
     });
   });
 }

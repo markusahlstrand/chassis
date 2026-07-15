@@ -179,6 +179,25 @@ export interface HostAdmin {
   listTenants(): Tenant[];
   getTenant(tenantId: TenantId): Tenant | undefined;
 
+  // -- scope lifecycle (control-plane.md §4.2) -------------------------------
+  // The §3.3 transitions that existed only on paper. Each fails closed on an
+  // illegal transition, is audited, and (for suspend/archive) makes getScope
+  // fail closed for that scope. `provisionScope` is the entry transition and
+  // lives on ScopeHost (it is async — it applies migrations).
+
+  /** active → suspended. Reversible containment (incident, dispute). */
+  suspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  /** suspended → active. */
+  unsuspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  /** active|suspended → archived. Stops the active-scope meter (§9). */
+  archiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  /**
+   * archived → active. A RESTORE, never a flag flip (control-plane.md §4.2):
+   * §9's meter can only charge on "active scope" if un-archiving is a deliberate,
+   * audited act. Jurisdiction is untouched — it is fixed at provisioning (K-7).
+   */
+  unarchiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+
   /**
    * The append-only admin audit trail, newest-comparable last (ULID order is
    * chronological). Read path for the console history and the permission-diff
@@ -202,8 +221,13 @@ export interface ScopeHost {
    */
   getScope(principal: PrincipalId, tenantId: TenantId, scopeId: ScopeId): Promise<ScopeStub>;
 
-  /** Idempotent; journaled. Jurisdiction is fixed here forever (K-7). */
-  provisionScope(input: ProvisionScopeInput): Promise<void>;
+  /**
+   * The entry scope-lifecycle transition (control-plane.md §4.2): idempotent,
+   * journaled, audited. Requires an existing ACTIVE tenant — a scope with no
+   * tenant record is the "tenant is an FK string" hole §4.1 closes, so it fails
+   * closed. Jurisdiction is fixed here forever (K-7).
+   */
+  provisionScope(actor: PlatformActorId, input: ProvisionScopeInput): Promise<void>;
 
   /** Enforcement-input writes: roles, assignments, grants, membership. */
   readonly admin: HostAdmin;
