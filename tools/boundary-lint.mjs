@@ -47,6 +47,7 @@ const HARNESS = new Set([
   'auth.ts',
   'auth-adapters.ts',
   'worker.ts',
+  'routes.ts',
 ]);
 
 function* walk(dir) {

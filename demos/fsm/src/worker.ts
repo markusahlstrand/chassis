@@ -24,6 +24,7 @@ import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-inv
 import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { servicecoModule, SC_PERM } from './module.js';
 import { buildAuth, type Auth } from './auth.js';
+import { mountApi } from './routes.js';
 import {
   betterAuthAdapter,
   devHeaderAdapter,
@@ -178,26 +179,10 @@ app.get('/api/me', async (c) => {
   });
 });
 
-app.get('/api/customers', async (c) => c.json(await (await stub(c)).invoke('serviceco/list-customers')));
-app.post('/api/customers', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/create-customer', await c.req.json())),
-);
-app.post('/api/facilities', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/create-facility', await c.req.json())),
-);
-app.get('/api/prices', async (c) => c.json(await (await stub(c)).invoke('serviceco/price-list')));
-app.post('/api/prices', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/upsert-price', await c.req.json())),
-);
-app.get('/api/workorders', async (c) =>
-  c.json(await (await stub(c)).invoke('workorder/list', { status: c.req.query('status') })),
-);
-app.post('/api/workorders', async (c) =>
-  c.json(await (await stub(c)).invoke('serviceco/create-workorder', await c.req.json())),
-);
-app.get('/api/workorders/:id', async (c) =>
-  c.json(await (await stub(c)).invoke('workorder/get', { orderId: c.req.param('id') })),
-);
+// The whole data API — the SAME route table the node server mounts (src/routes.ts),
+// which also installs the shared fail-closed error handler. Here the stub
+// authenticates via Better Auth on the Durable-Object adapter.
+mountApi(app, stub);
 
 // Serve the built SPA (./app/dist) for everything that isn't an /api/* route.
 // This MUST come after all API routes so Hono handles /api/* (especially
@@ -205,12 +190,5 @@ app.get('/api/workorders/:id', async (c) =>
 // returns index.html for unknown client routes (SPA fallback). Single origin →
 // Better Auth's session cookie is same-origin, no CORS.
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
-
-// Fail closed → JSON. An unauthenticated request is a 401; a permission or
-// invariant violation is a 4xx, not a 500.
-app.onError((err, c) => {
-  if (err instanceof HTTPException) return err.getResponse();
-  return c.json({ error: (err as Error).message }, 400);
-});
 
 export default app;
