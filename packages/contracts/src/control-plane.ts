@@ -14,6 +14,8 @@ export const adminAction = z.enum([
   'grant',
   'grantToOrg',
   'addMember',
+  'createTenant', // §4.1
+  'setTenantStatus', // §4.1 — before/after carry the transitioned status
 ]);
 export type AdminAction = z.infer<typeof adminAction>;
 

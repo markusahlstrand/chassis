@@ -67,6 +67,12 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   // stub; every admin mutation below is stamped with it in the audit trail.
   const staff = platformActorId.parse(ulid());
 
+  // Tenant registry (§4.1): create-then-provision, idempotent on every start.
+  host.admin.createTenant(staff, {
+    id: world.t1, slug: 'kedja-kugghjul', name: 'Kedja & Kugghjul Cykelverkstad AB',
+  });
+  host.admin.createTenant(staff, { id: world.t2, slug: 'trampolin', name: 'Trampolin Cykel AB' });
+
   await host.provisionScope({ tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
   await host.provisionScope({ tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 

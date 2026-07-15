@@ -13,6 +13,11 @@ export const tenant = z.object({
 });
 export type Tenant = z.infer<typeof tenant>;
 
+// What the caller supplies to createTenant (control-plane.md §4.1); `status`
+// (active) and `createdAt` are stamped host-side, never caller-supplied.
+export const createTenantInput = tenant.pick({ id: true, slug: true, name: true });
+export type CreateTenantInput = z.infer<typeof createTenantInput>;
+
 export const scopeStatus = z.enum([
   'provisioning',
   'active',

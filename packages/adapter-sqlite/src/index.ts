@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
   adminLogEntry,
+  createTenantInput,
   domainEvent,
   domainEventInput,
   eventId,
@@ -11,9 +12,11 @@ import {
   objectRef,
   principalId,
   roleDefinition,
+  tenant as tenantSchema,
   type AdminAction,
   type AdminLogEntry,
   type CapabilityGrant,
+  type CreateTenantInput,
   type DomainEvent,
   type DomainEventInput,
   type EntityRef,
@@ -24,7 +27,9 @@ import {
   type RoleAssignment,
   type RoleDefinition,
   type ScopeId,
+  type Tenant,
   type TenantId,
+  type TenantStatus,
 } from '@substrat-run/contracts';
 import {
   ulid,
@@ -111,6 +116,14 @@ const KERNEL_DDL = `
   );
 `;
 
+interface TenantRow {
+  tenant_id: string;
+  slug: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
+
 interface AdminLogRow {
   id: string;
   actor: string;
@@ -163,6 +176,15 @@ export class SqliteScopeHost implements ScopeHost {
     this.directory = new Database(join(this.dir, '_directory.sqlite'));
     this.directory.pragma('journal_mode = WAL');
     this.directory.exec(`
+      -- The tenant registry (control-plane.md §4.1). Before this a tenant was an
+      -- FK string on scope rows; now it is a real record with a lifecycle status.
+      CREATE TABLE IF NOT EXISTS tenants (
+        tenant_id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS scopes (
         scope_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -326,6 +348,17 @@ export class SqliteScopeHost implements ScopeHost {
       .get(scopeId) as { tenant_id: string } | undefined;
     if (!row || row.tenant_id !== tenantId) {
       throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
+    }
+
+    // Tenant-status gate (control-plane.md §4.1): a suspended (or deleting)
+    // tenant fails closed for every scope under it — the same fail-closed path
+    // as the K-3 pair mismatch above. A scope provisioned without a tenant
+    // record (legacy path) is not gated: no record, no suspension to enforce.
+    const tenantRow = this.directory
+      .prepare('SELECT status FROM tenants WHERE tenant_id = ?')
+      .get(tenantId) as { status: string } | undefined;
+    if (tenantRow && tenantRow.status !== 'active') {
+      throw new Error(`tenant not active (status: ${tenantRow.status}): ${tenantId}`);
     }
 
     const rt = this.runtime(tenantId, scopeId);
@@ -504,6 +537,21 @@ export class SqliteScopeHost implements ScopeHost {
         );
     };
 
+    const mapTenant = (r: TenantRow): Tenant =>
+      tenantSchema.parse({
+        id: r.tenant_id,
+        slug: r.slug,
+        name: r.name,
+        status: r.status,
+        createdAt: r.created_at,
+      });
+    const readTenant = (id: TenantId): Tenant | undefined => {
+      const r = this.directory.prepare('SELECT * FROM tenants WHERE tenant_id = ?').get(id) as
+        | TenantRow
+        | undefined;
+      return r ? mapTenant(r) : undefined;
+    };
+
     const writeTenantTuple = (
       tenantId: string,
       subject: string,
@@ -632,6 +680,38 @@ export class SqliteScopeHost implements ScopeHost {
         writeTenantTuple(tenantId, `principal:${principal}`, 'member', `org:${orgId}`);
         writeAudit(actor, 'addMember', { tenantId }, null, { principal, orgId });
       },
+      createTenant: (actor: PlatformActorId, input: CreateTenantInput) => {
+        const parsed = createTenantInput.parse(input);
+        const info = this.directory
+          .prepare(
+            `INSERT OR IGNORE INTO tenants (tenant_id, slug, name, status, created_at)
+             VALUES (?, ?, ?, 'active', ?)`,
+          )
+          .run(parsed.id, parsed.slug, parsed.name, new Date().toISOString());
+        // Idempotent: re-creating an existing tenant is a no-op, and a no-op is
+        // not audited — nothing changed.
+        if (info.changes === 0) return;
+        writeAudit(actor, 'createTenant', { tenantId: parsed.id }, null, readTenant(parsed.id));
+      },
+      setTenantStatus: (actor: PlatformActorId, tenantId: TenantId, status: TenantStatus) => {
+        const before = readTenant(tenantId);
+        if (!before) throw new Error(`unknown tenant: ${tenantId}`);
+        this.directory
+          .prepare('UPDATE tenants SET status = ? WHERE tenant_id = ?')
+          .run(status, tenantId);
+        writeAudit(
+          actor,
+          'setTenantStatus',
+          { tenantId },
+          { status: before.status },
+          { status },
+        );
+      },
+      listTenants: (): Tenant[] =>
+        (this.directory.prepare('SELECT * FROM tenants ORDER BY tenant_id').all() as TenantRow[]).map(
+          mapTenant,
+        ),
+      getTenant: (tenantId: TenantId): Tenant | undefined => readTenant(tenantId),
       auditLog: (filter?: { tenantId?: TenantId }): AdminLogEntry[] => {
         const rows = (
           filter?.tenantId

@@ -1,6 +1,7 @@
 import type {
   AdminLogEntry,
   CapabilityGrant,
+  CreateTenantInput,
   Decision,
   DomainEvent,
   DomainEventInput,
@@ -15,7 +16,9 @@ import type {
   RoleDefinition,
   ScopeId,
   StorageShape,
+  Tenant,
   TenantId,
+  TenantStatus,
 } from '@substrat-run/contracts';
 
 /**
@@ -156,6 +159,26 @@ export interface HostAdmin {
     entity?: EntityRef,
   ): void;
   addMember(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId, orgId: string): void;
+
+  // -- tenant registry (control-plane.md §4.1) -------------------------------
+
+  /**
+   * Persist a tenant. Idempotent on the id — re-creating an existing tenant is a
+   * no-op, not an error (control-plane.md §4.1). `status` starts `active` and
+   * `createdAt` is stamped host-side. This is what replaces "a tenant is a ULID
+   * nobody used before" with a real record.
+   */
+  createTenant(actor: PlatformActorId, input: CreateTenantInput): void;
+  /**
+   * Transition a tenant's status. `suspended` fails `getScope` closed for every
+   * scope under the tenant (K-3's path) — the containment lever for non-payment
+   * or an incident, reversible without deleting anything.
+   */
+  setTenantStatus(actor: PlatformActorId, tenantId: TenantId, status: TenantStatus): void;
+  /** The tenant registry — the directory's inventory (control-plane.md §4.5 console item 1). */
+  listTenants(): Tenant[];
+  getTenant(tenantId: TenantId): Tenant | undefined;
+
   /**
    * The append-only admin audit trail, newest-comparable last (ULID order is
    * chronological). Read path for the console history and the permission-diff

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   dataSubjectId,
   moduleManifest,
+  platformActorId,
   principalId,
   scopeId,
   tenantId,
@@ -174,9 +175,12 @@ export function scopeHostContractSuite(
     let host: ScopeHost;
     const t1 = tenantId.parse(ulid());
     const t2 = tenantId.parse(ulid());
+    const t3 = tenantId.parse(ulid()); // control-plane §4.1 tenant-lifecycle fixture
     const s1 = scopeId.parse(ulid());
     const s2 = scopeId.parse(ulid());
+    const s3 = scopeId.parse(ulid()); // scope under t3
     const alice: PrincipalId = principalId.parse(ulid());
+    const staff = platformActorId.parse(ulid());
 
     beforeAll(async () => {
       fixture = await makeFixture();
@@ -631,6 +635,60 @@ export function scopeHostContractSuite(
       for (const row of actors) {
         expect(JSON.parse(row.actor)).toEqual({ system: '@test/flow' });
       }
+    });
+
+    // -- tenant registry + lifecycle (control-plane.md §4.1) -----------------
+
+    it('creates a tenant record, idempotently; only real creates are audited', () => {
+      host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' });
+      host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' }); // no-op
+      expect(host.admin.getTenant(t3)).toMatchObject({
+        id: t3,
+        slug: 'acme-co',
+        name: 'Acme Co',
+        status: 'active',
+      });
+      expect(host.admin.listTenants().filter((x) => x.id === t3)).toHaveLength(1);
+      const creates = host.admin
+        .auditLog({ tenantId: t3 })
+        .filter((r) => r.action === 'createTenant');
+      expect(creates).toHaveLength(1); // the idempotent no-op left no row
+      expect(creates[0]!.actor).toBe(staff);
+    });
+
+    it('suspends a tenant: getScope fails closed for its scopes; reactivation restores (§4.1)', async () => {
+      await host.provisionScope({ tenantId: t3, scopeId: s3, jurisdiction: 'eu' });
+      await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
+
+      host.admin.setTenantStatus(staff, t3, 'suspended');
+      await expect(host.getScope(alice, t3, s3)).rejects.toThrow(/not active/);
+
+      host.admin.setTenantStatus(staff, t3, 'active');
+      await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
+    });
+
+    it('records setTenantStatus with before/after status', () => {
+      const transitions = host.admin
+        .auditLog({ tenantId: t3 })
+        .filter((r) => r.action === 'setTenantStatus');
+      expect(transitions.length).toBeGreaterThanOrEqual(2);
+      const suspend = transitions.find(
+        (r) => (r.after as { status: string }).status === 'suspended',
+      )!;
+      expect((suspend.before as { status: string }).status).toBe('active');
+    });
+
+    it('rejects a status transition on an unknown tenant', () => {
+      expect(() =>
+        host.admin.setTenantStatus(staff, tenantId.parse(ulid()), 'suspended'),
+      ).toThrow(/unknown tenant/);
+    });
+
+    it('does not gate scopes provisioned without a tenant record (legacy path)', async () => {
+      // t1/s1 were provisioned with no createTenant — no record, no suspension
+      // to enforce, so the pair still resolves. Backward-compatible by design.
+      expect(host.admin.getTenant(t1)).toBeUndefined();
+      await expect(host.getScope(alice, t1, s1)).resolves.toBeDefined();
     });
   });
 }

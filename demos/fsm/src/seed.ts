@@ -70,6 +70,10 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   // a stub. Every admin mutation below is stamped with it in the audit trail.
   const staff = platformActorId.parse(ulid());
 
+  // Tenant registry (§4.1): create-then-provision, idempotent on every start.
+  host.admin.createTenant(staff, { id: world.t1, slug: 'elmontage', name: 'ElMontage AB' });
+  host.admin.createTenant(staff, { id: world.t2, slug: 'rorservice', name: 'RörService AB' });
+
   await host.provisionScope({ tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
   await host.provisionScope({ tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
