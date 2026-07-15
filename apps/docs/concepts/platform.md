@@ -129,7 +129,8 @@ scope-shaped data, and can perfectly well be a vertical on Substrat like any oth
 ## What this means for you
 
 - **Don't build tenancy, domains, audit, or identity.** They're below you. Verticals that
-  rebuild them are a smell that the kernel drew a line wrong.
+  rebuild them are a smell that the kernel drew a line wrong. Authentication in particular is
+  a swappable edge adapter — see [authentication &amp; identity](/concepts/identity).
 - **Your scopes carry your code only.** Your migrations are ordered against your modules and
   the engines you depend on — never against a stranger's vertical.
 - **You upgrade on your schedule.** Per-vertical deployments exist so that engine versions,

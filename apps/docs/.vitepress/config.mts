@@ -59,6 +59,7 @@ function guideSidebar() {
         { text: 'The platform layer', link: '/concepts/platform' },
         { text: 'Operations & the scope host', link: '/concepts/scope-host' },
         { text: 'Permissions', link: '/concepts/permissions' },
+        { text: 'Authentication & identity', link: '/concepts/identity' },
         { text: 'Events & audit', link: '/concepts/events' },
         { text: 'Reads & scaling', link: '/concepts/reads' },
         { text: 'Modules & the manifest', link: '/concepts/modules' },
