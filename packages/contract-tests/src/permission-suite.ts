@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
-  moduleManifest,
   permissionKey,
   platformActorId,
   principalId,
@@ -10,32 +9,9 @@ import {
   type PermissionKey,
   type PrincipalId,
 } from '@substrat-run/contracts';
-import { ulid, type OperationHandler, type ScopeHost } from '@substrat-run/kernel';
+import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import type { ScopeHostFixture } from './scope-host-suite.js';
-
-const permModManifest = moduleManifest.parse({
-  id: '@perm/mod',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [
-    { key: 'perm:use', description: 'use the thing' },
-    { key: 'perm:read', description: 'read the thing' },
-  ],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entityRelations: [{ entityType: 'item', parentType: 'box' }],
-  entitlementKey: 'perm',
-});
-
-const linkOp: OperationHandler<{ child: EntityRef; parent: EntityRef }, void> = (ctx, input) => {
-  ctx.link(input.child, input.parent);
-};
-
-const probeOp: OperationHandler<{ permission: PermissionKey; entity?: EntityRef }, unknown> = (
-  ctx,
-  input,
-) => ctx.check(input.permission, input.entity);
+import { permMod } from './modules.js';
 
 const PERM_USE = permissionKey.parse('perm:use');
 const PERM_READ = permissionKey.parse('perm:read');
@@ -78,10 +54,7 @@ export function permissionContractSuite(
     beforeAll(async () => {
       fixture = await makeFixture();
       host = fixture.host;
-      host.registerModule({
-        manifest: permModManifest,
-        operations: { 'perm/link': linkOp, 'perm/probe': probeOp },
-      });
+      host.registerModule(permMod);
       host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
       host.admin.grantEntitlement(staff, t1, 'perm'); // default-deny (§4.3): perm/* needs it
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1 });

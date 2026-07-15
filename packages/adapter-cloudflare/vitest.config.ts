@@ -6,6 +6,11 @@ export default defineWorkersConfig({
     passWithNoTests: true,
     poolOptions: {
       workers: {
+        // The contract suites carry state across `it` blocks (e.g. a guard write
+        // read back by a later test), so storage must NOT be rolled back per
+        // test. Fresh scope/tenant ids per suite (ulid) keep suites isolated.
+        isolatedStorage: false,
+        singleWorker: true,
         wrangler: { configPath: './wrangler.jsonc' },
       },
     },

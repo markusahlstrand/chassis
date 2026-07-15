@@ -7,6 +7,7 @@
       "@substrat-run/contracts",
       "@substrat-run/kernel",
       "@substrat-run/adapter-sqlite",
+      "@substrat-run/adapter-cloudflare",
       "@substrat-run/contract-tests"
     ]
   ],

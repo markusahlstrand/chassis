@@ -1,163 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
-  dataSubjectId,
   moduleManifest,
   platformActorId,
   principalId,
   scopeId,
   tenantId,
   type PrincipalId,
-  type ScopeId,
-  type TenantId,
 } from '@substrat-run/contracts';
 import { ulid, type OperationHandler, type ScopeHost } from '@substrat-run/kernel';
-
-const testModManifest = moduleManifest.parse({
-  id: '@test/mod',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'testmod:use', description: 'test permission' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entityRelations: [{ entityType: 'item', parentType: 'box' }],
-  entitlementKey: 'testmod',
-});
-
-const flowModManifest = moduleManifest.parse({
-  id: '@test/flow',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'flow:use', description: 'flow permission' }],
-  events: {
-    emits: [
-      { type: 'flow.step1', schemaVersion: 1 },
-      { type: 'flow.step2', schemaVersion: 1 },
-    ],
-    consumes: [
-      { type: 'flow.step1', schemaVersion: 1 },
-      { type: 'flow.step2', schemaVersion: 1 },
-    ],
-  },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'flow',
-});
-
-const lateModManifest = moduleManifest.parse({
-  id: '@test/late',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'late:use', description: 'late module permission' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'late',
-});
-
-// Entitlement gate (§4.3): a module whose SKU flag the tenant does not hold does
-// not load — its operations do not resolve. Isolated on its own tenant so
-// granting/revoking here cannot disturb the other suites' fixtures.
-const billedModManifest = moduleManifest.parse({
-  id: '@test/billed',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'billed:use', description: 'billed module permission' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'billed',
-});
-
-// Manifest-declared operation guards (K-17). Two modules, on purpose: one
-// GUARDED module whose manifest declares the gate, one GATE module that
-// contributes the named predicate. The guarded module registers FIRST — the
-// contract says predicates resolve at invoke, not at registration, because
-// registration order is caller-controlled.
-const guardedModManifest = moduleManifest.parse({
-  id: '@test/guarded',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'guarded:use', description: 'guarded permission' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'guarded',
-  guards: [
-    { before: 'guarded/act', predicate: 'gate/flag-set', config: { flag: 'go' } },
-    // A guard whose predicate NO module contributes: the operation must fail
-    // closed, never run unguarded.
-    { before: 'guarded/orphan', predicate: 'gate/does-not-exist', config: {} },
-  ],
-});
-
-// Operation withdrawal (K-17). Order-independence is the contract, so the suite
-// withdraws one operation BEFORE its module registers and one AFTER.
-const withdrawEarlyManifest = moduleManifest.parse({
-  id: '@test/withdraw-early',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'wearly:use', description: 'early withdrawer' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'withdraw-early',
-  withdraws: ['victim/a'], // @test/victim has not registered yet
-});
-
-const victimModManifest = moduleManifest.parse({
-  id: '@test/victim',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'victim:use', description: 'victim permission' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'victim',
-});
-
-const withdrawLateManifest = moduleManifest.parse({
-  id: '@test/withdraw-late',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'wlate:use', description: 'late withdrawer' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'withdraw-late',
-  withdraws: ['victim/b'], // @test/victim already registered
-});
-
-const gateModManifest = moduleManifest.parse({
-  id: '@test/gate',
-  version: '1.0.0',
-  kernelContract: '^0.0.1',
-  permissions: [{ key: 'gate:use', description: 'gate permission' }],
-  events: { emits: [], consumes: [] },
-  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
-  attachmentTargets: [],
-  entitlementKey: 'gate',
-});
-
-const addItem: OperationHandler<{ id: string; box: string }, void> = (ctx, input) => {
-  ctx.sql.exec('INSERT INTO testmod_items (id, box) VALUES (?, ?)', [input.id, input.box]);
-  ctx.link({ entityType: 'item', entityId: input.id }, { entityType: 'box', entityId: input.box });
-};
-
-const relinkItem: OperationHandler<{ id: string; box: string }, void> = (ctx, input) => {
-  ctx.link({ entityType: 'item', entityId: input.id }, { entityType: 'box', entityId: input.box });
-};
-
-const linkUndeclared: OperationHandler<undefined, void> = (ctx) => {
-  ctx.link({ entityType: 'box', entityId: 'b1' }, { entityType: 'item', entityId: 'i1' });
-};
-
-const readJournal: OperationHandler<undefined, { module_id: string; version: string }[]> = (
-  ctx,
-) => ctx.sql.query('SELECT module_id, version FROM _substrat_migrations ORDER BY module_id');
-
-const readTuples: OperationHandler<undefined, { subject: string; relation: string; object: string }[]> =
-  (ctx) => ctx.sql.query('SELECT subject, relation, object FROM _substrat_tuples ORDER BY subject');
+import {
+  billedMod,
+  contractTestBareOps,
+  contractTestInitialModules,
+  gateModManifest,
+  lateMod,
+  testModManifest,
+  victimModManifest,
+} from './modules.js';
 
 export interface ScopeHostFixture {
   host: ScopeHost;
@@ -174,6 +33,18 @@ interface OutboxRow {
   subject_id: string | null;
 }
 
+/** Adapter capability flags — everything an adapter cannot honor identically. */
+export interface ScopeHostSuiteOptions {
+  /**
+   * Whether the adapter supports registering a module AFTER a scope was first
+   * accessed (runtime registration). The pure adapter does; the Cloudflare
+   * adapter closes its ScopeDO over a code-time module set, so it does not. When
+   * `false`, the single late-registration test is skipped — every other test is
+   * shared unchanged (D-14).
+   */
+  supportsRuntimeRegistration?: boolean;
+}
+
 /**
  * The scope-host contract suite (design doc §11). Every adapter — pure SQLite,
  * Cloudflare, and any future one — must pass this unchanged (D-14). If an
@@ -183,7 +54,10 @@ interface OutboxRow {
 export function scopeHostContractSuite(
   adapterName: string,
   makeFixture: () => Promise<ScopeHostFixture>,
+  opts: ScopeHostSuiteOptions = {},
 ): void {
+  const supportsRuntimeRegistration = opts.supportsRuntimeRegistration !== false;
+
   describe(`scope-host contract: ${adapterName}`, () => {
     let fixture: ScopeHostFixture;
     let host: ScopeHost;
@@ -202,216 +76,14 @@ export function scopeHostContractSuite(
       fixture = await makeFixture();
       host = fixture.host;
 
-      host.defineOperation<undefined, void>('test/init-counter', (ctx) => {
-        ctx.sql.exec('CREATE TABLE IF NOT EXISTS counter (n INTEGER NOT NULL)');
-        ctx.sql.exec('DELETE FROM counter');
-        ctx.sql.exec('INSERT INTO counter (n) VALUES (0)');
-      });
-
-      // Read → await → write. Under interleaving this loses updates; under
-      // strict serialization it cannot.
-      host.defineOperation<undefined, void>('test/slow-increment', async (ctx) => {
-        const [row] = ctx.sql.query<{ n: number }>('SELECT n FROM counter');
-        await new Promise((r) => setTimeout(r, 5));
-        ctx.sql.exec('UPDATE counter SET n = ?', [row!.n + 1]);
-      });
-
-      host.defineOperation<undefined, number>('test/read-counter', (ctx) => {
-        const [row] = ctx.sql.query<{ n: number }>('SELECT n FROM counter');
-        return row!.n;
-      });
-
-      const stash: { value?: { items: string[] } } = {};
-      host.defineOperation<{ items: string[] }, void>('test/stash', (_ctx, input) => {
-        stash.value = input;
-      });
-      host.defineOperation<undefined, { items: string[] }>('test/read-stash', () => {
-        return stash.value!;
-      });
-
-      host.defineOperation<{ subject?: string }, void>('test/emit-event', (ctx, input) => {
-        ctx.emit({
-          type: 'test.happened',
-          schemaVersion: 1,
-          entity: { entityType: 'test-thing', entityId: 'x1' },
-          piiClass: input?.subject ? 'pseudonymous' : 'none',
-          ...(input?.subject ? { subjectId: dataSubjectId.parse(input.subject) } : {}),
-          payload: { hello: 'world' },
-        });
-      });
-
-      host.defineOperation<undefined, void>('test/emit-unclassified-pii', (ctx) => {
-        // piiClass 'direct' without subjectId — must be rejected at emit (§6.1)
-        ctx.emit({
-          type: 'test.bad',
-          schemaVersion: 1,
-          entity: { entityType: 'test-thing', entityId: 'x2' },
-          piiClass: 'direct',
-          payload: {},
-        });
-      });
-
-      host.defineOperation<undefined, OutboxRow[]>('test/read-outbox', (ctx) =>
-        ctx.sql.query<OutboxRow>('SELECT * FROM _substrat_outbox ORDER BY id'),
-      );
-
-      host.defineOperation<{ v: string }, void>('test/write-marker', (ctx, input) => {
-        ctx.sql.exec('CREATE TABLE IF NOT EXISTS marker (v TEXT NOT NULL)');
-        ctx.sql.exec('INSERT INTO marker (v) VALUES (?)', [input.v]);
-      });
-      host.defineOperation<undefined, string[]>('test/read-markers', (ctx) => {
-        ctx.sql.exec('CREATE TABLE IF NOT EXISTS marker (v TEXT NOT NULL)');
-        return ctx.sql.query<{ v: string }>('SELECT v FROM marker').map((r) => r.v);
-      });
-
-      host.defineOperation<undefined, void>('test/atomic-init', (ctx) => {
-        ctx.sql.exec('CREATE TABLE IF NOT EXISTS atomic_t (n INTEGER NOT NULL)');
-      });
-      host.defineOperation<undefined, void>('test/atomic-fail', (ctx) => {
-        ctx.sql.exec('INSERT INTO atomic_t (n) VALUES (1)');
-        ctx.emit({
-          type: 'test.atomic',
-          schemaVersion: 1,
-          entity: { entityType: 'test-thing', entityId: 'x9' },
-          piiClass: 'none',
-          payload: {},
-        });
-        throw new Error('boom');
-      });
-      host.defineOperation<undefined, { rows: number; events: number }>(
-        'test/atomic-read',
-        (ctx) => ({
-          rows: ctx.sql.query<{ n: number }>('SELECT n FROM atomic_t').length,
-          events: ctx.sql.query('SELECT id FROM _substrat_outbox WHERE type = ?', ['test.atomic'])
-            .length,
-        }),
-      );
-
-      host.registerModule({
-        manifest: testModManifest,
-        migrations: [
-          {
-            version: '0001-init',
-            sql: 'CREATE TABLE testmod_items (id TEXT PRIMARY KEY, box TEXT NOT NULL)',
-          },
-        ],
-        operations: {
-          'testmod/add': addItem,
-          'testmod/relink': relinkItem,
-          'testmod/link-undeclared': linkUndeclared,
-          'testmod/read-journal': readJournal,
-          'testmod/read-tuples': readTuples,
-        },
-      });
-
-      host.registerModule({
-        manifest: flowModManifest,
-        migrations: [
-          {
-            version: '0001-init',
-            sql: 'CREATE TABLE flow_log (event_id TEXT PRIMARY KEY, type TEXT NOT NULL)',
-          },
-        ],
-        operations: {
-          'flow/produce': ((ctx) => {
-            ctx.emit({
-              type: 'flow.step1',
-              schemaVersion: 1,
-              entity: { entityType: 'flow-thing', entityId: 'f1' },
-              piiClass: 'none',
-              payload: {},
-            });
-          }) as OperationHandler<never, unknown>,
-          'flow/log': ((ctx) =>
-            ctx.sql.query(
-              'SELECT event_id, type FROM flow_log ORDER BY event_id',
-            )) as OperationHandler<never, unknown>,
-          'flow/deliveries': ((ctx) =>
-            ctx.sql.query(
-              `SELECT event_id, consumer_module, error FROM _substrat_deliveries
-               WHERE consumer_module = '@test/flow' ORDER BY event_id`,
-            )) as OperationHandler<never, unknown>,
-          'flow/step2-actors': ((ctx) =>
-            ctx.sql.query(
-              `SELECT actor FROM _substrat_outbox WHERE type = 'flow.step2'`,
-            )) as OperationHandler<never, unknown>,
-        },
-        consumers: {
-          'flow.step1': (ctx, event) => {
-            ctx.sql.exec('INSERT INTO flow_log (event_id, type) VALUES (?, ?)', [
-              event.id,
-              event.type,
-            ]);
-            ctx.emit({
-              type: 'flow.step2',
-              schemaVersion: 1,
-              entity: event.entity,
-              piiClass: 'none',
-              payload: {},
-            });
-          },
-          'flow.step2': (ctx, event) => {
-            ctx.sql.exec('INSERT INTO flow_log (event_id, type) VALUES (?, ?)', [
-              event.id,
-              event.type,
-            ]);
-          },
-        },
-      });
-
-      // Guards (K-17). The guarded module registers BEFORE the module that
-      // contributes its predicate — wiring may legitimately precede the
-      // implementation, so resolution is late and fails closed at invoke.
-      host.registerModule({
-        manifest: guardedModManifest,
-        migrations: [
-          { version: '0001-init', sql: 'CREATE TABLE guarded_t (v TEXT NOT NULL)' },
-        ],
-        operations: {
-          'guarded/act': ((ctx, input: { flag?: string }) => {
-            ctx.sql.exec('INSERT INTO guarded_t (v) VALUES (?)', [input?.flag ?? 'none']);
-            ctx.emit({
-              type: 'guarded.acted',
-              schemaVersion: 1,
-              entity: { entityType: 'guarded-thing', entityId: 'g1' },
-              piiClass: 'none',
-              payload: {},
-            });
-          }) as OperationHandler<never, unknown>,
-          'guarded/orphan': (() => 'ran') as OperationHandler<never, unknown>,
-          'guarded/rows': ((ctx) =>
-            ctx.sql.query<{ v: string }>('SELECT v FROM guarded_t').map((r) => r.v)) as
-            OperationHandler<never, unknown>,
-          'guarded/events': ((ctx) =>
-            ctx.sql.query('SELECT id FROM _substrat_outbox WHERE type = ?', ['guarded.acted'])
-              .length) as OperationHandler<never, unknown>,
-        },
-      });
-
-      host.registerModule({
-        manifest: gateModManifest,
-        predicates: {
-          // The predicate sees ctx (its own transaction), the manifest config,
-          // and the operation input. It THROWS to block, returns to allow.
-          'gate/flag-set': (_ctx, config, input) => {
-            const want = config.flag;
-            const got = (input as { flag?: string } | undefined)?.flag;
-            if (got !== want) throw new Error(`guard: expected flag '${String(want)}', got '${String(got)}'`);
-          },
-        },
-      });
-
-      // Withdrawal, both orders: early withdrawer → victim → late withdrawer.
-      host.registerModule({ manifest: withdrawEarlyManifest });
-      host.registerModule({
-        manifest: victimModManifest,
-        operations: {
-          'victim/a': (() => 'a') as OperationHandler<never, unknown>,
-          'victim/b': (() => 'b') as OperationHandler<never, unknown>,
-          'victim/c': (() => 'c') as OperationHandler<never, unknown>,
-        },
-      });
-      host.registerModule({ manifest: withdrawLateManifest });
+      // Bare operations (no manifest) and the initial module set, registered in
+      // the order the contract fixes (see contractTestInitialModules).
+      for (const [name, handler] of Object.entries(contractTestBareOps)) {
+        host.defineOperation(name, handler);
+      }
+      for (const reg of contractTestInitialModules) {
+        host.registerModule(reg);
+      }
 
       // A scope requires an existing active tenant (§4.1) — create then provision.
       host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
@@ -437,23 +109,22 @@ export function scopeHostContractSuite(
 
     it('refuses to provision a scope under a tenant with no record (§4.1)', async () => {
       await expect(
-        host.provisionScope(staff, { tenantId: tenantId.parse(ulid()), scopeId: scopeId.parse(ulid()) }),
+        host.provisionScope(staff, {
+          tenantId: tenantId.parse(ulid()),
+          scopeId: scopeId.parse(ulid()),
+        }),
       ).rejects.toThrow(/unknown tenant/);
     });
 
     it('fails closed on a mismatched (tenantId, scopeId) pair (K-3)', async () => {
       await expect(host.getScope(alice, t2, s1)).rejects.toThrow();
-      await expect(
-        host.getScope(alice, t1, scopeId.parse(ulid())),
-      ).rejects.toThrow();
+      await expect(host.getScope(alice, t1, scopeId.parse(ulid()))).rejects.toThrow();
     });
 
     it('serializes operations strictly per scope (K-6)', async () => {
       const stub = await host.getScope(alice, t1, s1);
       await stub.invoke('test/init-counter');
-      await Promise.all(
-        Array.from({ length: 10 }, () => stub.invoke('test/slow-increment')),
-      );
+      await Promise.all(Array.from({ length: 10 }, () => stub.invoke('test/slow-increment')));
       await expect(stub.invoke('test/read-counter')).resolves.toBe(10);
     });
 
@@ -489,9 +160,7 @@ export function scopeHostContractSuite(
 
     it('accepts PII-classed events with a subjectId', async () => {
       const stub = await host.getScope(alice, t1, s1);
-      await expect(
-        stub.invoke('test/emit-event', { subject: ulid() }),
-      ).resolves.toBeUndefined();
+      await expect(stub.invoke('test/emit-event', { subject: ulid() })).resolves.toBeUndefined();
     });
 
     it('isolates scope storage: a write in one scope is invisible in another', async () => {
@@ -529,30 +198,21 @@ export function scopeHostContractSuite(
       expect(journal2.filter((r) => r.module_id === '@test/mod')).toHaveLength(1);
     });
 
-    it('applies migrations of modules registered after a scope was first accessed', async () => {
-      host.registerModule({
-        manifest: lateModManifest,
-        migrations: [
-          { version: '0001-init', sql: 'CREATE TABLE late_t (id TEXT PRIMARY KEY)' },
-        ],
-        operations: {
-          'late/check': ((ctx) =>
-            ctx.sql.query(`SELECT name FROM sqlite_master WHERE name = 'late_t'`)
-              .length) as OperationHandler<never, unknown>,
-        },
-      });
-      const stub = await host.getScope(alice, t1, s1);
-      await expect(stub.invoke('late/check')).resolves.toBe(1);
-      const journal = await stub.invoke<{ module_id: string; version: string }[]>(
-        'testmod/read-journal',
-      );
-      expect(journal).toContainEqual({ module_id: '@test/late', version: '0001-init' });
-    });
+    it.runIf(supportsRuntimeRegistration)(
+      'applies migrations of modules registered after a scope was first accessed',
+      async () => {
+        host.registerModule(lateMod);
+        const stub = await host.getScope(alice, t1, s1);
+        await expect(stub.invoke('late/check')).resolves.toBe(1);
+        const journal = await stub.invoke<{ module_id: string; version: string }[]>(
+          'testmod/read-journal',
+        );
+        expect(journal).toContainEqual({ module_id: '@test/late', version: '0001-init' });
+      },
+    );
 
     it('rejects duplicate module registration', () => {
-      expect(() => host.registerModule({ manifest: testModManifest })).toThrow(
-        /already registered/,
-      );
+      expect(() => host.registerModule({ manifest: testModManifest })).toThrow(/already registered/);
     });
 
     // -- manifest-declared operation guards (K-17) ---------------------------
@@ -709,9 +369,9 @@ export function scopeHostContractSuite(
     });
 
     it('rejects a status transition on an unknown tenant', () => {
-      expect(() =>
-        host.admin.setTenantStatus(staff, tenantId.parse(ulid()), 'suspended'),
-      ).toThrow(/unknown tenant/);
+      expect(() => host.admin.setTenantStatus(staff, tenantId.parse(ulid()), 'suspended')).toThrow(
+        /unknown tenant/,
+      );
     });
 
     // -- scope lifecycle (control-plane.md §4.2) ------------------------------
@@ -759,12 +419,7 @@ export function scopeHostContractSuite(
     // -- entitlement gate (control-plane.md §4.3) -----------------------------
 
     it('gates a module operation on the tenant holding its SKU flag (§4.3)', async () => {
-      host.registerModule({
-        manifest: billedModManifest,
-        operations: {
-          'billed/act': (() => 'ran') as OperationHandler<never, unknown>,
-        },
-      });
+      host.registerModule(billedMod);
       host.admin.createTenant(staff, { id: t4, slug: 'billed-co', name: 'Billed Co' });
       await host.provisionScope(staff, { tenantId: t4, scopeId: s4, jurisdiction: 'eu' });
       const stub = await host.getScope(alice, t4, s4);
@@ -789,7 +444,11 @@ export function scopeHostContractSuite(
       host.admin.grantEntitlement(staff, t4, 'audited-sku');
       const grants = host.admin
         .auditLog({ tenantId: t4 })
-        .filter((r) => r.action === 'grantEntitlement' && (r.after as { entitlementKey: string }).entitlementKey === 'audited-sku');
+        .filter(
+          (r) =>
+            r.action === 'grantEntitlement' &&
+            (r.after as { entitlementKey: string }).entitlementKey === 'audited-sku',
+        );
       expect(grants).toHaveLength(1);
       expect(grants[0]!.actor).toBe(staff);
 

@@ -1,15 +1,20 @@
 /**
  * `@substrat-run/adapter-cloudflare` — the Durable-Object scope host (D-14).
  *
- * WORK IN PROGRESS (milestone 1: turn the shared contract-test suite green in
- * workerd against real Durable Objects). Landing incrementally:
- *   - [x] step 0 — spike: DO SQLite transaction semantics resolved
- *   - [ ] ScopeDO        — one scope = one SQLite-backed DO
- *   - [ ] ControlPlaneDO — the directory (tenants/scopes/roles/entitlements/audit)
- *   - [ ] CloudflareScopeHost — the coordinator facade implementing ScopeHost
+ * Milestone 1: the shared contract-test suites run in workerd against real
+ * Durable Objects. The adapter boundary is the scope-host contract (§5.7):
+ * everything above it is the same kernel + contracts + modules the pure adapter
+ * runs, unchanged.
  *
- * The adapter boundary is the scope-host contract (§5.7): everything above it is
- * the same kernel + contracts + modules the pure adapter runs, unchanged.
+ *   - CloudflareScopeHost — the coordinator (Worker isolate) implementing ScopeHost
+ *   - defineScopeDO       — one SQLite-backed Durable Object per scope
+ *   - ControlPlaneDO      — the cross-DO directory slice (roles + tenant tuples)
  */
+export { CloudflareScopeHost } from './host.js';
+export type { CloudflareScopeHostOptions } from './host.js';
+export { defineScopeDO } from './scope-do.js';
+export { ControlPlaneDO } from './control-plane-do.js';
 export { OperationQueue } from './serialization.js';
 export { doScopedSql } from './sql.js';
+export { createDoTupleChecker } from './checker.js';
+export type { ControlPlaneReader, DoCheckerDeps } from './checker.js';
