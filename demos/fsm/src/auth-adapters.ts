@@ -5,20 +5,36 @@ import {
   type ScopeId,
   type TenantId,
 } from '@substrat-run/contracts';
-import { ulid } from '@substrat-run/kernel';
-import type { CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
+import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { PERM as WO } from '@substrat-run/engine-workorder';
 import { PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
-import type { Auth } from './auth.js';
 
 /**
- * The auth seam (ported from the shop demo, made workerd-safe). `resolvePrincipal`
+ * The auth seam — runtime-agnostic, shared by BOTH entrypoints. `resolvePrincipal`
  * tries each mounted adapter in order; the first to recognise the request wins.
  * The kernel never sees any of this — it only ever gets a `PrincipalId`. Adapters
  * are chosen by config, so you can run Better Auth, the dev-header fallback, an
- * OIDC adapter, or several. No `node:*` / `better-sqlite3` here — Better Auth's
- * store is D1, reached through its own API and (for id lookups) `env.AUTH_DB`.
+ * OIDC adapter, or several.
+ *
+ * Deliberately imports nothing runtime-specific: the host is the neutral
+ * `ScopeHost` contract (`SqliteScopeHost` on Node, `CloudflareScopeHost` on the
+ * edge both implement it) and the Better Auth instance is consumed through the
+ * minimal structural `SessionAuth` — so this file typechecks under both the node
+ * and the worker tsconfig with no `node:*` / `better-sqlite3` / `adapter-*` deps.
  */
+
+/**
+ * The one method the seam needs from a Better Auth instance: read a session from
+ * request headers. Kept structural so neither the node (`better-sqlite3`) nor the
+ * worker (D1/Drizzle) concrete `Auth` type leaks in here.
+ */
+export interface SessionAuth {
+  api: {
+    getSession(opts: { headers: Headers }): Promise<{
+      user: { id: string; email?: string | null; name?: string | null };
+    } | null>;
+  };
+}
 export interface AuthResult {
   principal: PrincipalId;
   tenantId: TenantId;
@@ -87,7 +103,7 @@ export function devHeaderAdapter(node: DemoNode): AuthAdapter {
 }
 
 /** Better Auth: session cookie → external user → principal (via the kernel seam). */
-export function betterAuthAdapter(auth: Auth, host: CloudflareScopeHost, node: DemoNode): AuthAdapter {
+export function betterAuthAdapter(auth: SessionAuth, host: ScopeHost, node: DemoNode): AuthAdapter {
   return {
     id: 'better-auth',
     async resolve(headers) {
@@ -116,7 +132,7 @@ export function betterAuthAdapter(auth: Auth, host: CloudflareScopeHost, node: D
  * signup then resolves to a real, least-privilege principal the kernel enforces.
  */
 async function provisionTechnician(
-  host: CloudflareScopeHost,
+  host: ScopeHost,
   node: DemoNode,
   user: { id: string; email?: string | null; name?: string | null },
 ): Promise<{ principal: PrincipalId; tenantId: TenantId; scopeId: ScopeId | null }> {

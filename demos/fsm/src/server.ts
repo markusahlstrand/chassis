@@ -2,57 +2,148 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
+import Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { principalId, type PrincipalId } from '@substrat-run/contracts';
-import { PermissionDenied, type ScopeStub } from '@substrat-run/kernel';
+import { HTTPException } from 'hono/http-exception';
+import {
+  platformActorId,
+  type PrincipalId,
+  type ScopeId,
+  type TenantId,
+} from '@substrat-run/contracts';
+import { ulid, type ScopeStub } from '@substrat-run/kernel';
 import { buildDemoHost, seedDemo, type DemoWorld } from './index.js';
+import { buildAuthNode, migrateAuth } from './auth-node.js';
 import { mountApi } from './routes.js';
+import {
+  betterAuthAdapter,
+  devHeaderAdapter,
+  resolvePrincipal,
+  type AuthAdapter,
+  type AuthResult,
+} from './auth-adapters.js';
 
 /**
- * Dev API server for the FSM demo (stage 4 of the E2E run). Deliberately
- * thin: authenticate (dev principal picker via x-principal header) →
- * getScope → invoke. Every route is a wrapper over an operation; there is no
- * business logic here. The platform-grade surface (zod-openapi, sessions,
- * authhero) replaces the auth stub later without touching anything below.
+ * Dev API server for the FSM demo. Deliberately thin: resolve the principal
+ * (Better Auth session, or the opt-in dev-header fallback) → getScope → invoke.
+ * Every route is a wrapper over an operation; there is no business logic here.
+ *
+ * Better Auth is now the primary auth on BOTH entrypoints (this node server and
+ * the Cloudflare Worker), sharing the runtime-agnostic seam in `auth-adapters.ts`.
+ * The old `x-principal` persona picker (`/api/cast`) is retired.
  */
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '.data');
 mkdirSync(dataDir, { recursive: true });
 
+const port = Number(process.env.PORT ?? 8787);
+// The fsm app's Vite dev origin — the browser calls /api/auth/* through its proxy
+// (see app/vite.config.ts: port 5173 → proxy /api to :8787), so Better Auth must
+// trust it as an origin or login fails with "Invalid origin" / cookies won't stick.
+const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173';
+
 const host = buildDemoHost(dataDir);
 const world: DemoWorld = await seedDemo(host, dataDir);
 
-const CAST: Record<string, { name: string; role: string; principal: PrincipalId }> = {
-  anna: { name: 'Anna (kontor)', role: 'office-admin', principal: world.anna },
-  harald: { name: 'Harald (tekniker)', role: 'technician', principal: world.harald },
-  berit: { name: 'Berit (portal, BRF Grunden)', role: 'portal', principal: world.berit },
-  styrbjorn: {
-    name: 'Styrbjörn (portal, Kontorshotellet)',
-    role: 'portal',
-    principal: world.styrbjorn,
-  },
-  mallory: { name: 'Mallory (annan firma!)', role: 'attacker', principal: world.mallory },
-};
+// Node Better Auth — its own better-sqlite3 store, migrated on startup, then seed
+// the persona logins. baseURL is the web origin; both the web origin and the API
+// port are trusted (raw curl against :8787 uses the :8787 origin).
+const auth = buildAuthNode(dataDir, webOrigin, [webOrigin, `http://localhost:${port}`]);
+await migrateAuth(auth);
+
+// Each demo persona gets a Better Auth login bound to its OWN principal +
+// tenant/scope through the neutral identity seam. Mallory lives in t2/s2 (a
+// different tenant) — logging in as her lands in t2, proving the isolation.
+interface NodePersona {
+  email: string;
+  password: string;
+  name: string;
+  principal: PrincipalId;
+  tenantId: TenantId;
+  scopeId: ScopeId;
+}
+const NODE_PERSONAS: NodePersona[] = [
+  { email: 'anna@elmontage.se', password: 'demo1234', name: 'Anna (kontor)', principal: world.anna, tenantId: world.t1, scopeId: world.s1 },
+  { email: 'harald@elmontage.se', password: 'demo1234', name: 'Harald (tekniker)', principal: world.harald, tenantId: world.t1, scopeId: world.s1 },
+  { email: 'berit@brfgrunden.se', password: 'demo1234', name: 'Berit (portal, BRF Grunden)', principal: world.berit, tenantId: world.t1, scopeId: world.s1 },
+  { email: 'styrbjorn@kontorshotellet.se', password: 'demo1234', name: 'Styrbjörn (portal, Kontorshotellet)', principal: world.styrbjorn, tenantId: world.t1, scopeId: world.s1 },
+  { email: 'mallory@rorservice.se', password: 'demo1234', name: 'Mallory (annan firma!)', principal: world.mallory, tenantId: world.t2, scopeId: world.s2 },
+];
+
+async function seedPersonaLogins(): Promise<void> {
+  const staff = platformActorId.parse(ulid());
+  const db = new Database(join(dataDir, 'better-auth.sqlite'), { readonly: true });
+  try {
+    for (const p of NODE_PERSONAS) {
+      let userId: string | undefined;
+      try {
+        const res = await auth.api.signUpEmail({
+          body: { email: p.email, password: p.password, name: p.name },
+        });
+        userId = res.user.id;
+      } catch {
+        // Already exists — read the id back from Better Auth's own store.
+        userId = (db.prepare('SELECT id FROM user WHERE email = ?').get(p.email) as
+          | { id: string }
+          | undefined)?.id;
+      }
+      if (userId) {
+        await host.admin.linkIdentity(staff, {
+          provider: 'better-auth',
+          externalId: userId,
+          principal: p.principal,
+          tenantId: p.tenantId,
+          scopeId: p.scopeId,
+        });
+      }
+    }
+  } finally {
+    db.close();
+  }
+}
+await seedPersonaLogins();
+
+// Mounted auth adapters, in precedence order: a real Better Auth session wins.
+// The `x-principal` dev-header adapter is an impersonation bypass by design, so
+// it is mounted ONLY when ALLOW_DEV_HEADER=true (parity with the worker) —
+// secure by default, off unless explicitly opted in.
+const adapters: AuthAdapter[] = [betterAuthAdapter(auth, host, { tenantId: world.t1, scopeId: world.s1 })];
+if (process.env.ALLOW_DEV_HEADER === 'true') {
+  adapters.push(devHeaderAdapter({ tenantId: world.t1, scopeId: world.s1 }));
+}
 
 const app = new Hono();
 
-function principalOf(c: Context): PrincipalId {
-  const raw = c.req.header('x-principal');
-  if (!raw) throw new PermissionDenied('missing x-principal header');
-  return principalId.parse(raw);
-}
+// Better Auth owns everything under /api/auth/* (sign-up, sign-in, session, …).
+app.on(['GET', 'POST'], '/api/auth/*', (c) => auth.handler(c.req.raw));
 
+// The resolved identity behind the current request (principal, display, role), or 401.
+app.get('/api/me', async (c) => {
+  const r = await resolvePrincipal(adapters, c.req.raw.headers);
+  if (!r) return c.json({ error: 'unauthorized' }, 401);
+  return c.json({
+    principal: r.principal,
+    display: r.display,
+    role: r.role,
+    via: r.via,
+    tenant: r.tenantId,
+    scope: r.scopeId,
+  });
+});
+
+// A protected route resolves the caller across the mounted adapters, then getScope
+// for the RESOLVED tenant/scope (so mallory lands in t2/s2). None matched → 401.
 async function stub(c: Context): Promise<ScopeStub> {
-  return host.getScope(principalOf(c), world.t1, world.s1);
+  const r: AuthResult | null = await resolvePrincipal(adapters, c.req.raw.headers);
+  if (!r) throw new HTTPException(401, { message: 'unauthorized' });
+  return host.getScope(r.principal, r.tenantId, r.scopeId);
 }
 
-app.get('/api/cast', (c) => c.json(CAST));
-
-// The whole data API — shared with the Cloudflare Worker (src/routes.ts). Here
-// the stub authenticates via the x-principal dev picker on the SQLite adapter.
+// The whole data API — shared with the Cloudflare Worker (src/routes.ts), which
+// also installs the shared fail-closed error handler.
 mountApi(app, stub);
 
-const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port });
 console.log(`FSM demo API on http://localhost:${port} — data in ${dataDir}`);
+console.log(`  auth adapters: ${adapters.map((a) => a.id).join(', ')}`);

@@ -45,6 +45,7 @@ const HARNESS = new Set([
   'server.ts',
   'index.ts',
   'auth.ts',
+  'auth-node.ts',
   'auth-adapters.ts',
   'worker.ts',
   'routes.ts',

@@ -165,7 +165,7 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
   const { host, adapters } = authFor(c.env, originOf(c.req.raw));
   const result = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!result) throw new HTTPException(401, { message: 'unauthorized' });
-  return host.getScope(result.principal, T, S);
+  return host.getScope(result.principal, result.tenantId, result.scopeId);
 }
 
 // The resolved identity behind the current request (principal, display, role), or 401.
