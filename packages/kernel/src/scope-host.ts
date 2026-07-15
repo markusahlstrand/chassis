@@ -1,4 +1,5 @@
 import type {
+  AdminLogEntry,
   CapabilityGrant,
   Decision,
   DomainEvent,
@@ -8,6 +9,7 @@ import type {
   ModuleManifest,
   Node,
   PermissionKey,
+  PlatformActorId,
   PrincipalId,
   RoleAssignment,
   RoleDefinition,
@@ -128,16 +130,38 @@ export interface ModuleRegistration {
 }
 
 /**
- * Admin surface for enforcement input (design doc §4; testrun spec §9.2.5).
- * v0 is host-level; the human-checkpoint review workflow wraps this later.
+ * Admin surface for enforcement input (design doc §4; control-plane.md §4.4).
+ *
+ * Every mutation is a control-plane action: it takes a `PlatformActorId` — the
+ * authenticated staff subject, typed distinctly from a tenant `PrincipalId` so
+ * the compiler refuses to confuse them — and writes an append-only audit row
+ * stamped platform-side (actor, action, target, before/after, timestamp). The
+ * actor is never a principal in any tenant, and the record is never supplied by
+ * the caller. This is the one surface that must not be retrofitted (K-20): a
+ * surface that can act without a durable record of who acted is worse than none.
+ *
+ * Locally the actor is a dev stub (control-plane.md §6); real staff auth (SSO,
+ * MFA) gates EXPOSING this surface, not building it — D-16 cashed in.
  */
 export interface HostAdmin {
-  defineRole(tenantId: TenantId, role: RoleDefinition): void;
-  assignRole(assignment: RoleAssignment): void;
-  grant(grant: CapabilityGrant): void;
+  defineRole(actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition): void;
+  assignRole(actor: PlatformActorId, assignment: RoleAssignment): void;
+  grant(actor: PlatformActorId, grant: CapabilityGrant): void;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
-  grantToOrg(orgId: string, permission: PermissionKey, node: Node, entity?: EntityRef): void;
-  addMember(tenantId: TenantId, principal: PrincipalId, orgId: string): void;
+  grantToOrg(
+    actor: PlatformActorId,
+    orgId: string,
+    permission: PermissionKey,
+    node: Node,
+    entity?: EntityRef,
+  ): void;
+  addMember(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId, orgId: string): void;
+  /**
+   * The append-only admin audit trail, newest-comparable last (ULID order is
+   * chronological). Read path for the console history and the permission-diff
+   * human checkpoint (control-plane.md §4.5).
+   */
+  auditLog(filter?: { tenantId?: TenantId }): AdminLogEntry[];
 }
 
 export interface ProvisionScopeInput {

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
+  adminLogEntry,
   domainEvent,
   domainEventInput,
   eventId,
@@ -10,12 +11,15 @@ import {
   objectRef,
   principalId,
   roleDefinition,
+  type AdminAction,
+  type AdminLogEntry,
   type CapabilityGrant,
   type DomainEvent,
   type DomainEventInput,
   type EntityRef,
   type Node,
   type PermissionKey,
+  type PlatformActorId,
   type PrincipalId,
   type RoleAssignment,
   type RoleDefinition,
@@ -107,6 +111,18 @@ const KERNEL_DDL = `
   );
 `;
 
+interface AdminLogRow {
+  id: string;
+  actor: string;
+  action: string;
+  tenant_id: string;
+  scope_id: string | null;
+  vertical: string | null;
+  before: string | null;
+  after: string | null;
+  at: string;
+}
+
 interface OutboxRow {
   id: string;
   type: string;
@@ -170,6 +186,20 @@ export class SqliteScopeHost implements ScopeHost {
         permissions TEXT NOT NULL,
         source TEXT NOT NULL,
         PRIMARY KEY (tenant_id, role_key)
+      );
+      -- Append-only control-plane audit trail (control-plane.md §4.4). Lives in
+      -- the directory, not a scope DB: it records cross-tenant staff actions and
+      -- is stamped host-side. Never UPDATEd, never DELETEd.
+      CREATE TABLE IF NOT EXISTS _substrat_admin_log (
+        id TEXT PRIMARY KEY,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        scope_id TEXT,
+        vertical TEXT,
+        before TEXT,
+        after TEXT,
+        at TEXT NOT NULL
       );
     `);
     this.loadRoles();
@@ -444,6 +474,36 @@ export class SqliteScopeHost implements ScopeHost {
   // -------------------------------------------------------------------------
 
   private buildAdmin(): HostAdmin {
+    // Every mutation below stamps one append-only row: who acted, on what, and
+    // the applied payload (control-plane.md §4.4). `before` is captured only
+    // where cheaply readable (a redefined role); tuple writes are idempotent
+    // upserts with no cheap prior state, so their `before` is null.
+    const writeAudit = (
+      actor: PlatformActorId,
+      action: AdminAction,
+      target: { tenantId: TenantId; scopeId?: ScopeId | null; vertical?: string | null },
+      before: unknown,
+      after: unknown,
+    ) => {
+      this.directory
+        .prepare(
+          `INSERT INTO _substrat_admin_log
+             (id, actor, action, tenant_id, scope_id, vertical, before, after, at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          ulid(),
+          actor,
+          action,
+          target.tenantId,
+          target.scopeId ?? null,
+          target.vertical ?? null,
+          before == null ? null : JSON.stringify(before),
+          after == null ? null : JSON.stringify(after),
+          new Date().toISOString(),
+        );
+    };
+
     const writeTenantTuple = (
       tenantId: string,
       subject: string,
@@ -505,8 +565,9 @@ export class SqliteScopeHost implements ScopeHost {
     };
 
     return {
-      defineRole: (tenantId: TenantId, role: RoleDefinition) => {
+      defineRole: (actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition) => {
         const parsed = roleDefinition.parse(role);
+        const before = this.roles.get(`${tenantId}/${parsed.key}`) ?? null;
         this.directory
           .prepare(
             `INSERT OR REPLACE INTO _substrat_roles (tenant_id, role_key, permissions, source)
@@ -514,8 +575,9 @@ export class SqliteScopeHost implements ScopeHost {
           )
           .run(tenantId, parsed.key, JSON.stringify(parsed.permissions), String(parsed.source));
         this.roles.set(`${tenantId}/${parsed.key}`, parsed);
+        writeAudit(actor, 'defineRole', { tenantId }, before, parsed);
       },
-      assignRole: (assignment: RoleAssignment) => {
+      assignRole: (actor: PlatformActorId, assignment: RoleAssignment) => {
         const subject = `principal:${assignment.principalId}`;
         if (assignment.node.scopeId) {
           writeScopeTuple(
@@ -532,8 +594,15 @@ export class SqliteScopeHost implements ScopeHost {
             `tenant:${assignment.node.tenantId}`,
           );
         }
+        writeAudit(
+          actor,
+          'assignRole',
+          { tenantId: assignment.node.tenantId, scopeId: assignment.node.scopeId },
+          null,
+          assignment,
+        );
       },
-      grant: (grant: CapabilityGrant) => {
+      grant: (actor: PlatformActorId, grant: CapabilityGrant) => {
         writeGrant(
           `principal:${grant.principalId}`,
           grant.permission,
@@ -541,12 +610,49 @@ export class SqliteScopeHost implements ScopeHost {
           grant.entity,
           grant.expiresAt,
         );
+        writeAudit(
+          actor,
+          'grant',
+          { tenantId: grant.node.tenantId, scopeId: grant.node.scopeId },
+          null,
+          grant,
+        );
       },
-      grantToOrg: (orgId, permission, node, entity) => {
+      grantToOrg: (actor, orgId, permission, node, entity) => {
         writeGrant(`org:${orgId}`, permission, node, entity);
+        writeAudit(
+          actor,
+          'grantToOrg',
+          { tenantId: node.tenantId, scopeId: node.scopeId },
+          null,
+          { orgId, permission, node, entity },
+        );
       },
-      addMember: (tenantId, principal, orgId) => {
+      addMember: (actor, tenantId, principal, orgId) => {
         writeTenantTuple(tenantId, `principal:${principal}`, 'member', `org:${orgId}`);
+        writeAudit(actor, 'addMember', { tenantId }, null, { principal, orgId });
+      },
+      auditLog: (filter?: { tenantId?: TenantId }): AdminLogEntry[] => {
+        const rows = (
+          filter?.tenantId
+            ? this.directory
+                .prepare('SELECT * FROM _substrat_admin_log WHERE tenant_id = ? ORDER BY id')
+                .all(filter.tenantId)
+            : this.directory.prepare('SELECT * FROM _substrat_admin_log ORDER BY id').all()
+        ) as AdminLogRow[];
+        return rows.map((r) =>
+          adminLogEntry.parse({
+            id: r.id,
+            actor: r.actor,
+            action: r.action,
+            tenantId: r.tenant_id,
+            scopeId: r.scope_id,
+            vertical: r.vertical,
+            before: r.before === null ? null : JSON.parse(r.before),
+            after: r.after === null ? null : JSON.parse(r.after),
+            at: r.at,
+          }),
+        );
       },
     };
   }
