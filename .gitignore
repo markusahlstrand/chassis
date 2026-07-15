@@ -9,3 +9,6 @@ coverage/
 # Cloudflare Workers build/dev artifacts
 .wrangler/
 dist-worker/
+# Local dev secrets for wrangler (BETTER_AUTH_SECRET etc.)
+.dev.vars
+**/.dev.vars

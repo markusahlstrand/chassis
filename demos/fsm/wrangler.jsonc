@@ -2,12 +2,20 @@
   "name": "substrat-fsm",
   "main": "src/worker.ts",
   "compatibility_date": "2025-01-01",
+  // Better Auth (edge authentication, M3) needs Node built-ins on workerd.
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
       { "name": "SCOPE", "class_name": "ScopeDO" },
       { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
     ]
   },
+  // Better Auth's own store (identity, credentials, sessions) — separate from
+  // the scope DOs and the control-plane directory. Local D1 is created
+  // automatically under wrangler dev (no Cloudflare account needed).
+  "d1_databases": [
+    { "binding": "AUTH_DB", "database_name": "substrat-fsm-auth", "database_id": "local" }
+  ],
   "migrations": [
     {
       "tag": "v1",

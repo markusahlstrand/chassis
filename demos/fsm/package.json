@@ -23,7 +23,9 @@
     "@substrat-run/engine-workorder": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
     "@hono/node-server": "^1.13.0",
+    "better-auth": "^1.6.23",
     "better-sqlite3": "^12.0.0",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.6.0",
     "zod": "^3.25.0"
   },

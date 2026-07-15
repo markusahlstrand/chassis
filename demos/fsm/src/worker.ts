@@ -11,18 +11,28 @@
  * Deploy:     wrangler deploy         (needs a Workers Paid plan — DO SQLite)
  */
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import {
   principalId,
   scopeId,
   tenantId,
   platformActorId,
-  type PrincipalId,
 } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
 import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { servicecoModule, SC_PERM } from './module.js';
+import { buildAuth, type Auth } from './auth.js';
+import {
+  betterAuthAdapter,
+  devHeaderAdapter,
+  resolvePrincipal,
+  PERSONAS,
+  TECHNICIAN_ROLE,
+  type AuthAdapter,
+  type DemoNode,
+} from './auth-adapters.js';
 
 // Registration order is a migration-ordering contract (protocol before serviceco).
 const MODULES = [workorderModule, invoicingModule, protocolModule, servicecoModule];
@@ -31,15 +41,26 @@ const MODULES = [workorderModule, invoicingModule, protocolModule, servicecoModu
 export const ScopeDO = defineScopeDO(MODULES, {});
 export { ControlPlaneDO };
 
-// Fixed demo identifiers (valid ULIDs). One tenant, one scope, one office admin.
+// Fixed demo identifiers (valid ULIDs). One tenant, one scope; Anna is the
+// office admin, Harald a scoped technician (fill/report, no signing).
 const T = tenantId.parse('01JZ0000000000000000000001');
 const S = scopeId.parse('01JZ0000000000000000000002');
 const ANNA = principalId.parse('01JZ0000000000000000000003');
+const HARALD = principalId.parse('01JZ0000000000000000000004');
 const STAFF = platformActorId.parse('01JZ0000000000000000000005');
+const NODE: DemoNode = { tenantId: T, scopeId: S };
+
+/** Persona key → the fixed principal its Better Auth login binds to (in /api/seed). */
+const PERSONA_PRINCIPAL = { anna: ANNA, harald: HARALD } as const;
 
 interface Env {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
+  AUTH_DB: D1Database;
+  BETTER_AUTH_SECRET?: string;
+  BASE_URL?: string;
+  /** Local dev only: when 'true', trust the `x-principal` header. NEVER set in prod. */
+  ALLOW_DEV_HEADER?: string;
 }
 
 /** The coordinator is stateless — rebuilt per request; durable state is in the DOs. */
@@ -49,12 +70,25 @@ function hostFor(env: Env): CloudflareScopeHost {
   return host;
 }
 
-/** Dev auth: `x-principal` header picks the caller; defaults to the office admin. */
-function principalOf(header: string | undefined): PrincipalId {
-  return principalId.parse(header ?? ANNA);
+/**
+ * The mounted auth seam: Better Auth (session cookie). The kernel only ever
+ * receives the resolved `PrincipalId`. The `x-principal` dev-header adapter is
+ * an impersonation bypass by design, so it is mounted ONLY when
+ * `ALLOW_DEV_HEADER=true` (local dev) — secure by default, off in production.
+ */
+function authFor(env: Env): { auth: Auth; host: CloudflareScopeHost; adapters: AuthAdapter[] } {
+  const auth = buildAuth(env);
+  const host = hostFor(env);
+  const adapters: AuthAdapter[] = [betterAuthAdapter(auth, host, NODE)];
+  if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter(NODE));
+  return { auth, host, adapters };
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Edge authentication (M3): Better Auth owns identity/credentials/sessions in
+// D1, mounted under /api/auth/*. A per-request instance (stateless coordinator).
+app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env).handler(c.req.raw));
 
 app.get('/', (c) =>
   c.json({
@@ -87,11 +121,68 @@ app.post('/api/seed', async (c) => {
     roleKey: 'office-admin',
     node: { tenantId: T, scopeId: null },
   });
-  return c.json({ seeded: true, tenant: T, scope: S, principal: ANNA });
+  // Technicians fill protocols and report on jobs; SIGNING stays with the office.
+  await host.admin.defineRole(STAFF, T, TECHNICIAN_ROLE);
+  await host.admin.assignRole(STAFF, {
+    principalId: HARALD,
+    roleKey: 'technician',
+    node: { tenantId: T, scopeId: S },
+  });
+
+  // Seed a Better Auth login for each persona and bind it to that persona's
+  // fixed principal through the neutral identity seam (idempotent). Logging in
+  // *is* that principal — the kernel enforces exactly its permissions.
+  const auth = buildAuth(c.env);
+  const logins: Record<string, string> = {};
+  for (const p of PERSONAS) {
+    let userId: string | undefined;
+    try {
+      const res = await auth.api.signUpEmail({ body: { email: p.email, password: p.password, name: p.name } });
+      userId = res.user.id;
+    } catch {
+      // Already exists — read the id back from Better Auth's own D1 store.
+      const row = (await c.env.AUTH_DB.prepare('SELECT id FROM user WHERE email = ?')
+        .bind(p.email)
+        .first()) as { id: string } | null;
+      userId = row?.id;
+    }
+    if (userId) {
+      await host.admin.linkIdentity(STAFF, {
+        provider: 'better-auth',
+        externalId: userId,
+        principal: PERSONA_PRINCIPAL[p.key],
+        tenantId: T,
+        scopeId: S,
+      });
+      logins[p.email] = p.role;
+    }
+  }
+  return c.json({ seeded: true, tenant: T, scope: S, principal: ANNA, logins });
 });
 
-const stub = (c: { env: Env; req: { header(n: string): string | undefined } }) =>
-  hostFor(c.env).getScope(principalOf(c.req.header('x-principal')), T, S);
+// A protected data route resolves the caller across the mounted adapters, then
+// getScope for the fixed demo tenant/scope. No adapter matched → 401 (fail closed).
+async function stub(c: { env: Env; req: { raw: Request } }) {
+  const { host, adapters } = authFor(c.env);
+  const result = await resolvePrincipal(adapters, c.req.raw.headers);
+  if (!result) throw new HTTPException(401, { message: 'unauthorized' });
+  return host.getScope(result.principal, T, S);
+}
+
+// The resolved identity behind the current request (principal, display, role), or 401.
+app.get('/api/me', async (c) => {
+  const { adapters } = authFor(c.env);
+  const result = await resolvePrincipal(adapters, c.req.raw.headers);
+  if (!result) return c.json({ error: 'unauthorized' }, 401);
+  return c.json({
+    principal: result.principal,
+    display: result.display,
+    role: result.role,
+    via: result.via,
+    tenant: result.tenantId,
+    scope: result.scopeId,
+  });
+});
 
 app.get('/api/customers', async (c) => c.json(await (await stub(c)).invoke('serviceco/list-customers')));
 app.post('/api/customers', async (c) =>
@@ -114,7 +205,11 @@ app.get('/api/workorders/:id', async (c) =>
   c.json(await (await stub(c)).invoke('workorder/get', { orderId: c.req.param('id') })),
 );
 
-// Fail closed → JSON. A permission or invariant violation is a 4xx, not a 500.
-app.onError((err, c) => c.json({ error: (err as Error).message }, 400));
+// Fail closed → JSON. An unauthenticated request is a 401; a permission or
+// invariant violation is a 4xx, not a 500.
+app.onError((err, c) => {
+  if (err instanceof HTTPException) return err.getResponse();
+  return c.json({ error: (err as Error).message }, 400);
+});
 
 export default app;
