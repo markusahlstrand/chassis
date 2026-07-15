@@ -161,8 +161,8 @@ no IDs travel through your business logic.
 Scope databases are plain SQLite files in WAL mode — debugging is opening a file:
 
 ```sh
-sqlite3 ./data/<scopeId>.sqlite 'SELECT * FROM notes;'
-sqlite3 ./data/<scopeId>.sqlite 'SELECT type, tenant_id, actor, occurred_at FROM _substrat_outbox;'
+sqlite3 ./data/<tenantId>__<scopeId>.sqlite 'SELECT * FROM notes;'
+sqlite3 ./data/<tenantId>__<scopeId>.sqlite 'SELECT type, tenant_id, actor, occurred_at FROM _substrat_outbox;'
 ```
 
 The event row carries the full kernel-stamped envelope — that's your audit trail,

@@ -48,7 +48,7 @@ Cloudflare adapter must pass unchanged.
 Scope databases run in WAL mode and can be opened read-only with any SQLite tool:
 
 ```sh
-sqlite3 ./data/<scopeId>.sqlite '.tables'
+sqlite3 ./data/<tenantId>__<scopeId>.sqlite '.tables'
 sqlite3 ./data/_directory.sqlite 'SELECT * FROM scopes;'
 ```
 
