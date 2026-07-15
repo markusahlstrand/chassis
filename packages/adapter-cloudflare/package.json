@@ -1,0 +1,44 @@
+{
+  "name": "@substrat-run/adapter-cloudflare",
+  "version": "0.2.0",
+  "description": "Cloudflare Durable-Object scope host (D-14): DO-per-scope, real kernel semantics on Workers",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "packages/adapter-cloudflare"
+  },
+  "homepage": "https://github.com/substrat-run/substrat",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@substrat-run/kernel": "workspace:^",
+    "@substrat-run/contracts": "workspace:^"
+  },
+  "devDependencies": {
+    "@substrat-run/contract-tests": "workspace:^",
+    "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "wrangler": "^4.110.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

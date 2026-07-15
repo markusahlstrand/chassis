@@ -1,0 +1,9 @@
+{
+  "name": "substrat-adapter-cloudflare",
+  "compatibility_date": "2025-01-01",
+  "main": "test/spike-worker.ts",
+  "durable_objects": {
+    "bindings": [{ "name": "SPIKE", "class_name": "SpikeDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SpikeDO"] }]
+}
