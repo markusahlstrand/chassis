@@ -22,7 +22,8 @@ const host = new SqliteScopeHost({
   checker: UNSAFE_allowAllChecker,  // omit for the secure default: deny everything
 });
 
-await host.provisionScope({ tenantId, scopeId, jurisdiction: 'eu' }); // idempotent
+host.admin.createTenant(actor, { id: tenantId, slug, name });        // tenant first
+await host.provisionScope(actor, { tenantId, scopeId, jurisdiction: 'eu' }); // idempotent
 const stub = await host.getScope(principal, tenantId, scopeId);
 await stub.invoke('workorder/create', input);
 await host.close();

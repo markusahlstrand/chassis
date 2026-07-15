@@ -17,7 +17,8 @@ Branded ULID types — opaque, sortable, no PII, and unmixable at compile time:
 |---|---|---|
 | `tenantId` | `TenantId` | |
 | `scopeId` | `ScopeId` | a `ScopeId` won't typecheck as a `TenantId` |
-| `principalId` | `PrincipalId` | |
+| `principalId` | `PrincipalId` | a tenant subject |
+| `platformActorId` | `PlatformActorId` | a control-plane staff subject — branded apart from `PrincipalId` so the two can't be confused |
 | `eventId` | `EventId` | |
 | `dataSubjectId` | `DataSubjectId` | keys crypto-shredding erasure |
 | `moduleId` | `ModuleId` | npm-package-shaped: `@substrat-run/engine-workorder` |
@@ -37,8 +38,14 @@ jurisdiction, so they must never encode anything.
 ## Tenancy (`tenancy.ts`)
 
 `tenant` / `Tenant`, `scope` / `Scope`, plus `tenantStatus`, `scopeStatus`,
-`storageShape` (`'A' | 'B'`) and `jurisdiction` (`'eu' | null`). See
-[Tenants & scopes](/concepts/tenancy) for the semantics.
+`storageShape` (`'A' | 'B'`) and `jurisdiction` (`'eu' | null`), and `createTenantInput`.
+See [Tenants & scopes](/concepts/tenancy) for the semantics.
+
+## Control plane (`control-plane.ts`)
+
+`adminAction` (the enum of audited control-plane mutations) and `adminLogEntry` /
+`AdminLogEntry` — one append-only audit row: actor, action, target, before/after, timestamp.
+See [The platform layer](/concepts/platform).
 
 ## Events (`events.ts`)
 

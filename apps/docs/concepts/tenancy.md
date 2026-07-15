@@ -69,7 +69,10 @@ root, not one 300-times-hotter database.
 ## Provisioning
 
 ```ts
-await host.provisionScope({
+// A scope belongs to a tenant, so the tenant record must exist first.
+host.admin.createTenant(actor, { id: tenantId, slug, name });
+
+await host.provisionScope(actor, {
   tenantId,
   scopeId,
   storageShape: 'A',    // optional
@@ -77,10 +80,12 @@ await host.provisionScope({
 });
 ```
 
+Both take a platform `actor` (the control-plane staff subject) and are audited.
 Provisioning is **idempotent and journaled** — safe to re-run, safe to drive from a
-reconciliation sweep. The host maintains a **directory** (a separate database) as the
-authoritative inventory of scopes; it's what `getScope` validates addressing against,
-and the input to migration sweeps and ops tooling.
+reconciliation sweep — and **requires an existing active tenant**, so a scope can never be
+orphaned. The host maintains a **directory** (a separate database) as the authoritative
+inventory of tenants and scopes; it's what `getScope` validates addressing against, and the
+input to migration sweeps and ops tooling.
 
 Provisioning is one step of a longer lifecycle — `active → suspended ⇄ active → archiving →
 archived` — which, along with entitlements, custom domains, and the rest of what sits *below*

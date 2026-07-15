@@ -23,8 +23,8 @@ The adapter seam. Full semantics in
 | `ModuleRegistration` | interface | manifest + migrations + operations + consumers |
 | `SqlMigration` | interface | `{ version, sql }` — ordered, journaled per module |
 | `ScopedSql`, `SqlValue` | types | synchronous scope-local SQL: `query<T>()`, `exec()` |
-| `HostAdmin` | interface | enforcement-input writes: `defineRole`, `assignRole`, `grant`, `grantToOrg`, `addMember` |
-| `ProvisionScopeInput` | interface | tenant, scope, optional shape + jurisdiction |
+| `HostAdmin` | interface | the audited control-plane surface — enforcement input (`defineRole`, `assignRole`, `grant`, `grantToOrg`, `addMember`), tenant registry (`createTenant`, `setTenantStatus`, `listTenants`, `getTenant`), scope lifecycle (`suspendScope`, `unsuspendScope`, `archiveScope`, `unarchiveScope`), entitlements (`grantEntitlement`, `revokeEntitlement`, `listEntitlements`), and `auditLog`. Every mutation takes a `PlatformActorId` and writes an append-only audit row |
+| `ProvisionScopeInput` | interface | tenant, scope, optional shape + jurisdiction (provisioned via `provisionScope(actor, input)`) |
 
 ## Permission checker (`permission-checker.ts`)
 

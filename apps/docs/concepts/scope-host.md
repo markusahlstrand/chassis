@@ -10,10 +10,11 @@ handler sees `sql`, `emit`, `check`, and `link`; the caller sees only `invoke()`
 ```ts
 interface ScopeHost {
   getScope(principal: PrincipalId, tenantId: TenantId, scopeId: ScopeId): Promise<ScopeStub>;
-  provisionScope(input: ProvisionScopeInput): Promise<void>;
+  provisionScope(actor: PlatformActorId, input: ProvisionScopeInput): Promise<void>;
   registerModule(registration: ModuleRegistration): void;
   defineOperation<I, O>(name: string, handler: OperationHandler<I, O>): void;
-  readonly admin: HostAdmin; // roles, assignments, grants, membership
+  readonly admin: HostAdmin; // control plane: roles/grants, tenant registry,
+                             // scope lifecycle, entitlements, audit log
   close(): Promise<void>;
 }
 
@@ -71,7 +72,11 @@ because we shared memory" bugs are impossible by construction.
 ### Fail-closed addressing
 
 `getScope` validates `(tenantId, scopeId)` against the directory. A mismatched pair
-throws; it never resolves to another tenant's scope.
+throws; it never resolves to another tenant's scope. The same fail-closed path also
+gates lifecycle status: a suspended or deleting **tenant**, or a suspended or archived
+**scope**, fails `getScope` — which is how suspend and archive actually contain.
+Operations are gated once more at `invoke`: a module whose `entitlementKey` the tenant
+does not hold does not resolve.
 
 ### Kernel-stamped events
 
