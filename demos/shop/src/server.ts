@@ -4,22 +4,22 @@ import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { type PrincipalId } from '@substrat-run/contracts';
 import { PermissionDenied, type ScopeStub } from '@substrat-run/kernel';
 import { buildShopHost, seedShop, type ShopWorld } from './index.js';
 import { buildAuth, migrateAuth } from './auth.js';
 import {
   betterAuthAdapter,
-  devPickerAuth,
+  publicAuth,
   resolvePrincipal,
+  seedPersonaLogins,
   type AuthAdapter,
   type AuthResult,
 } from './auth-adapters.js';
 
 /**
- * Dev API server for the Kallkälla Kaffe demo. Deliberately thin: authenticate
- * (dev principal picker via x-principal header) → getScope → invoke. Every route
- * is a wrapper over an operation; there is no business logic here.
+ * Dev API server for the Kallkälla Kaffe demo. Deliberately thin: resolve the
+ * principal (Better Auth session, or the anonymous browse-only fallback) →
+ * getScope → invoke. Every route is a wrapper over an operation.
  */
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '.data');
@@ -31,25 +31,17 @@ const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:5175';
 const host = buildShopHost(dataDir);
 const world: ShopWorld = await seedShop(host, dataDir);
 
-// Better Auth — its own store, migrated on startup (the "second adapter").
+// Better Auth — its own store, migrated on startup, then seed the persona logins.
 const auth = buildAuth(dataDir, PORT, WEB_ORIGIN);
 await migrateAuth(auth);
+await seedPersonaLogins(auth, host, world, dataDir);
 
-const CAST: Record<string, { name: string; role: string; principal: PrincipalId; customerId?: string }> = {
-  astrid: { name: 'Astrid (butiksägare)', role: 'shop-admin', principal: world.astrid },
-  gustav: { name: 'Gustav (lager)', role: 'warehouse', principal: world.gustav },
-  elin: { name: 'Elin (Café Pascal)', role: 'shopper', principal: world.elin, customerId: world.elinCustomerId },
-  otto: { name: 'Otto (Kontoret)', role: 'shopper', principal: world.otto, customerId: world.ottoCustomerId },
-  guest: { name: 'Gäst (anonym)', role: 'shopper', principal: world.guest },
-  rurik: { name: 'Rurik (Bönfeber!)', role: 'attacker', principal: world.rurik },
-};
-
-// Mounted auth adapters, in precedence order: a real Better Auth session wins
-// over a dev-picker header. Chosen by config so you can run one, the other, or both.
-const ENABLED = (process.env.AUTH ?? 'better-auth,dev').split(',').map((s) => s.trim());
+// Mounted auth adapters, in precedence order: a real Better Auth session wins;
+// otherwise the anonymous fallback (browse-only). The public adapter must be last.
+const ENABLED = (process.env.AUTH ?? 'better-auth,public').split(',').map((s) => s.trim());
 const adapters: AuthAdapter[] = [];
 if (ENABLED.includes('better-auth')) adapters.push(betterAuthAdapter(auth, host, world));
-if (ENABLED.includes('dev')) adapters.push(devPickerAuth(world, CAST));
+if (ENABLED.includes('public')) adapters.push(publicAuth(world));
 
 const app = new Hono();
 
@@ -69,18 +61,21 @@ async function body(c: Context): Promise<Record<string, unknown>> {
 // Better Auth owns everything under /api/auth/* (sign-up, sign-in, session, …).
 app.on(['POST', 'GET'], '/api/auth/*', (c) => auth.handler(c.req.raw));
 
-// Who am I right now (either door), and my customer id for checkout.
+// Who am I right now, my role hint (for nav), and my customer id for checkout.
 app.get('/api/me', async (c) => {
   const r = await resolvePrincipal(adapters, c.req.raw.headers);
-  if (!r) return c.json({ authenticated: false });
+  if (!r) return c.json({ authenticated: false, role: 'public' });
+  const authenticated = r.via === 'better-auth';
   let customerId: string | null = null;
-  try {
-    const s = await host.getScope(r.principal, r.tenantId, r.scopeId);
-    customerId = (await s.invoke<{ id: string } | null>('shop/my-customer'))?.id ?? null;
-  } catch {
-    customerId = null;
+  if (authenticated) {
+    try {
+      const s = await host.getScope(r.principal, r.tenantId, r.scopeId);
+      customerId = (await s.invoke<{ id: string } | null>('shop/my-customer'))?.id ?? null;
+    } catch {
+      customerId = null;
+    }
   }
-  return c.json({ authenticated: true, principal: r.principal, display: r.display, via: r.via, customerId });
+  return c.json({ authenticated, principal: r.principal, display: r.display, via: r.via, role: r.role, customerId });
 });
 
 app.onError((err, c) => {
@@ -91,7 +86,6 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 400);
 });
 
-app.get('/api/cast', (c) => c.json({ cast: CAST, world: { customers: { elin: world.elinCustomerId, otto: world.ottoCustomerId } } }));
 
 // storefront
 app.get('/api/catalog', async (c) => c.json(await (await stub(c)).invoke('shop/catalog')));

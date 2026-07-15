@@ -24,6 +24,7 @@ export interface ShopWorld {
   elin: PrincipalId; // customer-shopper (Café Pascal)
   otto: PrincipalId; // customer-shopper (Kontoret Otto)
   guest: PrincipalId; // anonymous shopper — no order grant
+  public: PrincipalId; // browse-only fallback for not-logged-in visitors
   rurik: PrincipalId; // shop-admin @ t2 — the attacker
   elinCustomerId: string;
   ottoCustomerId: string;
@@ -45,7 +46,8 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
   const raw: Record<string, string> = fresh
     ? {
         t1: ulid(), t2: ulid(), s1: ulid(), s2: ulid(),
-        astrid: ulid(), gustav: ulid(), elin: ulid(), otto: ulid(), guest: ulid(), rurik: ulid(),
+        astrid: ulid(), gustav: ulid(), elin: ulid(), otto: ulid(), guest: ulid(),
+        public: ulid(), rurik: ulid(),
         elinCustomerId: '', ottoCustomerId: '', microLotVariantId: '', chelbesaVariantId: '',
       }
     : (JSON.parse(readFileSync(castPath, 'utf8')) as Record<string, string>);
@@ -55,7 +57,11 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
     s1: scopeId.parse(raw.s1), s2: scopeId.parse(raw.s2),
     astrid: principalId.parse(raw.astrid), gustav: principalId.parse(raw.gustav),
     elin: principalId.parse(raw.elin), otto: principalId.parse(raw.otto),
-    guest: principalId.parse(raw.guest), rurik: principalId.parse(raw.rurik),
+    guest: principalId.parse(raw.guest),
+    // Tolerant of a cast.json written before `public` existed — anonymous browse
+    // is stateless, so a fresh id per start is fine.
+    public: principalId.parse(raw.public ?? ulid()),
+    rurik: principalId.parse(raw.rurik),
     elinCustomerId: raw.elinCustomerId ?? '', ottoCustomerId: raw.ottoCustomerId ?? '',
     microLotVariantId: raw.microLotVariantId ?? '', chelbesaVariantId: raw.chelbesaVariantId ?? '',
   };
@@ -84,11 +90,13 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
   ];
   const warehousePerms = [SHOP_PERM.stockManage, SHOP_PERM.orderFulfil, SHOP_PERM.orderRead, SHOP_PERM.browse];
   const shopperPerms = [SHOP_PERM.browse, SHOP_PERM.checkout];
+  const publicPerms = [SHOP_PERM.browse]; // anonymous visitors: read the catalogue only
 
   for (const t of [world.t1, world.t2]) {
     host.admin.defineRole(staff, t, { key: 'shop-admin', permissions: adminPerms, source: 'vertical' });
     host.admin.defineRole(staff, t, { key: 'warehouse', permissions: warehousePerms, source: 'vertical' });
     host.admin.defineRole(staff, t, { key: 'shopper', permissions: shopperPerms, source: 'vertical' });
+    host.admin.defineRole(staff, t, { key: 'public', permissions: publicPerms, source: 'vertical' });
   }
 
   host.admin.assignRole(staff, { principalId: world.astrid, roleKey: 'shop-admin', node: { tenantId: world.t1, scopeId: null } });
@@ -96,6 +104,7 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
   host.admin.assignRole(staff, { principalId: world.elin, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
   host.admin.assignRole(staff, { principalId: world.otto, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
   host.admin.assignRole(staff, { principalId: world.guest, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
+  host.admin.assignRole(staff, { principalId: world.public, roleKey: 'public', node: { tenantId: world.t1, scopeId: world.s1 } });
   host.admin.assignRole(staff, { principalId: world.rurik, roleKey: 'shop-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {

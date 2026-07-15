@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import {
   platformActorId,
   principalId,
@@ -15,43 +17,49 @@ import type { Auth } from './auth.js';
  * The auth seam. `resolvePrincipal` tries each mounted adapter in order; the
  * first to recognise the request wins. The kernel never sees any of this — it
  * only ever gets a `PrincipalId`. Adapters are chosen by config (AUTH env), so
- * you can run the dev picker, Better Auth, an OIDC adapter, or several at once.
+ * you can run Better Auth, the anonymous fallback, an OIDC adapter, or several.
  */
 export interface AuthResult {
   principal: PrincipalId;
   tenantId: TenantId;
   scopeId: ScopeId;
-  via: string; // 'dev' | 'better-auth'
+  via: string; // 'better-auth' | 'public'
   display: string;
+  role: string; // UI hint only ('shop-admin' | 'warehouse' | 'customer' | 'public'); the kernel still enforces
 }
 export interface AuthAdapter {
   id: string;
   resolve(headers: Headers): Promise<AuthResult | null>;
 }
 
-/** The dev principal-picker (`x-principal` header) — kept for staff + the persona demo. */
-export function devPickerAuth(
-  world: ShopWorld,
-  cast: Record<string, { principal: PrincipalId; name: string }>,
-): AuthAdapter {
-  const nameOf = new Map(Object.values(cast).map((m) => [m.principal as string, m.name]));
+/**
+ * Pre-defined logins seeded into Better Auth so you can sign in as each persona
+ * (credentials go in the docs). Each links to an existing seeded principal, so
+ * logging in *is* that principal — the kernel enforces exactly its permissions.
+ * `role` is a UI hint for nav; new self-service signups default to 'customer'.
+ */
+export const PERSONAS = [
+  { email: 'astrid@kallkalla.se', password: 'demo1234', name: 'Astrid Kallkälla', role: 'shop-admin', key: 'astrid' },
+  { email: 'gustav@kallkalla.se', password: 'demo1234', name: 'Gustav (lager)', role: 'warehouse', key: 'gustav' },
+  { email: 'elin@cafepascal.se', password: 'demo1234', name: 'Elin – Café Pascal', role: 'customer', key: 'elin' },
+  { email: 'otto@kontoret.se', password: 'demo1234', name: 'Otto – Kontoret', role: 'customer', key: 'otto' },
+] as const;
+
+const roleForEmail = (email?: string | null): string =>
+  PERSONAS.find((p) => p.email === email)?.role ?? 'customer';
+
+/** Anonymous fallback: not-logged-in visitors resolve to a browse-only principal. */
+export function publicAuth(world: ShopWorld): AuthAdapter {
   return {
-    id: 'dev',
-    async resolve(headers) {
-      const raw = headers.get('x-principal');
-      if (!raw) return null;
-      let principal: PrincipalId;
-      try {
-        principal = principalId.parse(raw);
-      } catch {
-        return null;
-      }
+    id: 'public',
+    async resolve() {
       return {
-        principal,
+        principal: world.public,
         tenantId: world.t1,
         scopeId: world.s1,
-        via: 'dev',
-        display: nameOf.get(raw) ?? 'okänd',
+        via: 'public',
+        display: 'Gäst',
+        role: 'public',
       };
     },
   };
@@ -73,10 +81,52 @@ export function betterAuthAdapter(auth: Auth, host: SqliteScopeHost, world: Shop
         tenantId: mapped.tenantId,
         scopeId: mapped.scopeId ?? world.s1,
         via: 'better-auth',
-        display: user.email ?? user.name ?? 'kund',
+        display: user.name ?? user.email ?? 'kund',
+        role: roleForEmail(user.email),
       };
     },
   };
+}
+
+/**
+ * Seed a Better Auth login for each persona and bind it to that persona's
+ * existing principal (idempotent). Run once at startup, after migrateAuth.
+ */
+export async function seedPersonaLogins(
+  auth: Auth,
+  host: SqliteScopeHost,
+  world: ShopWorld,
+  dir: string,
+): Promise<void> {
+  const staff = platformActorId.parse(ulid());
+  const db = new Database(join(dir, 'better-auth.sqlite'), { readonly: true });
+  try {
+    for (const p of PERSONAS) {
+      let userId: string | undefined;
+      try {
+        const res = await auth.api.signUpEmail({
+          body: { email: p.email, password: p.password, name: p.name },
+        });
+        userId = res.user.id;
+      } catch {
+        // Already exists — look up the id from Better Auth's own store.
+        userId = (db.prepare('SELECT id FROM user WHERE email = ?').get(p.email) as
+          | { id: string }
+          | undefined)?.id;
+      }
+      if (userId) {
+        host.admin.linkIdentity(staff, {
+          provider: 'better-auth',
+          externalId: userId,
+          principal: world[p.key],
+          tenantId: world.t1,
+          scopeId: world.s1,
+        });
+      }
+    }
+  } finally {
+    db.close();
+  }
 }
 
 /**

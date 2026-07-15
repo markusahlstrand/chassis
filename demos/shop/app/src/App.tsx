@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, currentPrincipal, setPrincipal, kr, type Cart, type CastMember, type Me, type Quote } from './api';
+import { api, kr, type Cart, type Me, type Quote } from './api';
 import { Storefront } from './views/Storefront';
 import { Orders } from './views/Orders';
 import { Invoicing } from './views/Invoicing';
@@ -17,13 +17,11 @@ function useHashRoute(): string {
   return route;
 }
 
-const canSeeOrders = (r: string) => r === 'shop-admin' || r === 'warehouse' || r === 'attacker';
-const canSeeInvoicing = (r: string) => r === 'shop-admin' || r === 'attacker';
-const canShop = (r: string) => r === 'shopper' || r === 'shop-admin';
+const canSeeOrders = (r: string) => r === 'shop-admin' || r === 'warehouse';
+const canSeeInvoicing = (r: string) => r === 'shop-admin';
+const canShop = (r: string) => r === 'customer'; // only logged-in customers get a cart
 
 export default function App() {
-  const [cast, setCast] = useState<Record<string, CastMember>>({});
-  const [who, setWho] = useState<string>('');
   const [me, setMe] = useState<Me | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const route = useHashRoute();
@@ -35,8 +33,6 @@ export default function App() {
   const [drawer, setDrawer] = useState(false);
   const [code, setCode] = useState('');
   const [pay, setPay] = useState<'invoice' | 'card'>('invoice');
-  // The currently-applied valid code, tracked in a ref so re-pricing after cart
-  // edits doesn't need it as a callback dependency.
   const appliedCode = useRef<string | undefined>(undefined);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [reload, setReload] = useState(0);
@@ -47,40 +43,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void api.cast().then(({ cast: c }) => {
-      setCast(c);
-      const saved = currentPrincipal();
-      const current = Object.entries(c).find(([, m]) => m.principal === saved)?.[0];
-      const pick = current ?? Object.keys(c)[0] ?? '';
-      setWho(pick);
-      if (c[pick]) setPrincipal(c[pick]!.principal);
-    });
     void api.me().then(setMe).catch(() => setMe(null));
   }, []);
 
-  // A live Better Auth session takes precedence over the dev persona picker —
-  // exactly as the server resolves it. Logged in = a real 'shopper' principal.
-  const session = me?.authenticated && me.via === 'better-auth' ? me : null;
-  const member = cast[who];
-  const role = session ? 'shopper' : member?.role ?? '';
-  const display = session ? session.display ?? 'kund' : member?.name ?? '';
-  const activeCustomerId = session ? session.customerId ?? undefined : member?.customerId;
-
-  const switchTo = useCallback(
-    (key: string) => {
-      const m = cast[key];
-      if (!m) return;
-      setWho(key);
-      setPrincipal(m.principal);
-      // A cart is owned by its principal — a new persona starts fresh.
-      setCartId(null);
-      setCart(null);
-      setDrawer(false);
-      setReload((n) => n + 1);
-      location.hash = m.role === 'shopper' ? '#/portal' : '#/';
-    },
-    [cast],
-  );
+  const session = me?.authenticated ? me : null;
+  const role = me?.role ?? 'public';
+  const display = session?.display ?? '';
+  const activeCustomerId = session?.customerId ?? undefined;
 
   const refreshCart = useCallback(async (id: string) => {
     try {
@@ -90,12 +59,10 @@ export default function App() {
     }
   }, []);
 
-  // Keep the applied-code ref in sync with the latest valid quote.
   useEffect(() => {
     appliedCode.current = quote?.discountValid ? quote.discountCode ?? undefined : undefined;
   }, [quote]);
 
-  // Re-price the cart (carrying any applied discount) — after every cart edit.
   const reprice = useCallback(async (id: string) => {
     try {
       setQuote(await api.quote(id, appliedCode.current));
@@ -126,6 +93,11 @@ export default function App() {
 
   const addToCart = useCallback(
     async (variantId: string) => {
+      // Only a logged-in customer can build a cart; everyone else logs in first.
+      if (role !== 'customer') {
+        setLoginOpen(true);
+        return;
+      }
       try {
         let id = cartId;
         if (!id) {
@@ -141,7 +113,7 @@ export default function App() {
         notify((e as Error).message);
       }
     },
-    [cartId, refreshCart, reprice, notify],
+    [role, cartId, refreshCart, reprice, notify],
   );
 
   const removeLine = useCallback(
@@ -181,46 +153,16 @@ export default function App() {
   }, [cartId, activeCustomerId, pay, quote, notify]);
 
   const onLoggedIn = useCallback(async () => {
-    // Carry the pre-login cart into the logged-in customer's own cart. Carts are
-    // principal-owned, so: snapshot the items, release the old holds (still acting
-    // as the pre-login principal so a scarce item won't self-block), switch, and
-    // re-add under the new principal.
-    const carry = (cart?.lines ?? []).map((l) => ({ variantId: l.variantId, qty: l.qty }));
-    if (cartId && cart) {
-      for (const l of cart.lines) {
-        try {
-          await api.removeLine(cartId, l.lineId);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    setPrincipal(null); // stop sending the dev header — the session cookie takes over
-    setMe(await api.me());
+    const m = await api.me();
+    setMe(m);
     setLoginOpen(false);
-
-    let newId: string | null = null;
-    if (carry.length) {
-      try {
-        newId = (await api.createCart()).id;
-        for (const c of carry) await api.addToCart(newId, c.variantId, c.qty);
-      } catch {
-        newId = null;
-      }
-    }
-    setCartId(newId);
-    setCart(newId ? await api.cart(newId) : null);
-    if (newId) await reprice(newId);
+    setCartId(null);
+    setCart(null);
+    setQuote(null);
     setReload((n) => n + 1);
-    if (carry.length && newId) {
-      setDrawer(true);
-      location.hash = '#/';
-      notify('Inloggad — varukorgen behölls', true);
-    } else {
-      location.hash = '#/portal';
-      notify('Inloggad', true);
-    }
-  }, [cart, cartId, reprice, notify]);
+    location.hash = m.role === 'shop-admin' || m.role === 'warehouse' ? '#/orders' : '#/';
+    notify('Inloggad', true);
+  }, [notify]);
 
   const onLogout = useCallback(async () => {
     try {
@@ -228,15 +170,13 @@ export default function App() {
     } catch {
       /* ignore */
     }
-    setMe(null);
-    const firstKey = Object.keys(cast)[0] ?? '';
-    setWho(firstKey);
-    if (cast[firstKey]) setPrincipal(cast[firstKey]!.principal);
+    setMe(await api.me()); // now anonymous
     setCartId(null);
     setCart(null);
+    setQuote(null);
     setReload((n) => n + 1);
     location.hash = '#/';
-  }, [cast]);
+  }, []);
 
   const count = useMemo(() => cart?.lines.reduce((a, l) => a + l.qty, 0) ?? 0, [cart]);
 
@@ -244,9 +184,10 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  const viewKey = me?.principal ?? 'anon';
   let view = <Storefront onAdd={addToCart} reloadKey={reload} />;
-  if (route.startsWith('/orders')) view = <Orders key={who} notify={notify} />;
-  else if (route.startsWith('/invoicing')) view = <Invoicing key={who} notify={notify} />;
+  if (route.startsWith('/orders')) view = <Orders key={viewKey} notify={notify} />;
+  else if (route.startsWith('/invoicing')) view = <Invoicing key={viewKey} notify={notify} />;
   else if (route.startsWith('/portal')) view = <Portal reloadKey={reload} />;
 
   const tab = (to: string, label: string, on: boolean) =>
@@ -266,7 +207,7 @@ export default function App() {
           </a>
           <nav className="main">
             {tab('/', 'Butik', true)}
-            {tab('/portal', 'Mina ordrar', role === 'shopper')}
+            {tab('/portal', 'Mina ordrar', role === 'customer')}
             {tab('/orders', 'Orderbok', canSeeOrders(role))}
             {tab('/invoicing', 'Fakturaunderlag', canSeeInvoicing(role))}
           </nav>
@@ -279,19 +220,9 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <div className="persona">
-                <select value={who} onChange={(e) => switchTo(e.target.value)} aria-label="Välj användare">
-                  {Object.entries(cast).map(([key, m]) => (
-                    <option key={key} value={key}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-                <span className={`role-badge${role === 'attacker' ? ' attacker' : ''}`}>{role || '—'}</span>
-                <button className="icon-btn" onClick={() => setLoginOpen(true)}>
-                  Logga in
-                </button>
-              </div>
+              <button className="icon-btn" onClick={() => setLoginOpen(true)}>
+                Logga in
+              </button>
             )}
             <button className="icon-btn sq" onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} aria-label="Växla tema">
               ◐
@@ -346,6 +277,9 @@ export default function App() {
           )}
         </div>
         <div className="cart-f">
+          {cart && cart.lines.length > 0 && (
+            <div className="faktura-note">Varorna är reserverade i 15 minuter.</div>
+          )}
           <div className="code">
             <input
               placeholder="Rabattkod"
@@ -385,22 +319,9 @@ export default function App() {
               <span>{kr(quote?.total.amount ?? cart?.subtotal.amount ?? '0')}</span>
             </div>
           </div>
-          {activeCustomerId ? (
-            <button className="btn" style={{ width: '100%' }} disabled={!cart || cart.lines.length === 0} onClick={checkout}>
-              Slutför köp
-            </button>
-          ) : (
-            <button
-              className="btn"
-              style={{ width: '100%' }}
-              onClick={() => {
-                setDrawer(false);
-                setLoginOpen(true);
-              }}
-            >
-              Logga in för att slutföra köpet
-            </button>
-          )}
+          <button className="btn" style={{ width: '100%' }} disabled={!cart || cart.lines.length === 0} onClick={checkout}>
+            Slutför köp
+          </button>
           <div className="faktura-note">Rabatt räknas av i kassan; summan bekräftas på ordern.</div>
         </div>
       </aside>

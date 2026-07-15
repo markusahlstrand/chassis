@@ -3,13 +3,6 @@ export interface Money {
   currency: string;
 }
 
-export interface CastMember {
-  name: string;
-  role: string;
-  principal: string;
-  customerId?: string;
-}
-
 export interface CatalogVariant {
   id: string;
   sku: string;
@@ -101,15 +94,6 @@ export interface UnderlagLine {
   line_total_amount: string;
 }
 
-const KEY = 'shop-principal';
-export function currentPrincipal(): string | null {
-  return localStorage.getItem(KEY);
-}
-export function setPrincipal(principal: string | null): void {
-  if (principal) localStorage.setItem(KEY, principal);
-  else localStorage.removeItem(KEY);
-}
-
 /** Thrown so views can distinguish a permission wall (403) from other failures. */
 export class ApiError extends Error {
   status: number;
@@ -120,14 +104,11 @@ export class ApiError extends Error {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const principal = currentPrincipal();
   const res = await fetch(`/api${path}`, {
     ...init,
     credentials: 'include', // carry the Better Auth session cookie
     headers: {
       'content-type': 'application/json',
-      // Dev-picker header; the server prefers a real session over it.
-      ...(principal ? { 'x-principal': principal } : {}),
       ...init?.headers,
     },
   });
@@ -155,12 +136,11 @@ export interface Me {
   principal?: string;
   display?: string;
   via?: string;
+  role?: string;
   customerId?: string | null;
 }
 
 export const api = {
-  cast: () => call<{ cast: Record<string, CastMember>; world: unknown }>('/cast'),
-
   // auth (Better Auth via the neutral seam)
   me: () => call<Me>('/me'),
   signUp: (email: string, password: string, name: string) =>
