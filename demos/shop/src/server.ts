@@ -100,8 +100,20 @@ app.get('/api/carts/:id', async (c) => c.json(await (await stub(c)).invoke('shop
 app.post('/api/carts/:id/lines', async (c) =>
   c.json(await (await stub(c)).invoke('shop/add-to-cart', { ...(await body(c)), cartId: c.req.param('id') })),
 );
+app.patch('/api/carts/:id/lines/:lineId', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('shop/set-line-qty', {
+      ...(await body(c)),
+      cartId: c.req.param('id'),
+      lineId: c.req.param('lineId'),
+    }),
+  ),
+);
 app.delete('/api/carts/:id/lines/:lineId', async (c) =>
   c.json(await (await stub(c)).invoke('shop/remove-line', { cartId: c.req.param('id'), lineId: c.req.param('lineId') })),
+);
+app.post('/api/carts/:id/quote', async (c) =>
+  c.json(await (await stub(c)).invoke('shop/quote', { ...(await body(c)), cartId: c.req.param('id') })),
 );
 app.post('/api/carts/:id/checkout', async (c) =>
   c.json(await (await stub(c)).invoke('shop/checkout', { ...(await body(c)), cartId: c.req.param('id') })),

@@ -204,6 +204,13 @@ aside.cart.open { transform: translateX(0); }
 .line .l-name { font-size: 14px; font-weight: 700; }
 .line .l-var { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
 .line .l-price { font-family: var(--mono); font-weight: 700; font-size: 14px; text-align: right; }
+.line .qty { display: inline-flex; align-items: center; gap: 10px; margin-top: 8px; }
+.line .qty button { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: 15px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.line .qty button:hover { border-color: var(--spruce); color: var(--spruce); }
+.line .qty .num { min-width: 14px; text-align: center; font-weight: 700; font-size: 13px; }
+.code-msg { font-size: 12px; font-weight: 600; }
+.code-msg.err { color: var(--bad); }
+.code-msg.ok { color: var(--ok); }
 .line .rm { display: block; margin-top: 4px; font-size: 11px; color: var(--ink-faint); cursor: pointer; background: none; border: 0; text-align: right; width: 100%; }
 .line .rm:hover { color: var(--amber); }
 .empty { color: var(--ink-faint); font-family: var(--serif); font-size: 15px; text-align: center; padding: 50px 20px; }

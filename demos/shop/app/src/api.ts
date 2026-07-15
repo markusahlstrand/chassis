@@ -46,6 +46,15 @@ export interface Cart {
   subtotal: Money;
 }
 
+export interface Quote {
+  subtotal: Money;
+  discount: Money;
+  total: Money;
+  discountCode: string | null;
+  discountValid: boolean;
+  message: string | null;
+}
+
 export interface OrderRow {
   id: string;
   number: number;
@@ -168,8 +177,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ variantId, qty, ...(holdSeconds !== undefined ? { holdSeconds } : {}) }),
     }),
+  setLineQty: (id: string, lineId: string, qty: number) =>
+    call<{ lineId: string; qty: number; removed: boolean }>(`/carts/${id}/lines/${lineId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ qty }),
+    }),
   removeLine: (id: string, lineId: string) =>
     call<{ released: boolean }>(`/carts/${id}/lines/${lineId}`, { method: 'DELETE' }),
+  quote: (id: string, discountCode?: string) =>
+    call<Quote>(`/carts/${id}/quote`, {
+      method: 'POST',
+      body: JSON.stringify(discountCode !== undefined ? { discountCode } : {}),
+    }),
   checkout: (
     id: string,
     input: { customerId: string; paymentMethod?: 'invoice' | 'card'; discountCode?: string },

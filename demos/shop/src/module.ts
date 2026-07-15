@@ -481,12 +481,108 @@ const addToCartOp: OperationHandler<
 
   const holdSeconds = input.holdSeconds ?? DEFAULT_HOLD_SECONDS;
   const expiresAt = new Date(Date.now() + holdSeconds * 1000).toISOString();
-  const lineId = ulid();
-  ctx.sql.exec(
-    'INSERT INTO shop_cart_lines (id, cart_id, variant_id, qty, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [lineId, input.cartId, variant.id, qty, expiresAt, now],
-  );
+
+  // Merge into an existing line for this variant so a product shows once; the
+  // availability check above already accounts for the current hold, so `qty` is
+  // the additional amount either way.
+  const existing = ctx.sql.query<{ id: string; qty: number }>(
+    'SELECT id, qty FROM shop_cart_lines WHERE cart_id = ? AND variant_id = ?',
+    [input.cartId, variant.id],
+  )[0];
+  let lineId: string;
+  if (existing) {
+    lineId = existing.id;
+    ctx.sql.exec('UPDATE shop_cart_lines SET qty = ?, expires_at = ? WHERE id = ?', [
+      existing.qty + qty,
+      expiresAt,
+      existing.id,
+    ]);
+  } else {
+    lineId = ulid();
+    ctx.sql.exec(
+      'INSERT INTO shop_cart_lines (id, cart_id, variant_id, qty, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [lineId, input.cartId, variant.id, qty, expiresAt, now],
+    );
+  }
   return { lineId, reserved: qty, availableAfter: available - qty };
+};
+
+/** Set an absolute quantity for a cart line (0 removes it). Increases re-check stock. */
+const setLineQtyOp: OperationHandler<
+  { cartId: string; lineId: string; qty: number },
+  { lineId: string; qty: number; removed: boolean }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(SHOP_PERM.checkout));
+  requireOwnOpenCart(ctx, input.cartId);
+  const qty = z.number().int().min(0).parse(input.qty);
+  const line = ctx.sql.query<{ id: string; variant_id: string; qty: number }>(
+    'SELECT id, variant_id, qty FROM shop_cart_lines WHERE id = ? AND cart_id = ?',
+    [input.lineId, input.cartId],
+  )[0];
+  if (!line) throw new Error(`cart line not found: ${input.lineId}`);
+  if (qty === 0) {
+    ctx.sql.exec('DELETE FROM shop_cart_lines WHERE id = ?', [line.id]);
+    return { lineId: line.id, qty: 0, removed: true };
+  }
+  const now = new Date().toISOString();
+  const delta = qty - line.qty;
+  if (delta > 0) {
+    sweepExpired(ctx, line.variant_id, now);
+    const available = availableQty(ctx, line.variant_id, now); // excludes this line's own hold
+    if (available < delta) {
+      const v = getVariant(ctx, line.variant_id);
+      throw new Error(`out of stock: ${v.sku} — ${available} available, ${delta} more requested`);
+    }
+  }
+  const expiresAt = new Date(Date.now() + DEFAULT_HOLD_SECONDS * 1000).toISOString();
+  ctx.sql.exec('UPDATE shop_cart_lines SET qty = ?, expires_at = ? WHERE id = ?', [qty, expiresAt, line.id]);
+  return { lineId: line.id, qty, removed: false };
+};
+
+/** Friendly, shopper-facing reason a discount code did not apply. */
+function friendlyDiscountMessage(err: string): string {
+  if (err.includes('not found')) return 'Ogiltig rabattkod.';
+  if (err.includes('expired')) return 'Rabattkoden har gått ut.';
+  if (err.includes('exhausted')) return 'Rabattkoden är förbrukad.';
+  if (err.includes('below minimum spend')) return 'Köpet når inte upp till kodens minsta belopp.';
+  return 'Rabattkoden kunde inte användas.';
+}
+
+/** Priced preview of a cart with an optional discount — the same math as checkout. */
+const quoteOp: OperationHandler<
+  { cartId: string; discountCode?: string },
+  {
+    subtotal: Money;
+    discount: Money;
+    total: Money;
+    discountCode: string | null;
+    discountValid: boolean;
+    message: string | null;
+  }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(SHOP_PERM.checkout));
+  requireOwnOpenCart(ctx, input.cartId);
+  const lines = cartLines(ctx, input.cartId);
+  const currency = lines[0]?.unitPrice.currency ?? 'SEK';
+  const subtotal = lines.reduce((s, l) => addMoney(s, l.lineTotal), moneyOf('0', currency));
+
+  let discount = moneyOf('0', currency);
+  let discountValid = false;
+  let discountCode: string | null = null;
+  let message: string | null = null;
+  const raw = input.discountCode?.trim();
+  if (raw) {
+    try {
+      const r = resolveDiscount(ctx, raw, subtotal, new Date().toISOString().slice(0, 10));
+      discount = moneyOf(r.amount, currency);
+      discountValid = true;
+      discountCode = r.row.code;
+    } catch (e) {
+      message = friendlyDiscountMessage((e as Error).message);
+    }
+  }
+  const total = moneyOf(addDecimal(subtotal.amount, `-${discount.amount}`), currency);
+  return { subtotal, discount, total, discountCode, discountValid, message };
 };
 
 const removeLineOp: OperationHandler<{ cartId: string; lineId: string }, { released: boolean }> = async (
@@ -848,8 +944,10 @@ export const shopModule: ModuleRegistration = {
     'shop/create-discount': createDiscountOp as never,
     'shop/create-cart': createCartOp as never,
     'shop/add-to-cart': addToCartOp as never,
+    'shop/set-line-qty': setLineQtyOp as never,
     'shop/remove-line': removeLineOp as never,
     'shop/cart': cartOp as never,
+    'shop/quote': quoteOp as never,
     'shop/checkout': checkoutOp as never,
     'shop/orders': ordersOp as never,
     'shop/order': orderOp as never,
