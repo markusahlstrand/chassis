@@ -90,8 +90,9 @@ sibling. Composition happens through three kernel-mediated channels:
 1. **Opaque refs** — attachment contracts bind to `(entityType, entityId)` without
    knowing what the entity is.
 2. **Events** — an engine reacts to another's schema-versioned events. A contract, not a
-   call: the [invoicing engine](/engines/invoicing) consumes `workorder.completed`
-   without importing a single type from the work-order engine.
+   call: the [invoicing engine](/engines/invoicing) consumes `workorder.completed` *and*
+   `commerce.order-placed` — events from two different domains — without importing a single
+   type from either producer.
 3. **Vertical-owned orchestration** — synchronous flows that need two engines are wired
    in the vertical, where the glue is visible and editable.
 
