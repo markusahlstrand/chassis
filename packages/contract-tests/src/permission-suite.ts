@@ -83,6 +83,7 @@ export function permissionContractSuite(
         operations: { 'perm/link': linkOp, 'perm/probe': probeOp },
       });
       host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
+      host.admin.grantEntitlement(staff, t1, 'perm'); // default-deny (§4.3): perm/* needs it
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1 });
       await host.provisionScope(staff, { tenantId: t1, scopeId: s2 });
 

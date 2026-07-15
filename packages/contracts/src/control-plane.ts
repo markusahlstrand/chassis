@@ -21,6 +21,8 @@ export const adminAction = z.enum([
   'unsuspendScope', // §4.2
   'archiveScope', // §4.2
   'unarchiveScope', // §4.2 — an explicit restore, never a silent flag flip
+  'grantEntitlement', // §4.3 — the SKU flag turned on for a tenant
+  'revokeEntitlement', // §4.3
 ]);
 export type AdminAction = z.infer<typeof adminAction>;
 

@@ -198,6 +198,19 @@ export interface HostAdmin {
    */
   unarchiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
 
+  // -- entitlements (control-plane.md §4.3) ----------------------------------
+  // What finally makes `manifest.entitlementKey` mean something (D-20). An
+  // entitlement is a per-tenant SKU flag; a module whose key the tenant does not
+  // hold does not load for that tenant — its operations do not resolve, exactly
+  // as if it had never been registered. Granting one is the point of the console.
+
+  /** Turn a SKU flag on for a tenant. Idempotent; audited. */
+  grantEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
+  /** Turn it off. A tenant's scopes lose access to that module's operations. */
+  revokeEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
+  /** The tenant's held SKU flags (control-plane.md §5 meter 2). */
+  listEntitlements(tenantId: TenantId): string[];
+
   /**
    * The append-only admin audit trail, newest-comparable last (ULID order is
    * chronological). Read path for the console history and the permission-diff

@@ -73,6 +73,14 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   });
   host.admin.createTenant(staff, { id: world.t2, slug: 'trampolin', name: 'Trampolin Cykel AB' });
 
+  // Entitlements (§4.3): default-deny — grant the SKU flags for the modules the
+  // workshop runs before its operations resolve.
+  for (const t of [world.t1, world.t2]) {
+    for (const key of ['workorder', 'invoicing', 'protocol', 'cykelservice']) {
+      host.admin.grantEntitlement(staff, t, key);
+    }
+  }
+
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
   await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 

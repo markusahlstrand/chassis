@@ -168,6 +168,8 @@ export class SqliteScopeHost implements ScopeHost {
   /** operation names whose default binding some manifest withdrew (K-17). */
   private readonly withdrawn = new Map<string, string>(); // operation → withdrawing module
   private readonly relations = new Map<string, Set<string>>();
+  /** operation name → its owning module's entitlementKey (§4.3 gate). */
+  private readonly operationEntitlement = new Map<string, string>();
   private readonly roles = new Map<string, RoleDefinition>(); // 'tenantId/roleKey'
   private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
 
@@ -209,6 +211,13 @@ export class SqliteScopeHost implements ScopeHost {
         permissions TEXT NOT NULL,
         source TEXT NOT NULL,
         PRIMARY KEY (tenant_id, role_key)
+      );
+      -- Per-tenant SKU flags (control-plane.md §4.3). A module loads for a tenant
+      -- only if the tenant holds its manifest.entitlementKey — default-deny.
+      CREATE TABLE IF NOT EXISTS _substrat_entitlements (
+        tenant_id TEXT NOT NULL,
+        entitlement_key TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, entitlement_key)
       );
       -- Append-only control-plane audit trail (control-plane.md §4.4). Lives in
       -- the directory, not a scope DB: it records cross-tenant staff actions and
@@ -313,6 +322,9 @@ export class SqliteScopeHost implements ScopeHost {
     }
     for (const [name, handler] of Object.entries(registration.operations ?? {})) {
       this.defineOperation(name, handler);
+      // Record which SKU flag gates this operation (§4.3). Bare defineOperation
+      // bindings (tests, glue) carry no manifest and stay ungated.
+      this.operationEntitlement.set(name, manifest.entitlementKey);
     }
   }
 
@@ -404,6 +416,18 @@ export class SqliteScopeHost implements ScopeHost {
       invoke: <O, I>(operation: string, input?: I): Promise<O> => {
         const handler = operations.get(operation);
         if (!handler) return Promise.reject(new Error(`unknown operation: ${operation}`));
+        // Entitlement gate (control-plane.md §4.3): a module loads for a tenant
+        // only if the tenant holds its SKU flag. Checked per invoke — the simple,
+        // uncached path (K-OQ5); a DO-cached variant is a later benchmark call.
+        // Fails closed the same way withdrawal does: the operation is unavailable.
+        const requiredKey = this.operationEntitlement.get(operation);
+        if (requiredKey && !this.tenantHoldsEntitlement(tenantId, requiredKey)) {
+          return Promise.reject(
+            new Error(
+              `operation not entitled: ${operation} — tenant does not hold '${requiredKey}'`,
+            ),
+          );
+        }
         return rt.actor.enqueue(async () => {
           const clonedInput = structuredClone(input);
           rt.db.exec('BEGIN IMMEDIATE');
@@ -569,6 +593,14 @@ export class SqliteScopeHost implements ScopeHost {
         after == null ? null : JSON.stringify(after),
         new Date().toISOString(),
       );
+  }
+
+  private tenantHoldsEntitlement(tenantId: TenantId, key: string): boolean {
+    return (
+      this.directory
+        .prepare('SELECT 1 FROM _substrat_entitlements WHERE tenant_id = ? AND entitlement_key = ?')
+        .get(tenantId, key) !== undefined
+    );
   }
 
   private buildAdmin(): HostAdmin {
@@ -783,6 +815,34 @@ export class SqliteScopeHost implements ScopeHost {
         transitionScope(actor, 'archiveScope', tenantId, scopeId, ['active', 'suspended'], 'archived'),
       unarchiveScope: (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unarchiveScope', tenantId, scopeId, ['archived'], 'active'),
+      grantEntitlement: (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
+        const info = this.directory
+          .prepare(
+            `INSERT OR IGNORE INTO _substrat_entitlements (tenant_id, entitlement_key)
+             VALUES (?, ?)`,
+          )
+          .run(tenantId, entitlementKey);
+        // Idempotent: granting a held flag changed nothing, so it is not audited.
+        if (info.changes === 0) return;
+        this.recordAdmin(actor, 'grantEntitlement', { tenantId }, null, { entitlementKey });
+      },
+      revokeEntitlement: (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
+        const info = this.directory
+          .prepare(
+            'DELETE FROM _substrat_entitlements WHERE tenant_id = ? AND entitlement_key = ?',
+          )
+          .run(tenantId, entitlementKey);
+        if (info.changes === 0) return; // nothing held, nothing changed
+        this.recordAdmin(actor, 'revokeEntitlement', { tenantId }, { entitlementKey }, null);
+      },
+      listEntitlements: (tenantId: TenantId): string[] =>
+        (
+          this.directory
+            .prepare(
+              'SELECT entitlement_key FROM _substrat_entitlements WHERE tenant_id = ? ORDER BY entitlement_key',
+            )
+            .all(tenantId) as { entitlement_key: string }[]
+        ).map((r) => r.entitlement_key),
       auditLog: (filter?: { tenantId?: TenantId }): AdminLogEntry[] => {
         const rows = (
           filter?.tenantId

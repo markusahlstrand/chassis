@@ -74,6 +74,14 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   host.admin.createTenant(staff, { id: world.t1, slug: 'elmontage', name: 'ElMontage AB' });
   host.admin.createTenant(staff, { id: world.t2, slug: 'rorservice', name: 'RörService AB' });
 
+  // Entitlements (§4.3): default-deny, so grant the SKU flags for the modules
+  // ServiceCo runs before its operations resolve. This is the SKU model in use.
+  for (const t of [world.t1, world.t2]) {
+    for (const key of ['workorder', 'invoicing', 'protocol', 'serviceco']) {
+      host.admin.grantEntitlement(staff, t, key);
+    }
+  }
+
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
   await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 

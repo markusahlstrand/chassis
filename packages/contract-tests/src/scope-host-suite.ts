@@ -55,6 +55,20 @@ const lateModManifest = moduleManifest.parse({
   entitlementKey: 'late',
 });
 
+// Entitlement gate (§4.3): a module whose SKU flag the tenant does not hold does
+// not load — its operations do not resolve. Isolated on its own tenant so
+// granting/revoking here cannot disturb the other suites' fixtures.
+const billedModManifest = moduleManifest.parse({
+  id: '@test/billed',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'billed:use', description: 'billed module permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'billed',
+});
+
 // Manifest-declared operation guards (K-17). Two modules, on purpose: one
 // GUARDED module whose manifest declares the gate, one GATE module that
 // contributes the named predicate. The guarded module registers FIRST — the
@@ -176,9 +190,11 @@ export function scopeHostContractSuite(
     const t1 = tenantId.parse(ulid());
     const t2 = tenantId.parse(ulid());
     const t3 = tenantId.parse(ulid()); // control-plane §4.1 tenant-lifecycle fixture
+    const t4 = tenantId.parse(ulid()); // §4.3 entitlement-gate fixture
     const s1 = scopeId.parse(ulid());
     const s2 = scopeId.parse(ulid());
     const s3 = scopeId.parse(ulid()); // scope under t3
+    const s4 = scopeId.parse(ulid()); // scope under t4
     const alice: PrincipalId = principalId.parse(ulid());
     const staff = platformActorId.parse(ulid());
 
@@ -400,6 +416,11 @@ export function scopeHostContractSuite(
       // A scope requires an existing active tenant (§4.1) — create then provision.
       host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
       host.admin.createTenant(staff, { id: t2, slug: 'tenant-two', name: 'Tenant Two' });
+      // Entitlements are default-deny (§4.3): t1 invokes these modules' operations,
+      // so it must hold their SKU flags. (t2 only exercises bare, ungated ops.)
+      for (const key of ['testmod', 'flow', 'guarded', 'victim', 'late']) {
+        host.admin.grantEntitlement(staff, t1, key);
+      }
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
       await host.provisionScope(staff, { tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
     });
@@ -733,6 +754,60 @@ export function scopeHostContractSuite(
 
     it('rejects a lifecycle transition on a scope not under the named tenant', () => {
       expect(() => host.admin.suspendScope(staff, t1, s3)).toThrow(/unknown scope for tenant/);
+    });
+
+    // -- entitlement gate (control-plane.md §4.3) -----------------------------
+
+    it('gates a module operation on the tenant holding its SKU flag (§4.3)', async () => {
+      host.registerModule({
+        manifest: billedModManifest,
+        operations: {
+          'billed/act': (() => 'ran') as OperationHandler<never, unknown>,
+        },
+      });
+      host.admin.createTenant(staff, { id: t4, slug: 'billed-co', name: 'Billed Co' });
+      await host.provisionScope(staff, { tenantId: t4, scopeId: s4, jurisdiction: 'eu' });
+      const stub = await host.getScope(alice, t4, s4);
+
+      // Default-deny: the flag is not held, so the operation does not resolve.
+      await expect(stub.invoke('billed/act')).rejects.toThrow(/not entitled/);
+
+      // Granting the flag loads the module for this tenant.
+      host.admin.grantEntitlement(staff, t4, 'billed');
+      await expect(stub.invoke<string>('billed/act')).resolves.toBe('ran');
+      expect(host.admin.listEntitlements(t4)).toContain('billed');
+
+      // Revoking it takes the operation away again — as if never registered.
+      host.admin.revokeEntitlement(staff, t4, 'billed');
+      await expect(stub.invoke('billed/act')).rejects.toThrow(/not entitled/);
+      expect(host.admin.listEntitlements(t4)).not.toContain('billed');
+    });
+
+    it('audits grant/revoke idempotently and records the SKU flag', () => {
+      // Re-grant twice: only the first is a real change, so only one row.
+      host.admin.grantEntitlement(staff, t4, 'audited-sku');
+      host.admin.grantEntitlement(staff, t4, 'audited-sku');
+      const grants = host.admin
+        .auditLog({ tenantId: t4 })
+        .filter((r) => r.action === 'grantEntitlement' && (r.after as { entitlementKey: string }).entitlementKey === 'audited-sku');
+      expect(grants).toHaveLength(1);
+      expect(grants[0]!.actor).toBe(staff);
+
+      host.admin.revokeEntitlement(staff, t4, 'audited-sku');
+      const revokes = host.admin
+        .auditLog({ tenantId: t4 })
+        .filter((r) => r.action === 'revokeEntitlement');
+      expect(revokes.length).toBeGreaterThanOrEqual(1);
+      expect((revokes[revokes.length - 1]!.before as { entitlementKey: string }).entitlementKey).toBe(
+        'audited-sku',
+      );
+    });
+
+    it('leaves bare (module-less) operations ungated', async () => {
+      // test/read-counter was registered via defineOperation, no manifest — it
+      // must resolve regardless of entitlements.
+      const stub = await host.getScope(alice, t1, s1);
+      await expect(stub.invoke('test/read-counter')).resolves.toBeTypeOf('number');
     });
   });
 }
