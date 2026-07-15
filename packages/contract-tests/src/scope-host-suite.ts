@@ -86,12 +86,12 @@ export function scopeHostContractSuite(
       }
 
       // A scope requires an existing active tenant (§4.1) — create then provision.
-      host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
-      host.admin.createTenant(staff, { id: t2, slug: 'tenant-two', name: 'Tenant Two' });
+      await host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
+      await host.admin.createTenant(staff, { id: t2, slug: 'tenant-two', name: 'Tenant Two' });
       // Entitlements are default-deny (§4.3): t1 invokes these modules' operations,
       // so it must hold their SKU flags. (t2 only exercises bare, ungated ops.)
       for (const key of ['testmod', 'flow', 'guarded', 'victim', 'late']) {
-        host.admin.grantEntitlement(staff, t1, key);
+        await host.admin.grantEntitlement(staff, t1, key);
       }
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
       await host.provisionScope(staff, { tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
@@ -329,19 +329,19 @@ export function scopeHostContractSuite(
 
     // -- tenant registry + lifecycle (control-plane.md §4.1) -----------------
 
-    it('creates a tenant record, idempotently; only real creates are audited', () => {
-      host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' });
-      host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' }); // no-op
-      expect(host.admin.getTenant(t3)).toMatchObject({
+    it('creates a tenant record, idempotently; only real creates are audited', async () => {
+      await host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' });
+      await host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' }); // no-op
+      expect(await host.admin.getTenant(t3)).toMatchObject({
         id: t3,
         slug: 'acme-co',
         name: 'Acme Co',
         status: 'active',
       });
-      expect(host.admin.listTenants().filter((x) => x.id === t3)).toHaveLength(1);
-      const creates = host.admin
-        .auditLog({ tenantId: t3 })
-        .filter((r) => r.action === 'createTenant');
+      expect((await host.admin.listTenants()).filter((x) => x.id === t3)).toHaveLength(1);
+      const creates = (await host.admin.auditLog({ tenantId: t3 })).filter(
+        (r) => r.action === 'createTenant',
+      );
       expect(creates).toHaveLength(1); // the idempotent no-op left no row
       expect(creates[0]!.actor).toBe(staff);
     });
@@ -350,17 +350,17 @@ export function scopeHostContractSuite(
       await host.provisionScope(staff, { tenantId: t3, scopeId: s3, jurisdiction: 'eu' });
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
 
-      host.admin.setTenantStatus(staff, t3, 'suspended');
+      await host.admin.setTenantStatus(staff, t3, 'suspended');
       await expect(host.getScope(alice, t3, s3)).rejects.toThrow(/not active/);
 
-      host.admin.setTenantStatus(staff, t3, 'active');
+      await host.admin.setTenantStatus(staff, t3, 'active');
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
     });
 
-    it('records setTenantStatus with before/after status', () => {
-      const transitions = host.admin
-        .auditLog({ tenantId: t3 })
-        .filter((r) => r.action === 'setTenantStatus');
+    it('records setTenantStatus with before/after status', async () => {
+      const transitions = (await host.admin.auditLog({ tenantId: t3 })).filter(
+        (r) => r.action === 'setTenantStatus',
+      );
       expect(transitions.length).toBeGreaterThanOrEqual(2);
       const suspend = transitions.find(
         (r) => (r.after as { status: string }).status === 'suspended',
@@ -368,36 +368,36 @@ export function scopeHostContractSuite(
       expect((suspend.before as { status: string }).status).toBe('active');
     });
 
-    it('rejects a status transition on an unknown tenant', () => {
-      expect(() => host.admin.setTenantStatus(staff, tenantId.parse(ulid()), 'suspended')).toThrow(
-        /unknown tenant/,
-      );
+    it('rejects a status transition on an unknown tenant', async () => {
+      await expect(
+        host.admin.setTenantStatus(staff, tenantId.parse(ulid()), 'suspended'),
+      ).rejects.toThrow(/unknown tenant/);
     });
 
     // -- scope lifecycle (control-plane.md §4.2) ------------------------------
 
     it('suspend/unsuspend a scope gates getScope for that scope alone (§4.2)', async () => {
       // s3 is active (reactivated above). Suspending it fails closed…
-      host.admin.suspendScope(staff, t3, s3);
+      await host.admin.suspendScope(staff, t3, s3);
       await expect(host.getScope(alice, t3, s3)).rejects.toThrow(/scope not active/);
       // …while a sibling scope under the same tenant is untouched.
       const sibling = scopeId.parse(ulid());
       await host.provisionScope(staff, { tenantId: t3, scopeId: sibling, jurisdiction: 'eu' });
       await expect(host.getScope(alice, t3, sibling)).resolves.toBeDefined();
       // Unsuspend restores.
-      host.admin.unsuspendScope(staff, t3, s3);
+      await host.admin.unsuspendScope(staff, t3, s3);
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
     });
 
     it('archive then un-archive is an explicit audited restore (§4.2)', async () => {
-      host.admin.archiveScope(staff, t3, s3);
+      await host.admin.archiveScope(staff, t3, s3);
       await expect(host.getScope(alice, t3, s3)).rejects.toThrow(/scope not active/);
-      host.admin.unarchiveScope(staff, t3, s3);
+      await host.admin.unarchiveScope(staff, t3, s3);
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
 
-      const transitions = host.admin
-        .auditLog({ tenantId: t3 })
-        .filter((r) => r.action === 'archiveScope' || r.action === 'unarchiveScope');
+      const transitions = (await host.admin.auditLog({ tenantId: t3 })).filter(
+        (r) => r.action === 'archiveScope' || r.action === 'unarchiveScope',
+      );
       expect(transitions.map((r) => r.action)).toEqual(
         expect.arrayContaining(['archiveScope', 'unarchiveScope']),
       );
@@ -407,20 +407,24 @@ export function scopeHostContractSuite(
       }
     });
 
-    it('rejects an illegal scope transition, fail closed (§4.2)', () => {
+    it('rejects an illegal scope transition, fail closed (§4.2)', async () => {
       // s3 is active — you cannot un-archive an active scope.
-      expect(() => host.admin.unarchiveScope(staff, t3, s3)).toThrow(/illegal scope transition/);
+      await expect(host.admin.unarchiveScope(staff, t3, s3)).rejects.toThrow(
+        /illegal scope transition/,
+      );
     });
 
-    it('rejects a lifecycle transition on a scope not under the named tenant', () => {
-      expect(() => host.admin.suspendScope(staff, t1, s3)).toThrow(/unknown scope for tenant/);
+    it('rejects a lifecycle transition on a scope not under the named tenant', async () => {
+      await expect(host.admin.suspendScope(staff, t1, s3)).rejects.toThrow(
+        /unknown scope for tenant/,
+      );
     });
 
     // -- entitlement gate (control-plane.md §4.3) -----------------------------
 
     it('gates a module operation on the tenant holding its SKU flag (§4.3)', async () => {
       host.registerModule(billedMod);
-      host.admin.createTenant(staff, { id: t4, slug: 'billed-co', name: 'Billed Co' });
+      await host.admin.createTenant(staff, { id: t4, slug: 'billed-co', name: 'Billed Co' });
       await host.provisionScope(staff, { tenantId: t4, scopeId: s4, jurisdiction: 'eu' });
       const stub = await host.getScope(alice, t4, s4);
 
@@ -428,34 +432,32 @@ export function scopeHostContractSuite(
       await expect(stub.invoke('billed/act')).rejects.toThrow(/not entitled/);
 
       // Granting the flag loads the module for this tenant.
-      host.admin.grantEntitlement(staff, t4, 'billed');
+      await host.admin.grantEntitlement(staff, t4, 'billed');
       await expect(stub.invoke<string>('billed/act')).resolves.toBe('ran');
-      expect(host.admin.listEntitlements(t4)).toContain('billed');
+      expect(await host.admin.listEntitlements(t4)).toContain('billed');
 
       // Revoking it takes the operation away again — as if never registered.
-      host.admin.revokeEntitlement(staff, t4, 'billed');
+      await host.admin.revokeEntitlement(staff, t4, 'billed');
       await expect(stub.invoke('billed/act')).rejects.toThrow(/not entitled/);
-      expect(host.admin.listEntitlements(t4)).not.toContain('billed');
+      expect(await host.admin.listEntitlements(t4)).not.toContain('billed');
     });
 
-    it('audits grant/revoke idempotently and records the SKU flag', () => {
+    it('audits grant/revoke idempotently and records the SKU flag', async () => {
       // Re-grant twice: only the first is a real change, so only one row.
-      host.admin.grantEntitlement(staff, t4, 'audited-sku');
-      host.admin.grantEntitlement(staff, t4, 'audited-sku');
-      const grants = host.admin
-        .auditLog({ tenantId: t4 })
-        .filter(
-          (r) =>
-            r.action === 'grantEntitlement' &&
-            (r.after as { entitlementKey: string }).entitlementKey === 'audited-sku',
-        );
+      await host.admin.grantEntitlement(staff, t4, 'audited-sku');
+      await host.admin.grantEntitlement(staff, t4, 'audited-sku');
+      const grants = (await host.admin.auditLog({ tenantId: t4 })).filter(
+        (r) =>
+          r.action === 'grantEntitlement' &&
+          (r.after as { entitlementKey: string }).entitlementKey === 'audited-sku',
+      );
       expect(grants).toHaveLength(1);
       expect(grants[0]!.actor).toBe(staff);
 
-      host.admin.revokeEntitlement(staff, t4, 'audited-sku');
-      const revokes = host.admin
-        .auditLog({ tenantId: t4 })
-        .filter((r) => r.action === 'revokeEntitlement');
+      await host.admin.revokeEntitlement(staff, t4, 'audited-sku');
+      const revokes = (await host.admin.auditLog({ tenantId: t4 })).filter(
+        (r) => r.action === 'revokeEntitlement',
+      );
       expect(revokes.length).toBeGreaterThanOrEqual(1);
       expect((revokes[revokes.length - 1]!.before as { entitlementKey: string }).entitlementKey).toBe(
         'audited-sku',

@@ -147,11 +147,19 @@ export interface ModuleRegistration {
  *
  * Locally the actor is a dev stub (control-plane.md §6); real staff auth (SSO,
  * MFA) gates EXPOSING this surface, not building it — D-16 cashed in.
+ *
+ * The whole surface is ASYNCHRONOUS (every method returns a Promise) because a
+ * durable/remote control plane — e.g. a Cloudflare Durable Object — cannot be
+ * backed synchronously: reads may cross an RPC boundary and writes must await a
+ * durable record before returning. The second adapter surfaced this (D-14); a
+ * synchronous admin interface could not be honoured by anything but an in-memory
+ * store, so the contract is async everywhere. (`registerModule`/`defineOperation`
+ * stay sync — they are code-time bookkeeping, not control-plane state.)
  */
 export interface HostAdmin {
-  defineRole(actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition): void;
-  assignRole(actor: PlatformActorId, assignment: RoleAssignment): void;
-  grant(actor: PlatformActorId, grant: CapabilityGrant): void;
+  defineRole(actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition): Promise<void>;
+  assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
+  grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
   grantToOrg(
     actor: PlatformActorId,
@@ -159,8 +167,13 @@ export interface HostAdmin {
     permission: PermissionKey,
     node: Node,
     entity?: EntityRef,
-  ): void;
-  addMember(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId, orgId: string): void;
+  ): Promise<void>;
+  addMember(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    principal: PrincipalId,
+    orgId: string,
+  ): Promise<void>;
 
   // -- tenant registry (control-plane.md §4.1) -------------------------------
 
@@ -170,16 +183,20 @@ export interface HostAdmin {
    * `createdAt` is stamped host-side. This is what replaces "a tenant is a ULID
    * nobody used before" with a real record.
    */
-  createTenant(actor: PlatformActorId, input: CreateTenantInput): void;
+  createTenant(actor: PlatformActorId, input: CreateTenantInput): Promise<void>;
   /**
    * Transition a tenant's status. `suspended` fails `getScope` closed for every
    * scope under the tenant (K-3's path) — the containment lever for non-payment
    * or an incident, reversible without deleting anything.
    */
-  setTenantStatus(actor: PlatformActorId, tenantId: TenantId, status: TenantStatus): void;
+  setTenantStatus(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    status: TenantStatus,
+  ): Promise<void>;
   /** The tenant registry — the directory's inventory (control-plane.md §4.5 console item 1). */
-  listTenants(): Tenant[];
-  getTenant(tenantId: TenantId): Tenant | undefined;
+  listTenants(): Promise<Tenant[]>;
+  getTenant(tenantId: TenantId): Promise<Tenant | undefined>;
 
   // -- scope lifecycle (control-plane.md §4.2) -------------------------------
   // The §3.3 transitions that existed only on paper. Each fails closed on an
@@ -188,17 +205,17 @@ export interface HostAdmin {
   // lives on ScopeHost (it is async — it applies migrations).
 
   /** active → suspended. Reversible containment (incident, dispute). */
-  suspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  suspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): Promise<void>;
   /** suspended → active. */
-  unsuspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  unsuspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): Promise<void>;
   /** active|suspended → archived. Stops the active-scope meter (§9). */
-  archiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  archiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): Promise<void>;
   /**
    * archived → active. A RESTORE, never a flag flip (control-plane.md §4.2):
    * §9's meter can only charge on "active scope" if un-archiving is a deliberate,
    * audited act. Jurisdiction is untouched — it is fixed at provisioning (K-7).
    */
-  unarchiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): void;
+  unarchiveScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): Promise<void>;
 
   // -- entitlements (control-plane.md §4.3) ----------------------------------
   // What finally makes `manifest.entitlementKey` mean something (D-20). An
@@ -207,11 +224,19 @@ export interface HostAdmin {
   // as if it had never been registered. Granting one is the point of the console.
 
   /** Turn a SKU flag on for a tenant. Idempotent; audited. */
-  grantEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
+  grantEntitlement(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    entitlementKey: string,
+  ): Promise<void>;
   /** Turn it off. A tenant's scopes lose access to that module's operations. */
-  revokeEntitlement(actor: PlatformActorId, tenantId: TenantId, entitlementKey: string): void;
+  revokeEntitlement(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    entitlementKey: string,
+  ): Promise<void>;
   /** The tenant's held SKU flags (control-plane.md §5 meter 2). */
-  listEntitlements(tenantId: TenantId): string[];
+  listEntitlements(tenantId: TenantId): Promise<string[]>;
 
   // -- identity (D-16; control-plane.md §6) ----------------------------------
   // The neutral seam an auth adapter maps into. An external identity
@@ -221,16 +246,16 @@ export interface HostAdmin {
   // adapter. Authentication only — authorization remains roles/grants.
 
   /** Bind an external identity to a principal + home node. Idempotent on (provider, externalId); audited. */
-  linkIdentity(actor: PlatformActorId, input: IdentityLink): void;
+  linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
   /** Resolve an external identity to its principal + home node — the auth adapter's read path. */
-  resolveIdentity(provider: string, externalId: string): ResolvedIdentity | undefined;
+  resolveIdentity(provider: string, externalId: string): Promise<ResolvedIdentity | undefined>;
 
   /**
    * The append-only admin audit trail, newest-comparable last (ULID order is
    * chronological). Read path for the console history and the permission-diff
    * human checkpoint (control-plane.md §4.5).
    */
-  auditLog(filter?: { tenantId?: TenantId }): AdminLogEntry[];
+  auditLog(filter?: { tenantId?: TenantId }): Promise<AdminLogEntry[]>;
 }
 
 export interface ProvisionScopeInput {

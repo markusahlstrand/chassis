@@ -55,19 +55,19 @@ export function permissionContractSuite(
       fixture = await makeFixture();
       host = fixture.host;
       host.registerModule(permMod);
-      host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
-      host.admin.grantEntitlement(staff, t1, 'perm'); // default-deny (§4.3): perm/* needs it
+      await host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
+      await host.admin.grantEntitlement(staff, t1, 'perm'); // default-deny (§4.3): perm/* needs it
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1 });
       await host.provisionScope(staff, { tenantId: t1, scopeId: s2 });
 
-      host.admin.defineRole(staff, t1, {
+      await host.admin.defineRole(staff, t1, {
         key: 'admin',
         permissions: [PERM_USE, PERM_READ],
         source: 'vertical',
       });
-      host.admin.defineRole(staff, t1, { key: 'tech', permissions: [PERM_READ], source: 'vertical' });
-      host.admin.assignRole(staff, { principalId: alice, roleKey: 'admin', node: { tenantId: t1, scopeId: null } });
-      host.admin.assignRole(staff, { principalId: bob, roleKey: 'tech', node: { tenantId: t1, scopeId: s1 } });
+      await host.admin.defineRole(staff, t1, { key: 'tech', permissions: [PERM_READ], source: 'vertical' });
+      await host.admin.assignRole(staff, { principalId: alice, roleKey: 'admin', node: { tenantId: t1, scopeId: null } });
+      await host.admin.assignRole(staff, { principalId: bob, roleKey: 'tech', node: { tenantId: t1, scopeId: s1 } });
 
       // Entity graph in s1: item i1 → box b1, item i2 → box b2.
       const stub = await host.getScope(alice, t1, s1);
@@ -80,22 +80,22 @@ export function permissionContractSuite(
         parent: { entityType: 'box', entityId: 'b2' },
       });
 
-      host.admin.grant(staff, {
+      await host.admin.grant(staff, {
         principalId: carol,
         permission: PERM_READ,
         node: { tenantId: t1, scopeId: s1 },
         entity: { entityType: 'box', entityId: 'b1' },
         grantedBy: alice,
       });
-      host.admin.grant(staff, {
+      await host.admin.grant(staff, {
         principalId: dave,
         permission: PERM_READ,
         node: { tenantId: t1, scopeId: s1 },
         expiresAt: (await import('@substrat-run/contracts')).instant.parse('2000-01-01T00:00:00Z'),
         grantedBy: alice,
       });
-      host.admin.grantToOrg(staff, 'acme', PERM_READ, { tenantId: t1, scopeId: s1 });
-      host.admin.addMember(staff, t1, erin, 'acme');
+      await host.admin.grantToOrg(staff, 'acme', PERM_READ, { tenantId: t1, scopeId: s1 });
+      await host.admin.addMember(staff, t1, erin, 'acme');
     });
 
     afterAll(async () => {
@@ -144,8 +144,8 @@ export function permissionContractSuite(
 
     // -- control-plane audit trail (control-plane.md §4.4) --------------------
 
-    it('records every admin mutation with actor and target, append-only (K-20)', () => {
-      const log = host.admin.auditLog({ tenantId: t1 });
+    it('records every admin mutation with actor and target, append-only (K-20)', async () => {
+      const log = await host.admin.auditLog({ tenantId: t1 });
       // The six seed mutations each left a row; nothing is ever removed.
       expect(log.length).toBeGreaterThanOrEqual(6);
       // Every row is stamped platform-side: our staff actor, this tenant, a timestamp.
@@ -164,10 +164,9 @@ export function permissionContractSuite(
       expect(defined?.after).toMatchObject({ permissions: expect.any(Array) });
     });
 
-    it('captures before/after when a role is redefined — the permission-diff seed', () => {
-      host.admin.defineRole(staff, t1, { key: 'tech', permissions: [PERM_USE], source: 'vertical' });
-      const redefines = host.admin
-        .auditLog({ tenantId: t1 })
+    it('captures before/after when a role is redefined — the permission-diff seed', async () => {
+      await host.admin.defineRole(staff, t1, { key: 'tech', permissions: [PERM_USE], source: 'vertical' });
+      const redefines = (await host.admin.auditLog({ tenantId: t1 }))
         .filter(
           (r) =>
             r.action === 'defineRole' &&
@@ -180,9 +179,9 @@ export function permissionContractSuite(
       expect((last.after as { permissions: string[] }).permissions).toEqual([PERM_USE]);
     });
 
-    it('scopes the audit read by tenant', () => {
+    it('scopes the audit read by tenant', async () => {
       const otherTenant = tenantId.parse(ulid());
-      expect(host.admin.auditLog({ tenantId: otherTenant })).toEqual([]);
+      expect(await host.admin.auditLog({ tenantId: otherTenant })).toEqual([]);
     });
   });
 }

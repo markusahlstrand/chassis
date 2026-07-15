@@ -28,60 +28,64 @@ describe('control-plane identity mapping', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('links an external identity and resolves it to the principal + home node', () => {
-    host.admin.linkIdentity(staff, {
+  it('links an external identity and resolves it to the principal + home node', async () => {
+    await host.admin.linkIdentity(staff, {
       provider: 'better-auth',
       externalId: 'ba-user-123',
       principal: elin,
       tenantId: t,
       scopeId: s,
     });
-    expect(host.admin.resolveIdentity('better-auth', 'ba-user-123')).toEqual({
+    expect(await host.admin.resolveIdentity('better-auth', 'ba-user-123')).toEqual({
       principal: elin,
       tenantId: t,
       scopeId: s,
     });
   });
 
-  it('resolves an unknown identity to undefined', () => {
-    expect(host.admin.resolveIdentity('better-auth', 'nope')).toBeUndefined();
+  it('resolves an unknown identity to undefined', async () => {
+    expect(await host.admin.resolveIdentity('better-auth', 'nope')).toBeUndefined();
   });
 
-  it('is idempotent on (provider, externalId) — re-linking is a no-op, not audited twice', () => {
-    host.admin.linkIdentity(staff, {
+  it('is idempotent on (provider, externalId) — re-linking is a no-op, not audited twice', async () => {
+    await host.admin.linkIdentity(staff, {
       provider: 'better-auth',
       externalId: 'ba-user-123',
       principal: elin,
       tenantId: t,
       scopeId: s,
     });
-    const links = host.admin.auditLog({ tenantId: t }).filter((e) => e.action === 'linkIdentity');
+    const links = (await host.admin.auditLog({ tenantId: t })).filter(
+      (e) => e.action === 'linkIdentity',
+    );
     expect(links).toHaveLength(1);
     expect(links[0]!.actor).toBe(staff);
   });
 
-  it('keys by provider — the same externalId under a different provider is distinct', () => {
+  it('keys by provider — the same externalId under a different provider is distinct', async () => {
     const otto = principalId.parse(ulid());
-    host.admin.linkIdentity(staff, {
+    await host.admin.linkIdentity(staff, {
       provider: 'oidc:https://authhero.example',
       externalId: 'ba-user-123', // same string, different provider
       principal: otto,
       tenantId: t,
       scopeId: s,
     });
-    expect(host.admin.resolveIdentity('oidc:https://authhero.example', 'ba-user-123')?.principal).toBe(otto);
-    expect(host.admin.resolveIdentity('better-auth', 'ba-user-123')?.principal).toBe(elin);
+    expect(
+      (await host.admin.resolveIdentity('oidc:https://authhero.example', 'ba-user-123'))?.principal,
+    ).toBe(otto);
+    expect((await host.admin.resolveIdentity('better-auth', 'ba-user-123'))?.principal).toBe(elin);
   });
 
-  it('supports a tenant-level home (no scope) — resolves scopeId to null', () => {
+  it('supports a tenant-level home (no scope) — resolves scopeId to null', async () => {
     const staffUser = principalId.parse(ulid());
-    host.admin.linkIdentity(staff, {
+    await host.admin.linkIdentity(staff, {
       provider: 'better-auth',
       externalId: 'ba-admin-1',
       principal: staffUser,
       tenantId: t,
     });
-    expect(host.admin.resolveIdentity('better-auth', 'ba-admin-1')).toEqual({
+    expect(await host.admin.resolveIdentity('better-auth', 'ba-admin-1')).toEqual({
       principal: staffUser,
       tenantId: t,
       scopeId: null,
@@ -91,6 +95,6 @@ describe('control-plane identity mapping', () => {
   it('persists across a reopen of the directory', async () => {
     await host.close();
     host = new SqliteScopeHost({ dir });
-    expect(host.admin.resolveIdentity('better-auth', 'ba-user-123')?.principal).toBe(elin);
+    expect((await host.admin.resolveIdentity('better-auth', 'ba-user-123'))?.principal).toBe(elin);
   });
 });

@@ -726,7 +726,7 @@ export class SqliteScopeHost implements ScopeHost {
     };
 
     return {
-      defineRole: (actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition) => {
+      defineRole: async (actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition) => {
         const parsed = roleDefinition.parse(role);
         const before = this.roles.get(`${tenantId}/${parsed.key}`) ?? null;
         this.directory
@@ -738,7 +738,7 @@ export class SqliteScopeHost implements ScopeHost {
         this.roles.set(`${tenantId}/${parsed.key}`, parsed);
         this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
       },
-      assignRole: (actor: PlatformActorId, assignment: RoleAssignment) => {
+      assignRole: async (actor: PlatformActorId, assignment: RoleAssignment) => {
         const subject = `principal:${assignment.principalId}`;
         if (assignment.node.scopeId) {
           writeScopeTuple(
@@ -763,7 +763,7 @@ export class SqliteScopeHost implements ScopeHost {
           assignment,
         );
       },
-      grant: (actor: PlatformActorId, grant: CapabilityGrant) => {
+      grant: async (actor: PlatformActorId, grant: CapabilityGrant) => {
         writeGrant(
           `principal:${grant.principalId}`,
           grant.permission,
@@ -779,7 +779,7 @@ export class SqliteScopeHost implements ScopeHost {
           grant,
         );
       },
-      grantToOrg: (actor, orgId, permission, node, entity) => {
+      grantToOrg: async (actor, orgId, permission, node, entity) => {
         writeGrant(`org:${orgId}`, permission, node, entity);
         this.recordAdmin(
           actor,
@@ -789,11 +789,11 @@ export class SqliteScopeHost implements ScopeHost {
           { orgId, permission, node, entity },
         );
       },
-      addMember: (actor, tenantId, principal, orgId) => {
+      addMember: async (actor, tenantId, principal, orgId) => {
         writeTenantTuple(tenantId, `principal:${principal}`, 'member', `org:${orgId}`);
         this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
       },
-      createTenant: (actor: PlatformActorId, input: CreateTenantInput) => {
+      createTenant: async (actor: PlatformActorId, input: CreateTenantInput) => {
         const parsed = createTenantInput.parse(input);
         const info = this.directory
           .prepare(
@@ -806,7 +806,7 @@ export class SqliteScopeHost implements ScopeHost {
         if (info.changes === 0) return;
         this.recordAdmin(actor, 'createTenant', { tenantId: parsed.id }, null, readTenant(parsed.id));
       },
-      setTenantStatus: (actor: PlatformActorId, tenantId: TenantId, status: TenantStatus) => {
+      setTenantStatus: async (actor: PlatformActorId, tenantId: TenantId, status: TenantStatus) => {
         const before = readTenant(tenantId);
         if (!before) throw new Error(`unknown tenant: ${tenantId}`);
         this.directory
@@ -820,20 +820,20 @@ export class SqliteScopeHost implements ScopeHost {
           { status },
         );
       },
-      listTenants: (): Tenant[] =>
+      listTenants: async (): Promise<Tenant[]> =>
         (this.directory.prepare('SELECT * FROM tenants ORDER BY tenant_id').all() as TenantRow[]).map(
           mapTenant,
         ),
-      getTenant: (tenantId: TenantId): Tenant | undefined => readTenant(tenantId),
-      suspendScope: (actor, tenantId, scopeId) =>
+      getTenant: async (tenantId: TenantId): Promise<Tenant | undefined> => readTenant(tenantId),
+      suspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'suspendScope', tenantId, scopeId, ['active'], 'suspended'),
-      unsuspendScope: (actor, tenantId, scopeId) =>
+      unsuspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unsuspendScope', tenantId, scopeId, ['suspended'], 'active'),
-      archiveScope: (actor, tenantId, scopeId) =>
+      archiveScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'archiveScope', tenantId, scopeId, ['active', 'suspended'], 'archived'),
-      unarchiveScope: (actor, tenantId, scopeId) =>
+      unarchiveScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unarchiveScope', tenantId, scopeId, ['archived'], 'active'),
-      grantEntitlement: (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
+      grantEntitlement: async (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
         const info = this.directory
           .prepare(
             `INSERT OR IGNORE INTO _substrat_entitlements (tenant_id, entitlement_key)
@@ -844,7 +844,7 @@ export class SqliteScopeHost implements ScopeHost {
         if (info.changes === 0) return;
         this.recordAdmin(actor, 'grantEntitlement', { tenantId }, null, { entitlementKey });
       },
-      revokeEntitlement: (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
+      revokeEntitlement: async (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {
         const info = this.directory
           .prepare(
             'DELETE FROM _substrat_entitlements WHERE tenant_id = ? AND entitlement_key = ?',
@@ -853,7 +853,7 @@ export class SqliteScopeHost implements ScopeHost {
         if (info.changes === 0) return; // nothing held, nothing changed
         this.recordAdmin(actor, 'revokeEntitlement', { tenantId }, { entitlementKey }, null);
       },
-      listEntitlements: (tenantId: TenantId): string[] =>
+      listEntitlements: async (tenantId: TenantId): Promise<string[]> =>
         (
           this.directory
             .prepare(
@@ -861,7 +861,7 @@ export class SqliteScopeHost implements ScopeHost {
             )
             .all(tenantId) as { entitlement_key: string }[]
         ).map((r) => r.entitlement_key),
-      linkIdentity: (actor: PlatformActorId, input: IdentityLink) => {
+      linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
         const info = this.directory
           .prepare(
@@ -887,7 +887,10 @@ export class SqliteScopeHost implements ScopeHost {
           { provider: parsed.provider, externalId: parsed.externalId, principal: parsed.principal },
         );
       },
-      resolveIdentity: (provider: string, externalId: string): ResolvedIdentity | undefined => {
+      resolveIdentity: async (
+        provider: string,
+        externalId: string,
+      ): Promise<ResolvedIdentity | undefined> => {
         const row = this.directory
           .prepare(
             `SELECT principal_id, tenant_id, scope_id FROM _substrat_identities
@@ -903,7 +906,7 @@ export class SqliteScopeHost implements ScopeHost {
           scopeId: row.scope_id,
         });
       },
-      auditLog: (filter?: { tenantId?: TenantId }): AdminLogEntry[] => {
+      auditLog: async (filter?: { tenantId?: TenantId }): Promise<AdminLogEntry[]> => {
         const rows = (
           filter?.tenantId
             ? this.directory
