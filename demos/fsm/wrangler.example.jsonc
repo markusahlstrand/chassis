@@ -1,0 +1,39 @@
+// Template for the deployable ServiceCo (fsm) Worker.
+//
+// `wrangler.jsonc` itself is gitignored — it holds your account-specific D1
+// database_id once you create one. Set up your local copy with:
+//
+//   cp wrangler.example.jsonc wrangler.jsonc
+//
+// `wrangler dev` then works as-is (local D1, no Cloudflare account). To DEPLOY:
+//
+//   wrangler d1 create substrat-fsm-auth        # prints a database_id
+//   # paste that id into AUTH_DB's "database_id" below (replacing "local")
+//   wrangler d1 migrations apply substrat-fsm-auth --remote
+//   wrangler secret put BETTER_AUTH_SECRET
+//   pnpm cf:deploy                               # DO SQLite needs a Workers Paid plan
+{
+  "name": "substrat-fsm",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-01-01",
+  // Better Auth (edge authentication, M3) needs Node built-ins on workerd.
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCOPE", "class_name": "ScopeDO" },
+      { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
+    ]
+  },
+  // Better Auth's own store (identity, credentials, sessions) — separate from the
+  // scope DOs and the control-plane directory. "local" works under wrangler dev;
+  // replace it with your real D1 database_id to deploy.
+  "d1_databases": [
+    { "binding": "AUTH_DB", "database_name": "substrat-fsm-auth", "database_id": "local" }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
+    }
+  ]
+}
