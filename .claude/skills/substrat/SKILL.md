@@ -146,12 +146,12 @@ Dependencies: `@substrat-run/kernel`, `@substrat-run/contracts`,
 whichever engines tier 1/2 selected. Dev: `tsx`, `vitest`, `typescript`, `concurrently`.
 `better-sqlite3` is native — add `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }`.
 
-**Do NOT add `zod` as a dependency, and never `import { z } from 'zod'`.** Substrat's
-schemas are Zod 3; `pnpm add zod` installs Zod 4; Zod schemas **do not compose across
-majors**. Composing a contracts schema into your own — `z.object({ facility: entityRef,
-unitPrice: money })`, which is exactly what rule 10 asks for — then fails at *runtime*
-with `expected a Zod schema`, an error that points nowhere near the cause. Import the
-instance the schemas were built with:
+**Do NOT add `zod` as a dependency, and never `import { z } from 'zod'`.** Zod schemas
+**do not compose across copies or majors**, and composing a contracts schema into your own
+— `z.object({ facility: entityRef, unitPrice: money })`, exactly what rule 10 asks for —
+then fails at *runtime* with `expected a Zod schema`, an error pointing nowhere near the
+cause. Substrat tracks Zod's current major, so this is dormant today and re-arms on the
+next one. Import the instance the schemas were built with and it can never happen:
 
 ```ts
 import { z, entityRef, money, moduleManifest } from '@substrat-run/contracts';

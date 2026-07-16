@@ -16,13 +16,12 @@ without notice until the first vertical ships.
 pnpm add @substrat-run/kernel @substrat-run/contracts @substrat-run/adapter-sqlite
 ```
 
-::: warning Import `z` from `@substrat-run/contracts`, not from `zod`
-Don't add `zod` yourself. Substrat's schemas are built on Zod 3, `pnpm add zod` gets you
-Zod 4, and **Zod schemas do not compose across majors** — the moment you write
-`z.object({ facility: entityRef })` (the pattern the engines use, and what "parse, don't
-trust" asks of every operation input) you get `expected a Zod schema` at runtime, pointing
-nowhere near the cause. `@substrat-run/contracts` re-exports the instance its schemas were
-built with:
+::: tip Import `z` from `@substrat-run/contracts`, not from `zod`
+Don't add `zod` yourself. Substrat is on Zod 4, and **Zod schemas do not compose across
+copies or majors** — mix two and `z.object({ facility: entityRef })` (the pattern the
+engines use, and what "parse, don't trust" asks of every operation input) fails at runtime
+with `expected a Zod schema`, pointing nowhere near the cause. Importing `z` from contracts
+means you never install zod at all, so the versions can't diverge when Zod 5 lands:
 
 ```ts
 import { z, entityRef, money } from '@substrat-run/contracts';

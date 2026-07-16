@@ -6,11 +6,15 @@
  * pattern the engines themselves use, and it is what "parse, don't trust" asks
  * of every operation input.
  *
- * Zod schemas do not compose across copies or majors. A consumer who runs
- * `pnpm add zod` today gets Zod 4 while these schemas are Zod 3, and the mix
- * fails at RUNTIME with `Invalid element at key "…": expected a Zod schema` —
- * an error that points nowhere near the cause. Re-exporting the instance makes
- * the correct choice the easy one.
+ * Zod schemas do not compose across copies or majors: the mix fails at RUNTIME
+ * with `Invalid element at key "…": expected a Zod schema`, an error that points
+ * nowhere near the cause. We are on Zod 4, which is what `pnpm add zod` gives
+ * you today — so the trap is currently dormant, not gone. It re-arms the day Zod
+ * 5 ships, and it bit us once already (the packages were Zod 3 while the docs
+ * told users to install the then-current Zod 4).
+ *
+ * Importing `z` from here means the consumer never installs zod at all, so the
+ * versions cannot diverge no matter what the registry's `latest` becomes.
  */
 export { z } from 'zod';
 
