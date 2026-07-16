@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { lint, resolvePackages, type Violation } from '../src/index.js';
+import { lint, resolvePackages, declaredEngines, type Violation } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures: a standalone vertical with engines installed in node_modules, which
@@ -184,6 +184,53 @@ describe('R5 escape hatch (decision 27)', () => {
     // Only the line outside the block is reported (line 1 is the template's
     // leading newline, so `sneaky` lands on 6).
     expect(violations[0]!.line).toBe(6);
+  });
+});
+
+describe('zero-engine verticals (agent-loop-008)', () => {
+  // A vertical may own its whole domain and compose nothing — reaching an engine
+  // by event imports it not at all. R5 is then inert because there is nothing to
+  // protect, which is a fact about the project, not a broken linter. The first
+  // cut conflated "no engines declared" with "engines unresolvable" and made this
+  // shape unlintable; the monorepo hid it, since there engines are linted
+  // packages rather than externals.
+  it('declares nothing → R5 is inert, and that is not an error', () => {
+    const root = project({
+      'package.json': JSON.stringify({ name: '@acme/shop', dependencies: { hono: '^4' } }),
+      'src/module.ts': `
+        export const migrations = [{ version: '0001', sql: \`CREATE TABLE shop_orders (id TEXT);\` }];
+        export function list(ctx) { return ctx.sql.query('SELECT * FROM shop_orders'); }
+      `,
+    });
+
+    expect(declaredEngines(root)).toEqual([]);
+    expect(lint(root)).toEqual([]);
+  });
+
+  it('declares an engine → it is reported, so the CLI can refuse a green light it has not earned', () => {
+    const root = project({
+      'package.json': JSON.stringify({
+        name: '@acme/shop',
+        dependencies: { '@substrat-run/engine-workorder': '^0.3.0' },
+      }),
+      'src/module.ts': 'export const x = 1;',
+      // …but node_modules is absent, so nothing resolves.
+    });
+
+    expect(declaredEngines(root)).toEqual(['@substrat-run/engine-workorder']);
+    expect(resolvePackages(root).filter((p) => !p.lint)).toEqual([]);
+  });
+
+  it('finds engines in devDependencies too', () => {
+    const root = project({
+      'package.json': JSON.stringify({
+        name: '@acme/shop',
+        devDependencies: { '@substrat-run/engine-invoicing': '^0.2.0' },
+      }),
+      'src/module.ts': 'export const x = 1;',
+    });
+
+    expect(declaredEngines(root)).toEqual(['@substrat-run/engine-invoicing']);
   });
 });
 
