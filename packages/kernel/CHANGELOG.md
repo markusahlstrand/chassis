@@ -1,5 +1,110 @@
 # @substrat-run/kernel
 
+## 0.2.1
+
+### Patch Changes
+
+- db77d8c: `HostAdmin` is now asynchronous
+
+  Every `HostAdmin` method returns a `Promise` — writes (`createTenant`,
+  `setTenantStatus`, the scope-lifecycle transitions, `defineRole`/`assignRole`/
+  `grant`/`grantToOrg`/`addMember`, `grantEntitlement`/`revokeEntitlement`,
+  `linkIdentity`) and reads (`getTenant`, `listTenants`, `listEntitlements`,
+  `auditLog`, `resolveIdentity`) alike. `registerModule`/`defineOperation` stay
+  synchronous (code-time bookkeeping); `getScope`/`provisionScope` were already async.
+
+  Why: the pure adapter's synchronous admin worked only because it is in-process.
+  The Cloudflare adapter (D-14) proved a durable/remote control plane — a Durable
+  Object — cannot be synchronous, so the second adapter forced the interface to
+  evolve. This is the two-adapter discipline doing its job. Callers now `await`
+  admin calls; adapter-sqlite's methods present their synchronous SQLite work as
+  Promises. Behavior, error messages, and every contract assertion are unchanged.
+
+- 4ba235e: Cloudflare Durable-Object adapter — milestone 1: contract suites green in workerd
+
+  The second adapter (D-14) now runs the **shared** contract suites against **real
+  Durable Objects** in workerd. One scope = one SQLite-backed `ScopeDO`; operations
+  run inside `ctx.storage.transaction(async …)` (the DO analogue of the pure
+  adapter's `BEGIN IMMEDIATE … COMMIT/ROLLBACK`), with per-scope serialization,
+  lazy migrations-on-wake, guards, entity links, and the outbox→consumer dispatch
+  loop. `scopeHostContractSuite` + `permissionContractSuite` pass unchanged (43
+  pass, 1 skip); the pure-SQLite adapter stays green.
+
+  - **contract-tests**: handlers extracted into an importable `modules.ts` so a DO
+    can bundle them (a DO cannot execute closures created in another isolate);
+    assertions unchanged. New `supportsRuntimeRegistration` capability flag — the
+    one dynamic-late-registration test is skipped on adapters whose module set is
+    code-time (CF), since a deployed DO bundle cannot gain code at runtime.
+  - **kernel**: `ulid()` is now **monotonic** within a process (ULID spec's
+    monotonic factory) — two ids minted in the same millisecond sort in creation
+    order, making the audit log's and outbox's "ULID order is chronological"
+    invariant actually hold. Fixes a latent same-millisecond ordering flake.
+
+  Milestone-1 limitation, deliberately scoped: `HostAdmin` is a **synchronous**
+  interface, which cannot be backed by an async Durable Object — so the coordinator
+  holds the directory (tenants/scopes/entitlements/audit/identities/roles) in
+  memory and forwards only the cross-DO subset (roles + tenant tuples) to a
+  `ControlPlaneDO`. Making the control plane durable needs an async admin surface —
+  a contract evolution the second adapter surfaced (exactly what D-14 is for), and
+  the next step before deploying a real vertical.
+
+- d929987: Control plane §4.3: entitlement store — `manifest.entitlementKey` finally gates loading
+
+  `manifest.entitlementKey` was declared on every module and read by nothing (D-20
+  was a promise with no mechanism). Now a per-tenant `_substrat_entitlements` set
+  gates module loading, default-deny: an operation whose owning module's SKU flag
+  the tenant does not hold does not resolve — the same fail-closed shape as manifest
+  `withdraws`. New `HostAdmin.grantEntitlement`/`revokeEntitlement` (idempotent,
+  audited) and `listEntitlements`. The check runs per invoke (the simple, uncached
+  path — a DO-cached variant is kernel-design open question 5). Entitlement flags
+  are the SKUs meter 2 (§5) counts. Demo seeds grant the flags for the modules each
+  vertical runs — the SKU model in use.
+
+- f717014: Control plane §4.4: `PlatformActor` seam + append-only admin audit log (D-30, K-20)
+
+  Every `HostAdmin` mutation (defineRole / assignRole / grant / grantToOrg / addMember)
+  now takes a `PlatformActorId` — a staff subject branded distinctly from a tenant
+  `PrincipalId` — and writes an append-only row to a new `_substrat_admin_log` in the
+  directory, stamped host-side (actor, action, target, before/after, timestamp). A new
+  `HostAdmin.auditLog(filter?)` reads it back — the read path for the console history and
+  the permission-diff human checkpoint. `defineRole` captures the prior role in `before`.
+
+  Pre-release breaking surface change kept at patch: `HostAdmin` method signatures gained
+  a leading `actor` argument. Locally the actor is a dev stub; real staff auth gates
+  exposing the surface, not building it.
+
+- 6393a8e: Control plane §4.2: scope lifecycle + structural audit + mandatory tenant
+
+  `provisionScope` becomes the first audited scope-lifecycle transition — it now
+  takes a `PlatformActor`, requires an existing active tenant (a scope with no
+  tenant record fails closed), and audits. New `HostAdmin.suspendScope`,
+  `unsuspendScope`, `archiveScope`, and `unarchiveScope` implement the §3.3
+  transitions, validate the legal transition graph (fail closed on an illegal
+  one), and audit before/after; un-archive is an explicit restore, never a silent
+  flag flip. `getScope` now gates on both tenant-active AND scope-active, so
+  suspend/archive actually contain.
+
+  Audit is now a single `recordAdmin` choke point every mutation routes through —
+  "no mutation without a durable record" holds by construction, not per-method
+  discipline. The step-2 "legacy scopes without a tenant" passthrough is removed:
+  every scope has a tenant with a status.
+
+- 2dd4175: Control plane §4.1: tenant registry + lifecycle status
+
+  A real `tenants` table in the directory replaces "a tenant is a ULID nobody used
+  before". New `HostAdmin.createTenant` (idempotent, audited), `setTenantStatus`,
+  `listTenants`, and `getTenant`. A tenant whose status is not `active` fails
+  `getScope` closed for every scope under it — the K-3 fail-closed path, the
+  containment lever for non-payment or an incident, reversible without deletion.
+  Scopes provisioned without a tenant record (legacy path) are not gated, keeping
+  the change backward-compatible.
+
+- Updated dependencies [d929987]
+- Updated dependencies [f717014]
+- Updated dependencies [6393a8e]
+- Updated dependencies [2dd4175]
+  - @substrat-run/contracts@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

@@ -1,5 +1,60 @@
 # @substrat-run/contracts
 
+## 0.2.1
+
+### Patch Changes
+
+- d929987: Control plane §4.3: entitlement store — `manifest.entitlementKey` finally gates loading
+
+  `manifest.entitlementKey` was declared on every module and read by nothing (D-20
+  was a promise with no mechanism). Now a per-tenant `_substrat_entitlements` set
+  gates module loading, default-deny: an operation whose owning module's SKU flag
+  the tenant does not hold does not resolve — the same fail-closed shape as manifest
+  `withdraws`. New `HostAdmin.grantEntitlement`/`revokeEntitlement` (idempotent,
+  audited) and `listEntitlements`. The check runs per invoke (the simple, uncached
+  path — a DO-cached variant is kernel-design open question 5). Entitlement flags
+  are the SKUs meter 2 (§5) counts. Demo seeds grant the flags for the modules each
+  vertical runs — the SKU model in use.
+
+- f717014: Control plane §4.4: `PlatformActor` seam + append-only admin audit log (D-30, K-20)
+
+  Every `HostAdmin` mutation (defineRole / assignRole / grant / grantToOrg / addMember)
+  now takes a `PlatformActorId` — a staff subject branded distinctly from a tenant
+  `PrincipalId` — and writes an append-only row to a new `_substrat_admin_log` in the
+  directory, stamped host-side (actor, action, target, before/after, timestamp). A new
+  `HostAdmin.auditLog(filter?)` reads it back — the read path for the console history and
+  the permission-diff human checkpoint. `defineRole` captures the prior role in `before`.
+
+  Pre-release breaking surface change kept at patch: `HostAdmin` method signatures gained
+  a leading `actor` argument. Locally the actor is a dev stub; real staff auth gates
+  exposing the surface, not building it.
+
+- 6393a8e: Control plane §4.2: scope lifecycle + structural audit + mandatory tenant
+
+  `provisionScope` becomes the first audited scope-lifecycle transition — it now
+  takes a `PlatformActor`, requires an existing active tenant (a scope with no
+  tenant record fails closed), and audits. New `HostAdmin.suspendScope`,
+  `unsuspendScope`, `archiveScope`, and `unarchiveScope` implement the §3.3
+  transitions, validate the legal transition graph (fail closed on an illegal
+  one), and audit before/after; un-archive is an explicit restore, never a silent
+  flag flip. `getScope` now gates on both tenant-active AND scope-active, so
+  suspend/archive actually contain.
+
+  Audit is now a single `recordAdmin` choke point every mutation routes through —
+  "no mutation without a durable record" holds by construction, not per-method
+  discipline. The step-2 "legacy scopes without a tenant" passthrough is removed:
+  every scope has a tenant with a status.
+
+- 2dd4175: Control plane §4.1: tenant registry + lifecycle status
+
+  A real `tenants` table in the directory replaces "a tenant is a ULID nobody used
+  before". New `HostAdmin.createTenant` (idempotent, audited), `setTenantStatus`,
+  `listTenants`, and `getTenant`. A tenant whose status is not `active` fails
+  `getScope` closed for every scope under it — the K-3 fail-closed path, the
+  containment lever for non-payment or an incident, reversible without deletion.
+  Scopes provisioned without a tenant record (legacy path) are not gated, keeping
+  the change backward-compatible.
+
 ## 0.2.0
 
 ### Minor Changes
