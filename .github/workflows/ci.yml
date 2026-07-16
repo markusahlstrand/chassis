@@ -16,8 +16,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node tools/boundary-lint.mjs
       - run: pnpm -r build
+      # The layer rules run from packages/boundary-lint (published as
+      # @substrat-run/boundary-lint), so they need the build above — the repo
+      # lints itself with the same code a from-scratch vertical runs.
+      - run: node tools/boundary-lint.mjs
       - run: pnpm -r typecheck
       # The rule this job exists to enforce: the pure-SQLite adapter stays
       # green in CI forever (master plan D-14). Contract tests + the FSM
