@@ -13,8 +13,21 @@ without notice until the first vertical ships.
 ## Install
 
 ```sh
-pnpm add @substrat-run/kernel @substrat-run/contracts @substrat-run/adapter-sqlite zod
+pnpm add @substrat-run/kernel @substrat-run/contracts @substrat-run/adapter-sqlite
 ```
+
+::: warning Import `z` from `@substrat-run/contracts`, not from `zod`
+Don't add `zod` yourself. Substrat's schemas are built on Zod 3, `pnpm add zod` gets you
+Zod 4, and **Zod schemas do not compose across majors** — the moment you write
+`z.object({ facility: entityRef })` (the pattern the engines use, and what "parse, don't
+trust" asks of every operation input) you get `expected a Zod schema` at runtime, pointing
+nowhere near the cause. `@substrat-run/contracts` re-exports the instance its schemas were
+built with:
+
+```ts
+import { z, entityRef, money } from '@substrat-run/contracts';
+```
+:::
 
 `@substrat-run/adapter-sqlite` uses [better-sqlite3](https://www.npmjs.com/package/better-sqlite3),
 a native module. With pnpm 10+, allow its build script:
@@ -68,8 +81,7 @@ A module is a manifest + migrations + operations. Here's a minimal one (engines 
 this structure for you — see [What is an engine?](/engines/)):
 
 ```ts
-import { z } from 'zod';
-import { moduleManifest } from '@substrat-run/contracts';
+import { z, moduleManifest } from '@substrat-run/contracts';
 import { assertAllowed, ulid, type ModuleRegistration } from '@substrat-run/kernel';
 
 const noteInput = z.object({ text: z.string().min(1) });
