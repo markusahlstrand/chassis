@@ -5,7 +5,7 @@
  * Exit 0 = the layer rules hold. Exit 1 = violations. Exit 2 = the linter could
  * not do its job (see below).
  */
-import { lint, loadConfig, resolvePackages, formatViolations } from './index.js';
+import { lint, loadConfig, resolvePackages, declaredEngines, formatViolations } from './index.js';
 
 const argv = process.argv.slice(2);
 const rootArg = argv.indexOf('--root');
@@ -40,14 +40,24 @@ if (linted.length === 0) {
   process.exit(2);
 }
 
-if (owners.length === 0 && linted.length === 1) {
+// Engines DECLARED but not resolvable is a broken setup: R5 would pass over code
+// that reaches into tables the linter cannot see. That is the silent pass exit 2
+// exists to prevent.
+//
+// Engines declared NOWHERE is a different thing entirely — a vertical that owns
+// its whole domain and composes nothing (reaching an engine by event imports it
+// not at all). R5 is inert because there is nothing for it to protect, which is a
+// fact about the project, not a failure. Passing is correct.
+const declared = declaredEngines(root, config);
+
+if (owners.length === 0 && declared.length > 0) {
   console.error(
-    'boundary-lint: no engines resolved — R5 (tables private) would check nothing.\n\n' +
-      '  A vertical composes engines; their tables are what R5 protects. With no\n' +
-      '  engine packages found, the ownership map holds only your own tables and\n' +
-      '  every R5 check trivially passes.\n\n' +
-      `  Looked for: ${root}/node_modules/@substrat-run/engine-*\n` +
-      '  Install an engine, or declare where they live:\n\n' +
+    'boundary-lint: engines are declared but none resolved — R5 (tables private) would check nothing.\n\n' +
+      `  Declared: ${declared.join(', ')}\n` +
+      `  Looked in: ${root}/node_modules/@substrat-run/engine-*\n\n` +
+      '  Their tables are what R5 protects. Unresolvable, the ownership map holds only\n' +
+      '  your own tables and every R5 check trivially passes — a green light that\n' +
+      '  checked nothing. Install them, or say where they live:\n\n' +
       '    { "externals": ["node_modules/@acme/engine-thing"] }\n',
   );
   process.exit(2);

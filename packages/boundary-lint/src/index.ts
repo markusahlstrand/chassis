@@ -361,6 +361,39 @@ function discoverStandalone(root: string, harness: string[]): PackageSpec[] {
   ];
 }
 
+/**
+ * Engine packages the project DECLARES a dependency on.
+ *
+ * This is what separates the two cases an empty ownership map can mean:
+ *
+ *   - "R5 has nothing to check because this vertical composes no engines" —
+ *     legitimate. A vertical may own its whole domain (an e-commerce vertical
+ *     reaching invoicing purely by event imports nothing). R5 is inert, and that
+ *     is a fact about the project, not a failure of the linter.
+ *   - "R5 checked nothing because the engines are declared but unresolvable" —
+ *     a broken setup, and a silent pass. This is the case exit 2 exists for.
+ *
+ * Conflating them made zero-engine verticals unlintable, which contradicted the
+ * documented (and supported) shape. The monorepo hid it: there, engines are
+ * linted packages rather than externals, so the ownership map is never empty in
+ * the way a standalone vertical's is.
+ */
+export function declaredEngines(root: string, config?: BoundaryLintConfig): string[] {
+  // Explicit config is a declaration: the author said where engines live.
+  if (config?.externals) return config.externals;
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    const deps = {
+      ...(pkg.dependencies ?? {}),
+      ...(pkg.devDependencies ?? {}),
+      ...(pkg.peerDependencies ?? {}),
+    };
+    return Object.keys(deps).filter((n) => n.startsWith('@substrat-run/engine-'));
+  } catch {
+    return [];
+  }
+}
+
 export function loadConfig(root: string): BoundaryLintConfig | undefined {
   for (const file of ['boundary-lint.config.json', '.boundary-lintrc.json']) {
     const p = join(root, file);
