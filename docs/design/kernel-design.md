@@ -957,6 +957,33 @@ externalization convention is day one; translations are not).
     destructive actions, and if so is that a session concern or a workflow in the console?
     Unanswerable until the action list is real — which is the argument for building the
     actions first. Couples with D-16 (identity is a swappable adapter).
+15. **Entity parent edges are permanent, and the walk expands all of them — so an entity
+    can never be re-parented.** `OperationContext` exposes `link(child, parent)` and no
+    `unlink`; there is none anywhere in the kernel or either adapter. Links are
+    `INSERT OR IGNORE` into `_substrat_tuples`, which module code is forbidden to write
+    (boundary-lint R4), so there is no workaround at the vertical layer either. The
+    checker's walk expands **every** `relation = 'parent'` tuple at each frontier, so
+    linking a new parent does not replace the old one — it **adds** a second path.
+    Consequence: a vertical that "moves" an entity leaves it reachable from where it used
+    to be, forever, with no remedy at any layer. This is not a Canopy quirk (agent-loop-007
+    found it asking a filing product's most basic question, "can I move a document to the
+    right matter?"). Every declared edge in the tree has a routine business event that
+    breaks it: `bike → customer` when a bike is **sold**; `order → customer` when a customer
+    is **acquired**; and — the one that matters — **`facility → customer` when a building
+    changes management company**, which is not an edge case in property management and
+    PropCo is the anchor case (§8.1). The old manager's staff would retain access to every
+    facility and work order under it, permanently and silently. No demo caught this because
+    no demo ever moves an entity. The design space is not obvious and the trade is real:
+    tuple deletion is the simple answer but it destroys the audit property K-4 rests on
+    (a tuple that once granted access is evidence of why an access was allowed), so the
+    candidates are a tombstone/`revoked_at` tuple the walk skips (keeps history, costs a
+    predicate on the hot path), a kernel-mediated `relink` operation that emits a spine
+    event (auditable, but must define what happens to proofs already issued), or accepting
+    permanence and requiring verticals to model movable containment as vertical data rather
+    than as a parent edge (cheapest, but it silently removes entity-narrowed grants from
+    every domain whose containment changes — which is most of them). Decide before PropCo
+    accumulates a year of links; retrofitting revocation onto edges already in production
+    means auditing every grant that ever resolved through them.
 
 ## 14. Design log
 
