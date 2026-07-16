@@ -1,0 +1,34 @@
+{
+  "name": "create-substrat",
+  "version": "0.0.0",
+  "description": "Scaffold a Substrat vertical — `npm create substrat`. Placeholder reserving the entry point; the initializer is not released yet.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "packages/create-substrat"
+  },
+  "homepage": "https://substrat.ahlstrand.es",
+  "bugs": {
+    "url": "https://github.com/substrat-run/substrat/issues"
+  },
+  "keywords": [
+    "substrat",
+    "vertical",
+    "multi-tenant",
+    "scaffold"
+  ],
+  "type": "module",
+  "bin": {
+    "create-substrat": "./index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
