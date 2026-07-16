@@ -9,6 +9,8 @@ imports no platform APIs — Cloudflare specifics live only in adapters, and eve
 adapter must pass the same conformance suite
 ([`@substrat-run/contract-tests`](https://npmjs.com/package/@substrat-run/contract-tests)).
 
+**Full documentation: https://substrat.ahlstrand.es/reference/kernel**
+
 ## The scope-host contract
 
 A *scope* is one isolation domain (a BRF, a filial, a brand) with its own SQLite

@@ -919,7 +919,14 @@ now; a negotiation after PropCo runs on it.
 - Public brand trademark/domain pass for "Substrat" before launch (Groundplane as fallback).
 - Prompt-to-app channel (§7.4): if/when the demo exists, which entry first — a builder
   integration (Lovable/Bolt-class), Claude Code templates, or hardening consultancies as
-  resellers? What would a self-serve tier have to cost?
+  resellers? What would a self-serve tier have to cost? Shape and gotchas worked out in
+  [design/generated-verticals.md](design/generated-verticals.md) (proposed, not scheduled);
+  two of its findings bear on this choice regardless of the channel: a generated vertical's
+  **permission diff needs a competent reviewer** — if that is the builder themselves, the
+  checkpoint is a rubber stamp and the thesis voids (§6.1 there), which is an argument for
+  the consultancies-as-resellers entry; and the channel succeeding **breaks §5.5's
+  one-deployment-per-vertical** (§6.3 there), since a builder is a vertical owner and N
+  deployments would equal N generated apps.
 - Offline scope for fältpersonal (case 1): which flows must actually work offline
   (basements, machine rooms), and is append-only capture sufficient? Binds the
   event-shaped write design — decide with PropCo's field staff, not in the abstract.

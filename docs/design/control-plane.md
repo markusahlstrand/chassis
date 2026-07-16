@@ -1,6 +1,12 @@
 # Control plane design
 
-**Status:** proposed. Implements plan decision 30; kernel design log K-20.
+**Status:** partly implemented. Implements plan decision 30; kernel design log K-20.
+§4.1 (tenant record), §4.2 (scope lifecycle, minus hostnames), §4.3 (entitlement store), and
+§4.4 (`PlatformActor` + admin audit log) are **shipped on both adapters and covered by
+contract tests**. Still unbuilt: hostname provisioning and the `hostname → (tenant, scope,
+vertical)` map (§4.2, §5.5), §4.5's console, and §5's meters. §2's "the tenant does not
+exist" finding is **historical** — it is what this document caused to be fixed; it is kept
+because the argument for the shared layer still reads from it.
 **What this is:** the **shared platform layer that N per-vertical deployments sit on** —
 the tenant registry, scope lifecycle, entitlements, custom hostnames, the audited admin
 surface, and the console over them. Plus what is deliberately *not* built: billing.
@@ -64,6 +70,17 @@ guarantee, the move this codebase refuses everywhere else (K-8 bans the raw DO n
 binding rather than trusting vertical code not to use it; K-3 fails closed rather than
 trusting the caller). It also puts every vertical's code in every isolate, against a real
 Workers bundle ceiling as engines accumulate.
+
+**A third shape exists, and this section predates it.** Durable Object facets (Dynamic
+Workers, open beta) would allow *one supervisor loading N independently-versioned vertical
+bundles per scope* — which is not the shared bundle rejected above, and dodges all three
+objections: migrations stay per-facet, code blast radius stays split across worker versions,
+and each bundle pinning its own engine versions makes per-vertical upgrade cadence
+structural rather than incidental. It is not adopted, and the argument above stands for now
+— but the reasoning is "one bundle with everything compiled in is wrong," not "N deployments
+is the only answer." See [generated-verticals](generated-verticals.md) §6.3, which is where
+the pressure to revisit will come from, and §3.2 there for why facets do *not* buy
+untrusted-vertical safety.
 
 ## 2. The finding this starts from
 
