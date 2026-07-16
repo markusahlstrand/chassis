@@ -251,8 +251,19 @@ the adapter swap is a data migration, not a remodel.
 
 ### 4.3 Identity sync: authhero organizations
 
-End-customer companies (portal users) are authhero **organizations**; login uses the
-existing refresh-token → org-scoped access-token exchange. Division of labor:
+Identity is a swappable adapter (D-16); authhero is the reference implementation. The
+adapter **authenticates** and reports **membership**; the kernel owns the **enforcement
+facts**. That division is invariant. What varies per audience is only where the identity
+pool lives and how membership maps in — and there are three audiences, not one:
+
+| Audience | Identity pool | Kernel expression (§4.1) |
+|---|---|---|
+| **Staff** (ours + tenant operators) | one **central** tenant; one **organization per Substrat tenant** | `RoleAssignment` at nodes |
+| **Portal customers** (B2B companies inside a tenant's scope) | organization in the tenant's pool | membership tuple + entity-narrowed `CapabilityGrant` |
+| **White-label consumers** (B2C, per shop/publisher) | **one auth tenant per Substrat tenant** | entity-narrowed `CapabilityGrant`, no role |
+
+Login uses the existing refresh-token → org-scoped access-token exchange. Division of
+labor:
 
 - **Identity layer** (adapter): authentication, org membership management, session
   narrowing — the org claim selects which grants are active when the kernel entrypoint
@@ -262,6 +273,42 @@ existing refresh-token → org-scoped access-token exchange. Division of labor:
   tuples and the authhero org/membership; **the org is a projection of the kernel
   directory, never the reverse**. Token claims are never trusted at data access — the
   owning scope re-evaluates tuples on every call (§5.4).
+
+**Staff orgs carry roles, never permissions.** The org membership resolves to a coarse
+role key (`admin`, `editor`) which the kernel expands via `RoleDefinition` (§4.1). Putting
+permission *lists* in the identity layer forks the permission vocabulary into two systems
+that drift, and guts §4.5's diff — the kernel must stay the only place "who can do what"
+is enumerable. The identity layer says *which role*; the module manifest owns what that
+role can do.
+
+**Sync direction follows the projection rule.** Org membership/role changes land as kernel
+`RoleAssignment`s (a directory sync). The alternative — deriving grants from token claims
+per request, storing none — is rejected as the primary path: it leaves the grant tables
+empty, so §4.5's "who gains/loses what, where" has nothing to render, and it makes every
+check ride on token freshness. Synced grants stay self-contained, auditable, and enforce
+through an identity-layer outage.
+
+**Per-tenant pools make the identity key tenant-scoped.** With one auth tenant per
+white-label consumer pool, an external subject id is unique only *within* its pool. The
+directory's identity mapping is therefore keyed `(tenantId, provider, externalId) →
+PrincipalId`. A globally-keyed mapping is a cross-tenant identity bleed — exactly what
+separate pools exist to prevent, and the one invariant to get right on day one.
+
+**Why consumers get a pool and staff get an org.** White-label forbids a shared,
+cross-branded consumer pool: the consumer must never learn the platform exists, and a
+consumer of two shops is correctly two accounts. Staff are the opposite — someone
+administering five tenants wants **one** login, which is precisely what an org-per-tenant
+membership on a central pool buys. Pushing staff down into the per-tenant pools would
+trade that away for isolation they don't need.
+
+**The `orgId ↔ tenantId` join is an explicit, stable directory row** — one per tenant,
+never reconstructed from names or slugs. Both the staff seam and the sync hang off it.
+
+Reference topology: this is what our own auth platform runs for Sesamy today (~100
+white-label publisher pools + a central staff tenant with an organization per publisher) —
+the D-16 dogfooding, cashed in. `demos/fsm` implements the staff row only, single-tenant,
+with Better Auth as a second adapter behind the same seam (M3) — proof the seam is neutral,
+not a second identity model.
 
 ### 4.4 What v1 must express (acceptance list)
 
@@ -534,7 +581,7 @@ interface ModuleManifest {
   id: ModuleId;                    // '@substrat-run/engine-workorder'
   version: string;                 // semver; kernel enforces (§6 of the plan)
   kernelContract: string;          // semver range of kernel API it targets
-  permissions: PermissionDeclaration[];   // keys + human descriptions (fuel for §4.3 diffs)
+  permissions: PermissionDeclaration[];   // keys + human descriptions (fuel for §4.5 diffs)
   events: { emits: EventTypeRef[]; consumes: EventTypeRef[] };  // AsyncAPI refs
   migrations: MigrationJournalRef; // Drizzle journal + skew windows (§5.3 above)
   attachmentTargets: EntityTypeDeclaration[]; // entity types it exposes to attachment
