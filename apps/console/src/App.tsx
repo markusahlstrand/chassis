@@ -5,7 +5,9 @@ import { ConsoleShell } from './ConsoleShell';
 import type { ViewKey } from './ConsoleShell';
 import type { BreadcrumbItem } from './components';
 import { createApi } from './lib/api';
+import { getSession, signOut, type StaffSession } from './lib/auth';
 import { AdminLog } from './views/AdminLog';
+import { Login } from './views/Login';
 import { Permissions } from './views/Permissions';
 import { Scopes } from './views/Scopes';
 import { TenantDetail } from './views/TenantDetail';
@@ -69,8 +71,20 @@ function writeNav(view: ViewKey, tenant?: TenantId): void {
   window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`);
 }
 
+// Co-located quick path: a build-time dev actor (set by `pnpm dev`) means the
+// UNSAFE header stub is in play and no login is needed. Absent it (the standalone
+// control plane, `pnpm dev:connected`, and deploys), the console runs in session
+// mode and requires real staff sign-in.
+const DEV_ACTOR = import.meta.env.VITE_DEV_ACTOR as string | undefined;
+const devMode = !!DEV_ACTOR;
+
 export function App() {
   const [actor, setActor] = useDevActor();
+  // undefined = checking session; null = signed out; StaffSession = signed in.
+  // Dev mode short-circuits to "always in".
+  const [session, setSession] = useState<StaffSession | null | undefined>(
+    devMode ? { email: 'dev-actor' } : undefined,
+  );
   const [view, setView] = useState<ViewKey>(() => readNav().view);
   const [openTenant, setOpenTenant] = useState<TenantId | undefined>(() => readNav().tenant);
   const [dark, setDark] = useState(false);
@@ -81,7 +95,15 @@ export function App() {
   const [scopes, setScopes] = useState<Scope[]>([]);
   const [entitlements, setEntitlements] = useState<Map<TenantId, string[]>>(new Map());
 
-  const api = useMemo(() => createApi(actor), [actor]);
+  // Dev mode authenticates with the actor header; session mode with the cookie.
+  const api = useMemo(() => createApi(devMode ? actor : null), [actor]);
+  const authed = devMode ? !!actor : !!session;
+
+  // Check for an existing staff session on load (session mode only).
+  useEffect(() => {
+    if (devMode) return;
+    void getSession().then(setSession);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset['theme'] = dark ? 'dark' : 'light';
@@ -110,7 +132,7 @@ export function App() {
   }, [toast]);
 
   const load = useCallback(async () => {
-    if (!actor) return;
+    if (!authed) return;
     try {
       const [ts, ss] = await Promise.all([api.listTenants(), api.listScopes()]);
       // No batch read for entitlements — one call per tenant. Fine at fleet
@@ -123,7 +145,7 @@ export function App() {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [api, actor]);
+  }, [api, authed]);
 
   useEffect(() => {
     void load();
@@ -144,7 +166,17 @@ export function App() {
     ...(detail ? [{ label: detail.slug, mono: true }] : []),
   ];
 
-  if (!actor) {
+  // Session mode: checking → blank; signed out → login. (Dev mode keeps session
+  // pinned to a placeholder, so it never reaches here without an actor.)
+  if (!devMode && session === undefined) {
+    return <div style={{ height: '100vh', background: 'var(--surface-page)' }} />;
+  }
+  if (!devMode && session === null) {
+    return <Login onSignedIn={() => { setSession(undefined); void getSession().then(setSession); }} />;
+  }
+
+  // Dev mode with no actor yet: paste one (the quick co-located path).
+  if (devMode && !actor) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100vh', background: 'var(--surface-page)' }}>
         <Card title="Dev actor required" description="The control-plane API refuses any request without one (§4.4).">
@@ -188,6 +220,10 @@ export function App() {
       crumbs={crumbs}
       tenantCount={tenants.length}
       scopeCount={scopes.length}
+      identityLabel={devMode ? undefined : session?.email}
+      onSignOut={
+        devMode ? undefined : () => void signOut().then(() => setSession(null))
+      }
     >
       {error && (
         <Card style={{ marginBottom: 16 }}>

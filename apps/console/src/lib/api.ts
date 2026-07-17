@@ -60,15 +60,22 @@ export interface AuditLogQuery {
   order?: 'asc' | 'desc';
 }
 
-export function createApi(actor: string, baseUrl = '/api') {
+/**
+ * `actor` is the dev-actor id for the co-located quick path (sent as a header),
+ * or null in session mode, where the staff session cookie authenticates instead.
+ * `credentials: 'include'` carries that cookie (harmless in dev mode).
+ */
+export function createApi(actor: string | null, baseUrl = '/api') {
   async function call<T>(path: string, init?: RequestInit): Promise<T> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      ...(init?.headers as Record<string, string> | undefined),
+    };
+    if (actor) headers[DEV_ACTOR_HEADER] = actor;
     const res = await fetch(`${baseUrl}${path}`, {
       ...init,
-      headers: {
-        [DEV_ACTOR_HEADER]: actor,
-        'content-type': 'application/json',
-        ...init?.headers,
-      },
+      credentials: 'include',
+      headers,
     });
     if (!res.ok) {
       // The API answers errors as { error }; a proxy or crash may not, so fall

@@ -26,6 +26,10 @@ export interface ConsoleShellProps {
   crumbs: BreadcrumbItem[];
   tenantCount?: number;
   scopeCount?: number;
+  /** The signed-in staff identity shown in the footer (session mode). */
+  identityLabel?: string;
+  /** When set, the footer offers sign-out (session mode). */
+  onSignOut?: () => void;
   children: ReactNode;
 }
 
@@ -36,6 +40,8 @@ export function ConsoleShell({
   crumbs,
   tenantCount,
   scopeCount,
+  identityLabel,
+  onSignOut,
   children,
 }: ConsoleShellProps) {
   return (
@@ -101,7 +107,35 @@ export function ConsoleShell({
             >
               DV
             </span>
-            <span style={{ fontSize: 12.5, color: 'var(--text-secondary)', flex: 1 }}>dev actor</span>
+            <span
+              style={{
+                fontSize: 12.5,
+                color: 'var(--text-secondary)',
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={identityLabel}
+            >
+              {identityLabel ?? 'dev actor'}
+            </span>
+            {onSignOut && (
+              <button
+                onClick={onSignOut}
+                title="Sign out"
+                style={{
+                  background: 'none',
+                  border: 0,
+                  color: 'var(--text-tertiary)',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                }}
+              >
+                Sign out
+              </button>
+            )}
             <IconButton label="Toggle theme" size="sm" onClick={onToggleDark}>
               <SubIcon d={SubIcons.moon} size={14} />
             </IconButton>
