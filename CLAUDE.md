@@ -23,7 +23,13 @@ Substrat is a hosted substrate for vertical business software: a multi-tenant ke
 - `node tools/boundary-lint.mjs` — the layer rules below, enforced mechanically (runs in CI)
 - `pnpm lint:permissions` — emit each vertical's `PERMISSIONS.md` (the permission-diff
   checkpoint below); CI runs it with `--check` and fails on drift
-- `pnpm fsm-demo dev` — run the ServiceCo demo (API :8787 + web :5173)
+- `pnpm fsm-demo dev` — run the ServiceCo demo (API :8871 + web :5271). Demo dev
+  ports live in a private `887x`/`527x` block to stay clear of the Vite (5173) and
+  Wrangler (8787) defaults; `PORT=… WEB_PORT=… ` overrides both ends of the proxy.
+- `pnpm --filter @substrat-run/demo-shop dev` — the shop demo runs **three** processes:
+  API :8873, storefront :5273, back-office :5274 (`ADMIN_PORT=…`). Customer-facing and
+  staff-facing surfaces are separate Vite apps against one API — the split is chrome and
+  audience, never a second source of truth. Both origins must be trusted by Better Auth.
 - One vitest scenario per demo vertical: `pnpm --filter @substrat-run/demo-fsm test`
 - `pnpm --filter @substrat-run/docs run deploy` — build + ship the docs site to
   [substrat.ahlstrand.es](https://substrat.ahlstrand.es) (Cloudflare Pages). The `run`

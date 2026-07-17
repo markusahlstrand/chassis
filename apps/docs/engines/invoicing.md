@@ -63,8 +63,17 @@ The `commerce.order-placed` consumer is the same four steps with its own payload
 `source_type: 'order'` (a discount arrives as a negative line, so the underlag total stays
 net) — snapshot-not-join is domain-agnostic.
 
-Consumers are delivered **at-least-once** and run under a system actor; find-or-create, the
-kernel's delivery journal, and a source-id guard keep the handlers idempotent on redelivery.
+Consumers are delivered **at-least-once** and run under a system actor. Three things keep
+the handlers idempotent: find-or-create, the kernel's delivery journal, and a **source-id
+guard** — before inserting anything, each consumer asks whether lines for that
+`source_id` already exist and returns if they do. The source order is the dedup key, so a
+replayed completion adds nothing rather than billing the customer twice.
+
+Dispatch is **post-commit**, and each consumer runs in **its own transaction**. A consumer
+that throws therefore does not roll back the producer — it rolls back only its own work and
+the delivery is **dead-lettered** (journalled with the error) so one poison event cannot
+wedge the loop. That is why a malformed payload leaves no half-built underlag, and why
+`await` on the producing operation tells you nothing about whether the consumer succeeded.
 
 ## The immutability invariant
 
@@ -87,7 +96,15 @@ trustworthy; the engine makes the financial artifact derived from them tamper-pr
   description, qty, unit, unit price (amount + currency), line total, `created_at`.
 
 Totals are computed with the sanctioned [exact decimal arithmetic](/concepts/money)
-(`addDecimal`), never floats.
+(`addMoney`), never floats — and `addMoney`, not `addDecimal`, precisely because it is
+**currency-aware**. Summing 100 SEK and 100 EUR into `200` is not a rounding error; it is a
+financial artifact stating a number that means nothing, so the engine refuses instead.
+
+**An underlag is one document in one currency.** A delivery whose lines disagree with each
+other, or with the lines already on the open underlag, is rejected at write time and
+dead-lettered — so a mixed-currency event never creates a document that can't be read or
+exported. Currency is carried per line today; hoisting it onto the underlag itself is a
+schema change and therefore a migration review.
 
 ## Operations, permissions, events
 
@@ -97,13 +114,26 @@ Totals are computed with the sanctioned [exact decimal arithmetic](/concepts/mon
 | `invoicing/get` | `invoicing:read` | one underlag with all lines and total |
 | `invoicing/export` | `invoicing:export` | flip to `exported` — the point of no return |
 
-| Event | Payload highlights |
-|---|---|
-| `invoicing.underlag-updated` | underlag id, lines added, source ref |
-| `invoicing.underlag-exported` | underlag id, number, final total |
+| Event | Version | Payload |
+|---|---|---|
+| `invoicing.underlag-updated` | 1 | `{ underlagId, addedLines, source: EntityRef }` |
+| `invoicing.underlag-exported` | **2** | `{ underlagId, number, total: Money }` |
 
 `invoicing.underlag-exported` is the natural hook for the next step in a vertical: an
 accounting connector that turns the frozen basis into a real invoice.
+
+::: warning underlag-exported is at schemaVersion 2
+v1 carried `total` as a bare amount string with no currency — an amount that isn't an
+amount, on the one event an accounting connector consumes. v2 makes it `Money`.
+
+It is a **replace, not a dual-emit**, which is a deliberate exception to the usual
+deprecation-window rule. Consumer dispatch keys on event **type** alone — the
+`schemaVersion` in a manifest's `consumes` is not used for routing — so emitting v1 and v2
+together would deliver *both* to every consumer of the type, and a connector could invoice
+twice. A replace fails loudly instead: a v1 consumer's strict parse rejects v2 and
+dead-letters, which is visible. If you consume this event, read `total.amount` and
+`total.currency` rather than the old string.
+:::
 
 ## Why this engine is a good template
 

@@ -377,6 +377,10 @@ const catalogOp: OperationHandler<{ includeUnpublished?: boolean } | undefined, 
   input,
 ) => {
   assertAllowed(await ctx.check(SHOP_PERM.browse));
+  // Drafts are not part of the published catalogue: seeing them is a catalogue
+  // author's privilege, not a browser's. Checked here rather than at the route,
+  // so the flag cannot be widened by a future caller.
+  if (input?.includeUnpublished) assertAllowed(await ctx.check(SHOP_PERM.catalogManage));
   const now = new Date().toISOString();
   const products = input?.includeUnpublished
     ? ctx.sql.query<ProductRow>('SELECT * FROM shop_products ORDER BY name')
@@ -394,6 +398,59 @@ const catalogOp: OperationHandler<{ includeUnpublished?: boolean } | undefined, 
         available: availableQty(ctx, v.id, now),
       })),
   }));
+};
+
+interface StockRow {
+  productId: string;
+  productName: string;
+  slug: string;
+  published: number;
+  variantId: string;
+  sku: string;
+  grind: string;
+  sizeLabel: string;
+  price: Money;
+  onHand: number;
+  reserved: number;
+  available: number;
+}
+
+/**
+ * The warehouse view: on-hand vs reserved, which `shop/catalog` deliberately
+ * never exposes — it is browse-gated, and a shopper has no business reading the
+ * reservation ledger. Same numbers `add-to-cart` enforces against, so the gap
+ * between on-hand and available *is* the live cart holds.
+ */
+const stockOverviewOp: OperationHandler<undefined, StockRow[]> = async (ctx) => {
+  assertAllowed(await ctx.check(SHOP_PERM.stockManage));
+  const now = new Date().toISOString();
+  const products = ctx.sql.query<ProductRow>('SELECT * FROM shop_products ORDER BY name');
+  const rows: StockRow[] = [];
+  for (const p of products) {
+    const variants = ctx.sql.query<VariantRow>(
+      'SELECT * FROM shop_variants WHERE product_id = ? ORDER BY size_label',
+      [p.id],
+    );
+    for (const v of variants) {
+      const held = reservedNow(ctx, v.id, now);
+      const hand = onHand(ctx, v.id);
+      rows.push({
+        productId: p.id,
+        productName: p.name,
+        slug: p.slug,
+        published: p.published,
+        variantId: v.id,
+        sku: v.sku,
+        grind: v.grind,
+        sizeLabel: v.size_label,
+        price: moneyOf(v.price_amount, v.currency),
+        onHand: hand,
+        reserved: held,
+        available: hand - held,
+      });
+    }
+  }
+  return rows;
 };
 
 // ---------------------------------------------------------------------------
@@ -939,6 +996,7 @@ export const shopModule: ModuleRegistration = {
     'shop/add-variant': addVariantOp as never,
     'shop/publish-product': publishProductOp as never,
     'shop/set-stock': setStockOp as never,
+    'shop/stock-overview': stockOverviewOp as never,
     'shop/catalog': catalogOp as never,
     'shop/create-customer': createCustomerOp as never,
     'shop/create-discount': createDiscountOp as never,

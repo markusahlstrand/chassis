@@ -14,7 +14,7 @@ import { getMigrations } from 'better-auth/db/migration';
  * OIDC/social/SSO are later config on THIS same adapter (Better Auth federates
  * them upstream), needing no kernel change — the point of doing the seam neutrally.
  */
-export function buildAuth(dir: string, port: number, webOrigin: string) {
+export function buildAuth(dir: string, port: number, webOrigins: string[]) {
   const db = new Database(join(dir, 'better-auth.sqlite'));
   db.pragma('journal_mode = WAL');
   // Typed as BetterAuthOptions so the instance's type doesn't leak the
@@ -24,8 +24,10 @@ export function buildAuth(dir: string, port: number, webOrigin: string) {
     emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 8 },
     secret: process.env.BETTER_AUTH_SECRET ?? 'dev-only-secret-substrat-shop-demo-32chars',
     baseURL: `http://localhost:${port}`,
-    // The storefront calls /api/auth/* through Vite's proxy, so its origin must be trusted.
-    trustedOrigins: [webOrigin, `http://localhost:${port}`],
+    // The storefront AND the admin dashboard each call /api/auth/* through their
+    // own Vite proxy, so both origins must be trusted or login fails with
+    // "Invalid origin" and the session cookie never sticks.
+    trustedOrigins: [...webOrigins, `http://localhost:${port}`],
   };
   return betterAuth(options);
 }

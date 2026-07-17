@@ -12,7 +12,7 @@ import { buildBikeShopHost, seedBikeShop, type BikeShopWorld } from './index.js'
  * Dev API server for the CykelService demo. Deliberately thin: authenticate
  * (dev principal picker via x-principal header) → getScope → invoke. Every
  * route is a wrapper over an operation; there is no business logic here.
- * Runs on :8788 so it can sit next to the ServiceCo demo (:8787).
+ * Runs on :8872 so it can sit next to the ServiceCo demo (:8871).
  */
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '.data');
@@ -176,6 +176,7 @@ app.post('/api/invoicing/:id/export', async (c) =>
   c.json(await (await stub(c)).invoke('invoicing/export', { underlagId: c.req.param('id') })),
 );
 
-const port = Number(process.env.PORT ?? 8788);
+// Private 887x block — see app/vite.config.ts. Override with PORT=… pnpm dev
+const port = Number(process.env.PORT ?? 8872);
 serve({ fetch: app.fetch, port });
 console.log(`CykelService demo API on http://localhost:${port} — data in ${dataDir}`);

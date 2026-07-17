@@ -223,7 +223,7 @@ Build confidence in this order, and **show the user the output of each**:
 pnpm install
 pnpm test                      # the scenario, including the denials
 npx @substrat-run/boundary-lint # the layer rules — see the rules section
-pnpm dev                       # API on :8787
+pnpm dev                       # API on :8871 (PORT=… WEB_PORT=… to move it)
 ```
 
 Then **actually exercise it** — don't just report that the server started. Drive the real

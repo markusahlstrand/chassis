@@ -17,10 +17,17 @@ export function Invoicing({ notify }: { notify: (msg: string, ok?: boolean) => v
   useEffect(load, [load]);
 
   const expand = async (id: string) => {
-    if (open === id) { setOpen(null); return; }
-    const detail = await api.underlag(id);
-    setLines(detail.lines);
-    setOpen(id);
+    if (open === id) {
+      setOpen(null);
+      return;
+    }
+    try {
+      const detail = await api.underlag(id);
+      setLines(detail.lines);
+      setOpen(id);
+    } catch (e) {
+      notify((e as Error).message);
+    }
   };
 
   const doExport = async (id: string, number: number) => {
@@ -33,24 +40,28 @@ export function Invoicing({ notify }: { notify: (msg: string, ok?: boolean) => v
     }
   };
 
-  if (error) return <div className="wrap page"><div className="notice deny">{error}</div></div>;
-  if (!list) return <div className="wrap page"><div className="notice">Laddar underlag…</div></div>;
+  if (error) return <div className="notice deny">{error}</div>;
+  if (!list) return <div className="notice">Laddar underlag…</div>;
 
   return (
-    <div className="wrap page">
+    <>
       <div className="sec-head">
         <div className="eyebrow">Byggt av engine-invoicing</div>
         <h1>Fakturaunderlag</h1>
-        <p>Skapas automatiskt när en order betalas mot faktura — samma engine som verkstadsdemot, en ny händelsekälla.</p>
+        <p>
+          Skapas automatiskt när en order betalas mot faktura — samma engine som verkstadsdemot,
+          en ny händelsekälla. Ett exporterat underlag är låst och kan aldrig redigeras.
+        </p>
       </div>
+
       <div className="panel">
         <table>
           <thead>
             <tr>
               <th className="num">Nr</th>
-              <th>Status</th>
+              <th className="l">Status</th>
               <th className="num">Summa</th>
-              <th>Åtgärd</th>
+              <th className="l">Åtgärd</th>
             </tr>
           </thead>
           <tbody>
@@ -63,9 +74,9 @@ export function Invoicing({ notify }: { notify: (msg: string, ok?: boolean) => v
                   <td className="num">#{u.number}</td>
                   <td><span className={`pill ${u.status}`}>{u.status}</span></td>
                   <td className="num">{kr(u.total)}</td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     {u.status === 'open' ? (
-                      <button className="btn sm ghost" onClick={(e) => { e.stopPropagation(); doExport(u.id, u.number); }}>
+                      <button className="btn sm ghost" onClick={() => doExport(u.id, u.number)}>
                         Exportera
                       </button>
                     ) : (
@@ -88,6 +99,6 @@ export function Invoicing({ notify }: { notify: (msg: string, ok?: boolean) => v
           </tbody>
         </table>
       </div>
-    </div>
+    </>
   );
 }

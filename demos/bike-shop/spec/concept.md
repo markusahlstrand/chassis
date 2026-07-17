@@ -87,5 +87,5 @@ the engine's `completeWorkOrder` — one transaction:
 
 Same shell, bike vocabulary: **Reparationer** list (bike column instead of
 facility), repair detail with mechanic actions + priced completion sheet,
-**Fakturaunderlag** review, portal **"Mina reparationer"**. Dev API on :8788,
-web on :5174 — runs side by side with ServiceCo.
+**Fakturaunderlag** review, portal **"Mina reparationer"**. Dev API on :8872,
+web on :5272 — runs side by side with ServiceCo.

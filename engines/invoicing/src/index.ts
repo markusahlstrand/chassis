@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import {
-  addDecimal,
+  addMoney,
   entityRef,
   money,
   moduleManifest,
+  moneyOf,
   permissionKey,
+  type Money,
 } from '@substrat-run/contracts';
 import {
   assertAllowed,
@@ -38,7 +40,19 @@ export const invoicingManifest = moduleManifest.parse({
   events: {
     emits: [
       { type: 'invoicing.underlag-updated', schemaVersion: 1 },
-      { type: 'invoicing.underlag-exported', schemaVersion: 1 },
+      // v2: `total` is Money, not a bare amount string. v1 stated a number with
+      // no currency on a financial artifact — and `demos/fsm/spec/testrun.md`
+      // always specified `total: Money`, so this is the code meeting its own
+      // spec rather than a change of intent.
+      //
+      // NOT dual-emitted, despite D-28's deprecation-window rule: consumer
+      // dispatch keys on event TYPE only (`WHERE o.type = ?`; the schemaVersion
+      // in `consumes` is discarded at registration), so emitting v1 and v2 would
+      // deliver BOTH to every consumer of this type. For an export event that
+      // means a connector could invoice twice, silently. A clean replace instead
+      // fails loudly — a v1 consumer's strict parse rejects v2 and dead-letters,
+      // which is visible. See kernel-design open question on version routing.
+      { type: 'invoicing.underlag-exported', schemaVersion: 2 },
     ],
     consumes: [
       { type: 'workorder.completed', schemaVersion: 1 },
@@ -154,18 +168,79 @@ export interface UnderlagLine {
   created_at: string;
 }
 
+/**
+ * The underlag's total, as Money.
+ *
+ * Uses `addMoney`, not `addDecimal`: an invoice basis that sums 100 SEK and
+ * 100 EUR into "200" is not a rounding bug, it is a financial artifact stating
+ * a number that means nothing. `addMoney` throws on a currency mismatch, so the
+ * engine refuses rather than invents. `assertSingleCurrency` in the consumers is
+ * the real guard — this is defence in depth behind it.
+ */
+function underlagTotalMoney(ctx: OperationContext, underlagId: string): Money {
+  const rows = ctx.sql.query<{ line_total_amount: string; currency: string }>(
+    'SELECT line_total_amount, currency FROM invoicing_lines WHERE underlag_id = ?',
+    [underlagId],
+  );
+  // An underlag with no lines is unreachable in practice — find-or-create and
+  // the line inserts share one transaction — but a zero total must still have a
+  // currency to be Money at all. Attributing a currency to an empty document is
+  // exactly the guess this engine should not make; SEK is the demo default and
+  // the honest fix is a currency column on the underlag, which needs a migration
+  // and therefore a human checkpoint (see docs/design/commerce-gaps.md §3.1).
+  if (rows.length === 0) return moneyOf('0', 'SEK');
+
+  return rows
+    .map((r) => moneyOf(r.line_total_amount, r.currency))
+    .reduce((sum, m) => addMoney(sum, m));
+}
+
+/** Back-compat shim: the operation surface has always returned a bare string. */
 function underlagTotal(ctx: OperationContext, underlagId: string): string {
-  return ctx.sql
-    .query<{ line_total_amount: string }>(
-      'SELECT line_total_amount FROM invoicing_lines WHERE underlag_id = ?',
-      [underlagId],
-    )
-    .reduce((sum, r) => addDecimal(sum, r.line_total_amount), '0');
+  return underlagTotalMoney(ctx, underlagId).amount;
+}
+
+/**
+ * A document has one currency. Reject at write time, so a mixed-currency
+ * delivery dead-letters and the underlag is never corrupted — rejecting at read
+ * time instead would leave a document that can never be listed or exported
+ * again.
+ */
+function assertSingleCurrency(
+  ctx: OperationContext,
+  underlagId: string,
+  incoming: readonly { unitPrice: Money; lineTotal: Money }[],
+): void {
+  const existing = ctx.sql.query<{ currency: string }>(
+    'SELECT DISTINCT currency FROM invoicing_lines WHERE underlag_id = ?',
+    [underlagId],
+  );
+  const currencies = new Set<string>([
+    ...existing.map((r) => r.currency),
+    ...incoming.map((l) => l.lineTotal.currency),
+    ...incoming.map((l) => l.unitPrice.currency),
+  ]);
+  if (currencies.size > 1) {
+    throw new Error(
+      `currency mismatch on underlag ${underlagId}: ${[...currencies].sort().join(', ')} — an underlag is one document in one currency`,
+    );
+  }
 }
 
 const onWorkOrderCompleted: ConsumerHandler = (ctx, event) => {
   const p = completedPayload.parse(event.payload);
   if (p.billable.length === 0) return;
+
+  // Idempotent on at-least-once redelivery (K-11): the order is the dedup key.
+  // Its lines are already present → this delivery is a replay, do nothing.
+  // This guard was missing while `onCommerceOrderPlaced` had it, so the two
+  // consumers of one engine disagreed about whether replay was possible — and
+  // the docs promised the guard for both.
+  const already = ctx.sql.query<{ found: number }>(
+    `SELECT 1 AS found FROM invoicing_lines WHERE source_type = 'workorder' AND source_id = ? LIMIT 1`,
+    [p.orderId],
+  )[0];
+  if (already) return;
 
   // Find-or-create the OPEN underlag for this customer; an exported underlag
   // is immutable — late deliveries open a new one (engine invariant on top of
@@ -187,6 +262,8 @@ const onWorkOrderCompleted: ConsumerHandler = (ctx, event) => {
     );
     underlag = ctx.sql.query<UnderlagRow>('SELECT * FROM invoicing_underlag WHERE id = ?', [id])[0]!;
   }
+
+  assertSingleCurrency(ctx, underlag.id, p.billable);
 
   for (const line of p.billable) {
     ctx.sql.exec(
@@ -256,6 +333,8 @@ const onCommerceOrderPlaced: ConsumerHandler = (ctx, event) => {
     );
     underlag = ctx.sql.query<UnderlagRow>('SELECT * FROM invoicing_underlag WHERE id = ?', [id])[0]!;
   }
+
+  assertSingleCurrency(ctx, underlag.id, p.billable);
 
   for (const line of p.billable) {
     ctx.sql.exec(
@@ -337,13 +416,15 @@ const exportOp: OperationHandler<{ underlagId: string }, UnderlagRow> = async (c
   );
   ctx.emit({
     type: 'invoicing.underlag-exported',
-    schemaVersion: 1,
+    schemaVersion: 2,
     entity: { entityType: 'underlag', entityId: underlag.id },
     piiClass: 'none',
     payload: {
       underlagId: underlag.id,
       number: underlag.number,
-      total: underlagTotal(ctx, underlag.id),
+      // Money, not a bare string: the consumer of an export event is an
+      // accounting connector, and "1550" without a currency is not an amount.
+      total: underlagTotalMoney(ctx, underlag.id),
     },
   });
   return ctx.sql.query<UnderlagRow>('SELECT * FROM invoicing_underlag WHERE id = ?', [
