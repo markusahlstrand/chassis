@@ -1,0 +1,19 @@
+{
+	"name": "external-vertical",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+	"durable_objects": {
+		"bindings": [
+			{ "name": "SCOPE", "class_name": "ScopeDO" },
+			{ "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
+		}
+	]
+	// No `vars`: ALLOW_DEV_HEADER is deliberately absent so a real `wrangler deploy`
+	// is fail-closed. `pnpm dev` sets it for local use only.
+}

@@ -1,0 +1,25 @@
+{
+  "name": "external-vertical",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A Substrat vertical built from published packages — the 'build an app outside the repo' example (first-flow.md slice 2)",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "wrangler dev --var ALLOW_DEV_HEADER:true",
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run --outdir dist-worker"
+  },
+  "dependencies": {
+    "@substrat-run/adapter-cloudflare": "^0.4.0",
+    "@substrat-run/contracts": "^0.4.0",
+    "@substrat-run/engine-workorder": "^0.3.0",
+    "@substrat-run/kernel": "^0.4.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.110.0"
+  }
+}
