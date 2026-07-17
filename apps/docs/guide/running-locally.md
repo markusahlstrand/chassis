@@ -180,6 +180,19 @@ deliberate limit — the control-plane HTTP surface exposes lifecycle and entitl
 connected vertical keeps its permission model local while the shared plane is authoritative
 for tenant/scope lifecycle and entitlements.
 
+Unlike the quick `pnpm dev` (which trusts a dev-actor header), the connected control plane
+runs **real staff auth** — the console shows a sign-in screen. Sign in with the seeded
+operator:
+
+```
+markus@substrat.run / substrat123
+```
+
+Auth is Better Auth behind a provider-agnostic seam (`sessionPlatformAuth` + a staff
+allowlist), so who authenticates staff can change without touching the console or the
+router. The vertical registering its scopes is a *service*, not staff — locally it uses the
+dev-actor header as a stand-in for a real service credential.
+
 ## How production differs
 
 Co-location is a local convenience, not the topology; `pnpm dev:connected` above is the

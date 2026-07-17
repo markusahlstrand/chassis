@@ -1,10 +1,11 @@
 # The first end-to-end flow — deploy and manage an external vertical
 
 **Status:** in progress. A milestone plan, not a decision — it commits to a *walking
-skeleton*, not to the scaling shape. Slices 1 and 2 are done and the slice-4 connect seam
-is built and prototyped locally (see §4 Progress); slice 3 and the Cloudflare-deployed
-join remain. Supersedes nothing; the choices it defers (facets vs N-deployments, git-hook
-vs CLI trigger, custom hostnames) stay open.
+skeleton*, not to the scaling shape. Slices 1 and 2 are done; the slice-4 connect seam and
+slice-3 staff auth are built and verified locally (see §4 Progress). What remains is the
+Cloudflare-deployed join: the same seams wired into deployed workers and actually shipped.
+Supersedes nothing; the choices it defers (facets vs N-deployments, git-hook vs CLI
+trigger, custom hostnames) stay open.
 **What this is:** the thinnest sequence of work that lets someone build a vertical in a
 repo *outside* this monorepo, deploy it, watch it register itself with a shared control
 plane, and manage it — suspend, entitle, review permissions — from the console. It is
@@ -85,8 +86,11 @@ is the foundation; 2 and 3 can proceed in parallel once it lands; 4 is the join.
   packages (disconnected from the workspace), verified as a clean external install.
 - **Slice 4 seam — built and prototyped locally.** `ControlPlaneClient` (the vertical side
   of the connect seam) and the demo's connected mode land the registration + remote-gating
-  semantics; see the note under Slice 4. The Cloudflare-deployed version and Slice 3 (real
-  console auth) remain.
+  semantics; see the note under Slice 4.
+- **Slice 3 auth — built and verified locally.** Real staff sign-in (Better Auth, swappable
+  for AuthHero) with a `sessionPlatformAuth` seam + `staffAllowlist`; the console has a login
+  screen and session-based calls. What remains is the deployed composition root + Pages
+  deploy; see the note under Slice 3.
 - **Bonus (not a slice): the local stack.** `pnpm dev` co-locates everything on one SQLite
   dir for a fast loop; `pnpm dev:connected` runs the *faithful* topology — a separate
   control plane, a connected vertical, and the console — locally.
@@ -148,6 +152,33 @@ local mock, and only safe if it is not the `127.0.0.1` unsafe stub.
 
 **Definition of done:** the deployed console lists the tenants that exist in the deployed
 control plane, requires a real login, and refuses unauthenticated requests.
+
+**What was built (staff auth, locally):** the real `authenticate` is
+`sessionPlatformAuth(readSession, resolveActor)` in `@substrat-run/control-plane-api`,
+split so the **auth provider** and the **staff roster** are independent — `readSession`
+wraps the provider (Better Auth today), `staffAllowlist` decides who is staff and under
+which actor id. The standalone control plane (dev server) mounts Better Auth at `/auth/*`
+and uses it; the console gained a real sign-in screen and session-based API calls (no
+dev-actor header). Verified end to end: the console refuses `/tenants` without a session,
+sign-in succeeds, and the fleet then loads. `pnpm dev:connected` runs this; the co-located
+`pnpm dev` still uses the header stub for the quick path (`VITE_DEV_ACTOR`).
+
+**Swap to AuthHero later:** by design, only `readSession` changes — the router, the
+allowlist, the console's login calls, and the `PlatformActorAuth` seam all stay. Better
+Auth is "for now."
+
+**Gap surfaced — the vertical isn't staff.** Making the control plane require a staff
+session broke the *vertical's* registration (slice 4), because a connected vertical
+authenticates as a **service**, not a staff member (open decision 2). Locally the control
+plane accepts a staff session (console) OR the dev-actor header (the vertical's service
+call), session-first; in production the vertical uses a real service credential and the
+header path is gone. Deciding that credential (a signed service token / a privileged
+binding) is its own step.
+
+**Still remaining for the deployed DoD:** wire the same Better Auth (on D1) into the
+deployed `apps/control-plane` worker, point the console's `VITE_` config at the deployed
+URL, and deploy the console to Pages. The auth *model* is done; this is composition-root +
+deploy.
 
 ### Slice 4 — The vertical registers itself, and the console can bite it
 
