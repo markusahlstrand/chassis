@@ -5,10 +5,22 @@
 §4.4 (`PlatformActor` + admin audit log) are **shipped on both adapters and covered by
 contract tests**. §4.5's permission diff shipped its **build-time half** outside the console
 (`tools/permission-diff.mts` → checked-in `demos/*/PERMISSIONS.md`, CI-diffed) — see §4.5.
+
+The **directory read side** now exists — `listScopes`, `getScopeRecord`, `listRoles`, and a
+filtered/paged `auditLog` — which is what the console needed and what §3.2's "only complete
+inventory" claim required to be true at all. `packages/control-plane-api` is the audited HTTP
+surface over `HostAdmin` (§4.5), and `apps/console` is the console: tenants, the fleet scope
+directory, lifecycle, entitlements, the admin log with before/after diffs, and the review
+queue over runtime permission changes.
+
 Still unbuilt: hostname provisioning and the `hostname → (tenant, scope, vertical)` map
-(§4.2, §5.5), the console itself, and §5's meters. §2's "the tenant does not
-exist" finding is **historical** — it is what this document caused to be fixed; it is kept
-because the argument for the shared layer still reads from it.
+(§4.2, §5.5); §5's meters; **capability-grant enumeration** — a grant is a tuple in the
+scope's own database, so listing them needs §5.4's admin-query RPC, unlike roles which are
+directory-local (this is the sharpest remaining consequence of §7's "no back door into scope
+DBs"); and **four-eyes approval**, which §6 says the action list should settle — the action
+list is now real (kernel open question 14). §2's "the tenant does not exist" finding is
+**historical** — it is what this document caused to be fixed; it is kept because the argument
+for the shared layer still reads from it.
 **What this is:** the **shared platform layer that N per-vertical deployments sit on** —
 the tenant registry, scope lifecycle, entitlements, custom hostnames, the audited admin
 surface, and the console over them. Plus what is deliberately *not* built: billing.
