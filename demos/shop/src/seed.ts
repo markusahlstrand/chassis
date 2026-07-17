@@ -5,7 +5,9 @@ import {
   principalId,
   scopeId,
   tenantId,
+  type PermissionKey,
   type PrincipalId,
+  type RoleDefinition,
   type ScopeId,
   type TenantId,
 } from '@substrat-run/contracts';
@@ -32,10 +34,55 @@ export interface ShopWorld {
   chelbesaVariantId: string; // Chelbesa 250 g — the TTL-release beat
 }
 
+/**
+ * The modules this vertical composes, in registration order. Exported because
+ * `tools/permission-diff.mts` renders the permission checkpoint from this same
+ * array — the emitter and the running host read the one object, so the artifact
+ * cannot drift from what is actually registered.
+ */
+export const MODULES = [invoicingModule, shopModule];
+
+const adminPerms = [
+  SHOP_PERM.catalogManage, SHOP_PERM.stockManage, SHOP_PERM.discountManage,
+  SHOP_PERM.customerManage, SHOP_PERM.orderRead, SHOP_PERM.orderFulfil,
+  SHOP_PERM.browse, SHOP_PERM.checkout,
+  INV.read, INV.export,
+];
+
+/**
+ * This vertical's role table — identical in every tenant, which is why it is a
+ * plain constant and why the permission snapshot can render it without naming a
+ * tenant. Per-tenant customisation is a console concern (runtime), not a
+ * build-time one. Exported for the same reason as MODULES.
+ */
+export const ROLES: RoleDefinition[] = [
+  { key: 'shop-admin', permissions: adminPerms, source: 'vertical' },
+  {
+    key: 'warehouse',
+    permissions: [SHOP_PERM.stockManage, SHOP_PERM.orderFulfil, SHOP_PERM.orderRead, SHOP_PERM.browse],
+    source: 'vertical',
+  },
+  { key: 'shopper', permissions: [SHOP_PERM.browse, SHOP_PERM.checkout], source: 'vertical' },
+  // Anonymous visitors: read the catalogue only. Not an auth bypass — a
+  // principal holding a thin role, checked on the same code path as every other.
+  { key: 'public', permissions: [SHOP_PERM.browse], source: 'vertical' },
+];
+
+/** What a portal customer receives, narrowed to their own customer record. */
+const portalPerms = [SHOP_PERM.orderRead];
+
+/**
+ * Entity-narrowed grant SHAPES. The grants themselves are per-principal and
+ * minted at runtime, so they can never be a build artifact; their shape can, and
+ * it is what tells a reviewer which keys are reachable outside the role table.
+ */
+export const ENTITY_GRANTS: { entityType: string; permissions: PermissionKey[] }[] = [
+  { entityType: 'customer', permissions: portalPerms },
+];
+
 export function buildShopHost(dir: string): SqliteScopeHost {
   const host = new SqliteScopeHost({ dir });
-  host.registerModule(invoicingModule);
-  host.registerModule(shopModule);
+  for (const m of MODULES) host.registerModule(m);
   return host;
 }
 
@@ -82,21 +129,9 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
   await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
-  const adminPerms = [
-    SHOP_PERM.catalogManage, SHOP_PERM.stockManage, SHOP_PERM.discountManage,
-    SHOP_PERM.customerManage, SHOP_PERM.orderRead, SHOP_PERM.orderFulfil,
-    SHOP_PERM.browse, SHOP_PERM.checkout,
-    INV.read, INV.export,
-  ];
-  const warehousePerms = [SHOP_PERM.stockManage, SHOP_PERM.orderFulfil, SHOP_PERM.orderRead, SHOP_PERM.browse];
-  const shopperPerms = [SHOP_PERM.browse, SHOP_PERM.checkout];
-  const publicPerms = [SHOP_PERM.browse]; // anonymous visitors: read the catalogue only
-
+  // Roles: identical definitions in both tenants (vertical-defined) — see ROLES.
   for (const t of [world.t1, world.t2]) {
-    await host.admin.defineRole(staff, t, { key: 'shop-admin', permissions: adminPerms, source: 'vertical' });
-    await host.admin.defineRole(staff, t, { key: 'warehouse', permissions: warehousePerms, source: 'vertical' });
-    await host.admin.defineRole(staff, t, { key: 'shopper', permissions: shopperPerms, source: 'vertical' });
-    await host.admin.defineRole(staff, t, { key: 'public', permissions: publicPerms, source: 'vertical' });
+    for (const role of ROLES) await host.admin.defineRole(staff, t, role);
   }
 
   await host.admin.assignRole(staff, { principalId: world.astrid, roleKey: 'shop-admin', node: { tenantId: world.t1, scopeId: null } });
@@ -146,22 +181,20 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
     writeFileSync(castPath, JSON.stringify(world, null, 2));
   }
 
-  // Portal grants (idempotent): entity-narrowed order:read per customer.
-  if (world.elinCustomerId) {
-    await host.admin.grant(staff, {
-      principalId: world.elin, permission: SHOP_PERM.orderRead,
-      node: { tenantId: world.t1, scopeId: world.s1 },
-      entity: { entityType: 'customer', entityId: world.elinCustomerId },
-      grantedBy: world.astrid,
-    });
-  }
-  if (world.ottoCustomerId) {
-    await host.admin.grant(staff, {
-      principalId: world.otto, permission: SHOP_PERM.orderRead,
-      node: { tenantId: world.t1, scopeId: world.s1 },
-      entity: { entityType: 'customer', entityId: world.ottoCustomerId },
-      grantedBy: world.astrid,
-    });
+  // Portal grants (idempotent): entity-narrowed per customer — see ENTITY_GRANTS.
+  for (const [principal, customerId] of [
+    [world.elin, world.elinCustomerId],
+    [world.otto, world.ottoCustomerId],
+  ] as const) {
+    if (!customerId) continue;
+    for (const permission of portalPerms) {
+      await host.admin.grant(staff, {
+        principalId: principal, permission,
+        node: { tenantId: world.t1, scopeId: world.s1 },
+        entity: { entityType: 'customer', entityId: customerId },
+        grantedBy: world.astrid,
+      });
+    }
   }
 
   return world;

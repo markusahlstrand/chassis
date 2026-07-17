@@ -21,6 +21,11 @@ jobs:
       # @substrat-run/boundary-lint), so they need the build above — the repo
       # lints itself with the same code a from-scratch vertical runs.
       - run: node tools/boundary-lint.mjs
+      # The permission-diff human checkpoint (CLAUDE.md). Re-emit every vertical's
+      # snapshot and fail if it drifts from what is checked in — an agent that
+      # widened a role must show it in the PR diff, not in a console nobody opens.
+      # Needs the build above: it imports the engines' manifests.
+      - run: pnpm lint:permissions --check
       - run: pnpm -r typecheck
       # The rule this job exists to enforce: the pure-SQLite adapter stays
       # green in CI forever (master plan D-14). Contract tests + the FSM
