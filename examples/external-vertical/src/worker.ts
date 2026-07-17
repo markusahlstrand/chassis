@@ -31,6 +31,7 @@ import {
 } from '@substrat-run/adapter-cloudflare';
 import { PERM as WO, workorderModule } from '@substrat-run/engine-workorder';
 import { NOTES_PERM, notesModule } from './notes.js';
+import { PAGE } from './ui.js';
 
 // The scope-DO class = the app binary: kernel + the engine + your module, bundled.
 // A Durable Object cannot receive handler closures over RPC, so the module set is
@@ -82,6 +83,10 @@ async function scopeFor(c: Context<{ Bindings: Env }>) {
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
+// A tiny built-in web page so the vertical is clickable in a browser (no separate
+// frontend build). It drives the same routes below.
+app.get('/', (c) => c.html(PAGE));
 
 // Idempotent world provisioning: tenant → entitlements → scope → a role the user
 // holds. Safe to re-run (createTenant/provisionScope are idempotent).

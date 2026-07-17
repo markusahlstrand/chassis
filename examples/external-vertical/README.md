@@ -23,11 +23,21 @@ scope. (Registering into a separately-deployed shared control plane is slice 4.)
 ## Run it
 
 ```sh
-pnpm install
-pnpm dev            # wrangler dev on real workerd — no Cloudflare account needed
+pnpm install       # from within this monorepo, add --ignore-workspace (see below)
+pnpm dev           # wrangler dev on real workerd — no Cloudflare account needed
 ```
 
-Then drive it (the `dev` script turns on the `x-principal` dev-header auth):
+Then **open <http://localhost:8787> in your browser**: a tiny built-in page lets
+you *Seed world*, add notes, and see them — driving the same API below. (The `dev`
+script turns on the `x-principal` dev-header auth the page uses.)
+
+> **Running from inside this repo:** `examples/` is deliberately **not** a pnpm
+> workspace member, so a plain `pnpm install` here would target the whole
+> monorepo. Use `pnpm install --ignore-workspace` to install it standalone from
+> the registry, the way a real external checkout does. A genuine checkout outside
+> the repo just runs `pnpm install`.
+
+### Or drive the API directly
 
 ```sh
 # provision the world once
