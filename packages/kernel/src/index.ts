@@ -1,4 +1,5 @@
 export type {
+  AuditLogFilter,
   ConsumerHandler,
   GuardPredicate,
   HostAdmin,
@@ -7,11 +8,14 @@ export type {
   OperationHandler,
   ProvisionScopeInput,
   ScopedSql,
+  ScopeFilter,
   ScopeHost,
   ScopeStub,
   SqlMigration,
   SqlValue,
 } from './scope-host.js';
+export { resolveScopeRecord } from './scope-record.js';
+export type { ResolvedScopeRecord } from './scope-record.js';
 export {
   assertAllowed,
   denyAllChecker,

@@ -14,6 +14,7 @@ import {
   principalId,
   resolvedIdentity,
   roleDefinition,
+  scope as scopeSchema,
   tenant as tenantSchema,
   type AdminAction,
   type AdminLogEntry,
@@ -30,6 +31,7 @@ import {
   type ResolvedIdentity,
   type RoleAssignment,
   type RoleDefinition,
+  type Scope,
   type ScopeId,
   type ScopeStatus,
   type Tenant,
@@ -37,7 +39,9 @@ import {
   type TenantStatus,
 } from '@substrat-run/contracts';
 import {
+  resolveScopeRecord,
   ulid,
+  type AuditLogFilter,
   type ConsumerHandler,
   type GuardPredicate,
   type HostAdmin,
@@ -47,6 +51,7 @@ import {
   type PermissionChecker,
   type ProvisionScopeInput,
   type ScopedSql,
+  type ScopeFilter,
   type ScopeHost,
   type ScopeStub,
   type SqlMigration,
@@ -129,6 +134,21 @@ interface TenantRow {
   created_at: string;
 }
 
+interface ScopeRow {
+  scope_id: string;
+  tenant_id: string;
+  parent_scope_id: string | null;
+  slug: string;
+  kind: string;
+  name: string;
+  vertical: string | null;
+  storage_shape: string;
+  jurisdiction: string | null;
+  status: string;
+  schema_version: string;
+  created_at: string;
+}
+
 interface AdminLogRow {
   id: string;
   actor: string;
@@ -192,9 +212,21 @@ export class SqliteScopeHost implements ScopeHost {
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL
       );
+      -- The scope directory (§3.2). slug/kind/name/vertical are nullable HERE but
+      -- required (except vertical) by the scope contract: the column set must be
+      -- identical whether the table was created fresh or ALTERed up from the
+      -- pre-directory shape (see ensureDirectoryColumns), and SQLite cannot ADD a
+      -- NOT NULL column without inventing a default for existing rows. Nothing
+      -- writes null — provisionScope always resolves a value, and the backfill
+      -- fills legacy rows — so Zod is the enforcement point on read.
       CREATE TABLE IF NOT EXISTS scopes (
         scope_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
+        parent_scope_id TEXT,
+        slug TEXT,
+        kind TEXT,
+        name TEXT,
+        vertical TEXT,
         storage_shape TEXT NOT NULL DEFAULT 'A',
         jurisdiction TEXT,
         status TEXT NOT NULL DEFAULT 'active',
@@ -251,7 +283,17 @@ export class SqliteScopeHost implements ScopeHost {
         after TEXT,
         at TEXT NOT NULL
       );
+      -- Read-path indexes for the console (control-plane.md §4.5). The admin log
+      -- is append-only and only grows, so every filter it offers needs one; the
+      -- trailing id column makes each a covering index for the ORDER BY.
+      CREATE INDEX IF NOT EXISTS _substrat_admin_log_tenant ON _substrat_admin_log (tenant_id, id);
+      CREATE INDEX IF NOT EXISTS _substrat_admin_log_scope ON _substrat_admin_log (scope_id, id);
+      CREATE INDEX IF NOT EXISTS _substrat_admin_log_actor ON _substrat_admin_log (actor, id);
+      CREATE INDEX IF NOT EXISTS _substrat_admin_log_action ON _substrat_admin_log (action, id);
+      CREATE INDEX IF NOT EXISTS _substrat_admin_log_at ON _substrat_admin_log (at);
+      CREATE INDEX IF NOT EXISTS scopes_tenant ON scopes (tenant_id, scope_id);
     `);
+    this.ensureDirectoryColumns();
     this.loadRoles();
     this.checker =
       options.checker ??
@@ -367,28 +409,55 @@ export class SqliteScopeHost implements ScopeHost {
         `cannot provision scope under non-active tenant (status: ${tenantRow.status}): ${input.tenantId}`,
       );
     }
-    const info = this.directory
-      .prepare(
-        `INSERT OR IGNORE INTO scopes (scope_id, tenant_id, storage_shape, jurisdiction, status, created_at)
-         VALUES (?, ?, ?, ?, 'active', ?)`,
-      )
-      .run(
-        input.scopeId,
-        input.tenantId,
-        input.storageShape ?? 'A',
-        input.jurisdiction ?? null,
-        new Date().toISOString(),
-      );
+    const record = resolveScopeRecord(input);
+    // Idempotency is on the scope_id (§3.3: provisioning is idempotent and
+    // journaled — safe to re-run), so an existing scope short-circuits before the
+    // slug check: re-provisioning does not collide with itself.
+    const existing =
+      this.directory.prepare('SELECT 1 FROM scopes WHERE scope_id = ?').get(input.scopeId) !==
+      undefined;
+    if (!existing) {
+      // The `scopes_tenant_slug` UNIQUE index makes this fail closed either way;
+      // checking first is what turns a SQLITE_CONSTRAINT into a sentence naming
+      // the scope that already holds the slug.
+      const slugOwner = this.directory
+        .prepare('SELECT scope_id FROM scopes WHERE tenant_id = ? AND slug = ?')
+        .get(input.tenantId, record.slug) as { scope_id: string } | undefined;
+      if (slugOwner) {
+        throw new Error(
+          `scope slug '${record.slug}' already taken under tenant ${input.tenantId} ` +
+            `by ${slugOwner.scope_id} (slugs are unique within a tenant)`,
+        );
+      }
+      this.directory
+        .prepare(
+          `INSERT INTO scopes
+             (scope_id, tenant_id, parent_scope_id, slug, kind, name, vertical,
+              storage_shape, jurisdiction, status, created_at)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+        )
+        .run(
+          input.scopeId,
+          input.tenantId,
+          record.slug,
+          record.kind,
+          record.name,
+          record.vertical,
+          record.storageShape,
+          record.jurisdiction,
+          new Date().toISOString(),
+        );
+    }
     const rt = this.runtime(input.tenantId, input.scopeId);
     await this.applyPendingMigrations(rt);
     // Audit a real provision only; an idempotent re-provision changed nothing.
-    if (info.changes > 0) {
+    if (!existing) {
       this.recordAdmin(
         actor,
         'provisionScope',
-        { tenantId: input.tenantId, scopeId: input.scopeId },
+        { tenantId: input.tenantId, scopeId: input.scopeId, vertical: record.vertical },
         null,
-        { storageShape: input.storageShape ?? 'A', jurisdiction: input.jurisdiction ?? null },
+        record,
       );
     }
   }
@@ -637,6 +706,27 @@ export class SqliteScopeHost implements ScopeHost {
       return r ? mapTenant(r) : undefined;
     };
 
+    // The directory row → the `scope` contract. Parsed, not cast: the columns are
+    // nullable in SQLite (ALTER TABLE cannot add NOT NULL to a populated table)
+    // while the contract requires them, so this parse is where that gap is held
+    // shut. A null slug reaching here means the backfill missed a row — which
+    // should fail loudly rather than surface as an untyped hole in the console.
+    const mapScope = (r: ScopeRow): Scope =>
+      scopeSchema.parse({
+        id: r.scope_id,
+        tenantId: r.tenant_id,
+        parentScopeId: r.parent_scope_id,
+        slug: r.slug,
+        kind: r.kind,
+        name: r.name,
+        status: r.status,
+        storageShape: r.storage_shape,
+        jurisdiction: r.jurisdiction,
+        vertical: r.vertical,
+        schemaVersion: r.schema_version,
+        createdAt: r.created_at,
+      });
+
     // Scope lifecycle transition (control-plane.md §4.2): validate ownership,
     // enforce the legal transition graph (fail closed on an illegal one), flip
     // the status, and audit before/after. un-archive is just another entry here
@@ -650,8 +740,8 @@ export class SqliteScopeHost implements ScopeHost {
       to: ScopeStatus,
     ) => {
       const row = this.directory
-        .prepare('SELECT tenant_id, status FROM scopes WHERE scope_id = ?')
-        .get(scopeId) as { tenant_id: string; status: string } | undefined;
+        .prepare('SELECT tenant_id, status, vertical FROM scopes WHERE scope_id = ?')
+        .get(scopeId) as { tenant_id: string; status: string; vertical: string | null } | undefined;
       if (!row || row.tenant_id !== tenantId) {
         throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
       }
@@ -662,7 +752,17 @@ export class SqliteScopeHost implements ScopeHost {
         );
       }
       this.directory.prepare('UPDATE scopes SET status = ? WHERE scope_id = ?').run(to, scopeId);
-      this.recordAdmin(actor, action, { tenantId, scopeId }, { status: row.status }, { status: to });
+      // The audit target carries the scope's vertical (control-plane.md §4.4:
+      // "vertical stays null until §4.2 lifecycle actions that name one"). It is
+      // read from the scope rather than passed in, so the trail cannot disagree
+      // with the directory about which deployment the action touched.
+      this.recordAdmin(
+        actor,
+        action,
+        { tenantId, scopeId, vertical: row.vertical },
+        { status: row.status },
+        { status: to },
+      );
     };
 
     const writeTenantTuple = (
@@ -795,15 +895,27 @@ export class SqliteScopeHost implements ScopeHost {
       },
       createTenant: async (actor: PlatformActorId, input: CreateTenantInput) => {
         const parsed = createTenantInput.parse(input);
-        const info = this.directory
+        // Idempotent: re-creating an existing tenant is a no-op, and a no-op is
+        // not audited — nothing changed.
+        if (readTenant(parsed.id)) return;
+        // Checked explicitly rather than left to `INSERT OR IGNORE` + the
+        // `tenants_slug` UNIQUE index: OR IGNORE would swallow a collision from a
+        // DIFFERENT id and return as though the create were idempotent, silently
+        // not creating the tenant the caller asked for. Fail closed instead.
+        const slugOwner = this.directory
+          .prepare('SELECT tenant_id FROM tenants WHERE slug = ?')
+          .get(parsed.slug) as { tenant_id: string } | undefined;
+        if (slugOwner) {
+          throw new Error(
+            `tenant slug '${parsed.slug}' already taken by ${slugOwner.tenant_id} (slugs are unique)`,
+          );
+        }
+        this.directory
           .prepare(
-            `INSERT OR IGNORE INTO tenants (tenant_id, slug, name, status, created_at)
+            `INSERT INTO tenants (tenant_id, slug, name, status, created_at)
              VALUES (?, ?, ?, 'active', ?)`,
           )
           .run(parsed.id, parsed.slug, parsed.name, new Date().toISOString());
-        // Idempotent: re-creating an existing tenant is a no-op, and a no-op is
-        // not audited — nothing changed.
-        if (info.changes === 0) return;
         this.recordAdmin(actor, 'createTenant', { tenantId: parsed.id }, null, readTenant(parsed.id));
       },
       setTenantStatus: async (actor: PlatformActorId, tenantId: TenantId, status: TenantStatus) => {
@@ -825,6 +937,40 @@ export class SqliteScopeHost implements ScopeHost {
           mapTenant,
         ),
       getTenant: async (tenantId: TenantId): Promise<Tenant | undefined> => readTenant(tenantId),
+      listScopes: async (filter?: ScopeFilter): Promise<Scope[]> => {
+        const where: string[] = [];
+        const params: (string | number)[] = [];
+        if (filter?.tenantId) {
+          where.push('tenant_id = ?');
+          params.push(filter.tenantId);
+        }
+        if (filter?.status) {
+          const statuses = Array.isArray(filter.status) ? filter.status : [filter.status];
+          // An empty array means "no status is acceptable" — match nothing, rather
+          // than degenerating into an unfiltered read of the whole fleet.
+          if (statuses.length === 0) return [];
+          where.push(`status IN (${statuses.map(() => '?').join(', ')})`);
+          params.push(...statuses);
+        }
+        if (filter?.vertical) {
+          where.push('vertical = ?');
+          params.push(filter.vertical);
+        }
+        const sql =
+          'SELECT * FROM scopes' +
+          (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+          ' ORDER BY scope_id';
+        return (this.directory.prepare(sql).all(...params) as ScopeRow[]).map(mapScope);
+      },
+      getScopeRecord: async (tenantId: TenantId, scopeId: ScopeId): Promise<Scope | undefined> => {
+        const r = this.directory.prepare('SELECT * FROM scopes WHERE scope_id = ?').get(scopeId) as
+          | ScopeRow
+          | undefined;
+        // Cross-check the pair (K-3): a scope that exists under a DIFFERENT tenant
+        // reads as absent, never as itself. Same rule as getScope's stub mint.
+        if (!r || r.tenant_id !== tenantId) return undefined;
+        return mapScope(r);
+      },
       suspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'suspendScope', tenantId, scopeId, ['active'], 'suspended'),
       unsuspendScope: async (actor, tenantId, scopeId) =>
@@ -906,14 +1052,51 @@ export class SqliteScopeHost implements ScopeHost {
           scopeId: row.scope_id,
         });
       },
-      auditLog: async (filter?: { tenantId?: TenantId }): Promise<AdminLogEntry[]> => {
-        const rows = (
-          filter?.tenantId
-            ? this.directory
-                .prepare('SELECT * FROM _substrat_admin_log WHERE tenant_id = ? ORDER BY id')
-                .all(filter.tenantId)
-            : this.directory.prepare('SELECT * FROM _substrat_admin_log ORDER BY id').all()
-        ) as AdminLogRow[];
+      auditLog: async (filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
+        const where: string[] = [];
+        const params: (string | number)[] = [];
+        if (filter?.tenantId) {
+          where.push('tenant_id = ?');
+          params.push(filter.tenantId);
+        }
+        if (filter?.scopeId) {
+          where.push('scope_id = ?');
+          params.push(filter.scopeId);
+        }
+        if (filter?.actor) {
+          where.push('actor = ?');
+          params.push(filter.actor);
+        }
+        if (filter?.action) {
+          const actions = Array.isArray(filter.action) ? filter.action : [filter.action];
+          if (actions.length === 0) return []; // no action is acceptable — match nothing
+          where.push(`action IN (${actions.map(() => '?').join(', ')})`);
+          params.push(...actions);
+        }
+        if (filter?.since) {
+          where.push('at >= ?');
+          params.push(filter.since);
+        }
+        if (filter?.until) {
+          where.push('at < ?');
+          params.push(filter.until);
+        }
+        const order = filter?.order === 'desc' ? 'DESC' : 'ASC';
+        if (filter?.cursor) {
+          // ULID order is chronological, so the entry id IS the cursor: page
+          // forward past it in asc, backward before it in desc.
+          where.push(order === 'DESC' ? 'id < ?' : 'id > ?');
+          params.push(filter.cursor);
+        }
+        let sql =
+          'SELECT * FROM _substrat_admin_log' +
+          (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+          ` ORDER BY id ${order}`;
+        if (filter?.limit !== undefined) {
+          sql += ' LIMIT ?';
+          params.push(filter.limit);
+        }
+        const rows = this.directory.prepare(sql).all(...params) as AdminLogRow[];
         return rows.map((r) =>
           adminLogEntry.parse({
             id: r.id,
@@ -929,6 +1112,46 @@ export class SqliteScopeHost implements ScopeHost {
         );
       },
     };
+  }
+
+  /**
+   * The directory's own migration path (control-plane.md §7: "the directory
+   * becomes a real database, with its own migrations"). It is not a module, so
+   * it has no `SqlMigration[]` journal — but a dev directory created before the
+   * scope record grew its naming columns must still open. ALTER in what's
+   * missing, backfill legacy rows to the same defaults `provisionScope` applies,
+   * then add the uniqueness the contract has always claimed ("slug — unique
+   * within tenant"). Idempotent: on a fresh directory every column already
+   * exists and every UPDATE matches nothing.
+   */
+  private ensureDirectoryColumns(): void {
+    const existing = new Set(
+      (this.directory.prepare('PRAGMA table_info(scopes)').all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
+    );
+    for (const [column, ddl] of [
+      ['parent_scope_id', 'parent_scope_id TEXT'],
+      ['slug', 'slug TEXT'],
+      ['kind', 'kind TEXT'],
+      ['name', 'name TEXT'],
+      ['vertical', 'vertical TEXT'],
+    ] as const) {
+      if (!existing.has(column)) this.directory.exec(`ALTER TABLE scopes ADD COLUMN ${ddl}`);
+    }
+    // A ULID lowercases into a valid slug, so the placeholder is unique by
+    // construction — the same default provisionScope resolves.
+    this.directory.exec(`
+      UPDATE scopes SET slug = lower(scope_id) WHERE slug IS NULL;
+      UPDATE scopes SET kind = 'scope' WHERE kind IS NULL;
+      UPDATE scopes SET name = slug WHERE name IS NULL;
+    `);
+    // Created after the backfill: a UNIQUE index over NULL slugs would permit the
+    // duplicates it exists to forbid (SQLite treats NULLs as distinct).
+    this.directory.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS scopes_tenant_slug ON scopes (tenant_id, slug)',
+    );
+    this.directory.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug ON tenants (slug)');
   }
 
   private loadRoles(): void {
@@ -1023,7 +1246,7 @@ export class SqliteScopeHost implements ScopeHost {
     };
   }
 
-  private applyPendingMigrations(rt: ScopeRuntime): Promise<void> {
+  private async applyPendingMigrations(rt: ScopeRuntime): Promise<void> {
     const pending: { moduleId: string; migration: SqlMigration }[] = [];
     for (const mod of this.modules.values()) {
       for (const migration of mod.migrations) {
@@ -1032,8 +1255,10 @@ export class SqliteScopeHost implements ScopeHost {
         }
       }
     }
-    if (pending.length === 0) return Promise.resolve();
-    return rt.actor.enqueue(() => {
+    // Nothing pending → nothing to record. A scope provisioned before any module
+    // registers legitimately sits at schema_version '0'.
+    if (pending.length === 0) return;
+    await rt.actor.enqueue(() => {
       for (const { moduleId, migration } of pending) {
         const key = `${moduleId}@${migration.version}`;
         if (rt.appliedMigrations.has(key)) continue;
@@ -1060,6 +1285,13 @@ export class SqliteScopeHost implements ScopeHost {
         rt.appliedMigrations.add(key);
       }
     });
+    // The scope's migration state, projected into the directory so the fleet
+    // question ("which scopes are behind?") is answerable from the index alone —
+    // §5.4's "fleet questions never fan out". Written here, at the one place
+    // migrations are applied, so it cannot drift from the journal it summarises.
+    this.directory
+      .prepare('UPDATE scopes SET schema_version = ? WHERE scope_id = ?')
+      .run(String(rt.appliedMigrations.size), rt.scopeId);
   }
 
   private runtime(tenantId: TenantId, scopeId: ScopeId): ScopeRuntime {

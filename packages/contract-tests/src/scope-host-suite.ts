@@ -65,6 +65,7 @@ export function scopeHostContractSuite(
     const t2 = tenantId.parse(ulid());
     const t3 = tenantId.parse(ulid()); // control-plane §4.1 tenant-lifecycle fixture
     const t4 = tenantId.parse(ulid()); // §4.3 entitlement-gate fixture
+    const t5 = tenantId.parse(ulid()); // §3.2/§4.5 directory-read fixture
     const s1 = scopeId.parse(ulid());
     const s2 = scopeId.parse(ulid());
     const s3 = scopeId.parse(ulid()); // scope under t3
@@ -469,6 +470,247 @@ export function scopeHostContractSuite(
       // must resolve regardless of entitlements.
       const stub = await host.getScope(alice, t1, s1);
       await expect(stub.invoke('test/read-counter')).resolves.toBeTypeOf('number');
+    });
+
+    // -- the scope directory, read side (control-plane.md §3.2/§4.5) ----------
+    // §3.2 calls the directory the only complete inventory of tenants and scopes.
+    // The write side was always complete; these pin the read side that makes the
+    // claim true — and that the console is built on.
+
+    it('defaults an unnamed scope to a slug derived from its id (§3.2)', async () => {
+      await host.admin.createTenant(staff, { id: t5, slug: 'directory-co', name: 'Directory Co' });
+      const bare = scopeId.parse(ulid());
+      await host.provisionScope(staff, { tenantId: t5, scopeId: bare });
+
+      const rec = await host.admin.getScopeRecord(t5, bare);
+      // A ULID lowercases into a valid slug, so the placeholder is unique by
+      // construction — every pre-existing caller provisions without naming.
+      expect(rec).toMatchObject({
+        id: bare,
+        tenantId: t5,
+        slug: bare.toLowerCase(),
+        kind: 'scope',
+        name: bare.toLowerCase(),
+        vertical: null,
+        parentScopeId: null,
+        status: 'active',
+        storageShape: 'A',
+      });
+    });
+
+    it('round-trips the naming fields supplied at provisioning (§3.2)', async () => {
+      const named = scopeId.parse(ulid());
+      await host.provisionScope(staff, {
+        tenantId: t5,
+        scopeId: named,
+        slug: 'brf-vasastan',
+        kind: 'brf',
+        name: 'Brf Vasastan',
+        vertical: 'housing',
+        jurisdiction: 'eu',
+      });
+      expect(await host.admin.getScopeRecord(t5, named)).toMatchObject({
+        slug: 'brf-vasastan',
+        kind: 'brf',
+        name: 'Brf Vasastan',
+        vertical: 'housing',
+        jurisdiction: 'eu',
+      });
+    });
+
+    it('refuses a slug already taken under the tenant, and re-provision is still idempotent (§3.2)', async () => {
+      const other = scopeId.parse(ulid());
+      await expect(
+        host.provisionScope(staff, { tenantId: t5, scopeId: other, slug: 'brf-vasastan' }),
+      ).rejects.toThrow(/already taken/);
+
+      // Idempotency is keyed on the scope id, so re-provisioning the SAME scope
+      // must not collide with its own slug.
+      const named = (await host.admin.listScopes({ tenantId: t5 })).find(
+        (s) => s.slug === 'brf-vasastan',
+      )!;
+      await expect(
+        host.provisionScope(staff, { tenantId: t5, scopeId: named.id, slug: 'brf-vasastan' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('scopes slug uniqueness to the tenant, not the fleet (§3.2)', async () => {
+      // The same slug under a different tenant is legitimate: the console's
+      // handle is {tenant.slug}/{scope.slug}, which stays unique either way.
+      const elsewhere = scopeId.parse(ulid());
+      await expect(
+        host.provisionScope(staff, { tenantId: t3, scopeId: elsewhere, slug: 'brf-vasastan' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('refuses a tenant slug already taken, fail closed (§4.1)', async () => {
+      // INSERT OR IGNORE would have reported this as an idempotent no-op and
+      // silently not created the tenant the caller asked for.
+      await expect(
+        host.admin.createTenant(staff, {
+          id: tenantId.parse(ulid()),
+          slug: 'directory-co',
+          name: 'Impostor Co',
+        }),
+      ).rejects.toThrow(/already taken/);
+    });
+
+    it('enumerates the scopes under a tenant, and filters by status (§4.5)', async () => {
+      const all = await host.admin.listScopes({ tenantId: t5 });
+      expect(all.length).toBeGreaterThanOrEqual(2);
+      expect(all.every((s) => s.tenantId === t5)).toBe(true);
+      // Ordered by scope id — ULID order is chronological.
+      expect(all.map((s) => s.id)).toEqual([...all.map((s) => s.id)].sort());
+
+      const target = all[0]!;
+      await host.admin.suspendScope(staff, t5, target.id);
+
+      const suspended = await host.admin.listScopes({ tenantId: t5, status: 'suspended' });
+      expect(suspended.map((s) => s.id)).toEqual([target.id]);
+
+      // Several statuses at once — the console's All / Suspended / Archived tabs.
+      const both = await host.admin.listScopes({
+        tenantId: t5,
+        status: ['active', 'suspended'],
+      });
+      expect(both.length).toBe(all.length);
+
+      // An empty status list means "no status is acceptable" — it must match
+      // nothing, never degenerate into an unfiltered read of the whole fleet.
+      expect(await host.admin.listScopes({ tenantId: t5, status: [] })).toEqual([]);
+
+      await host.admin.unsuspendScope(staff, t5, target.id);
+    });
+
+    it('lists the whole fleet across tenants when unfiltered (§4.5)', async () => {
+      const fleet = await host.admin.listScopes();
+      const tenants = new Set(fleet.map((s) => s.tenantId));
+      expect(tenants.size).toBeGreaterThan(1);
+      expect(fleet.length).toBeGreaterThanOrEqual(
+        (await host.admin.listScopes({ tenantId: t5 })).length,
+      );
+    });
+
+    it('filters the fleet by vertical (§4.5)', async () => {
+      const housing = await host.admin.listScopes({ vertical: 'housing' });
+      expect(housing.length).toBeGreaterThanOrEqual(1);
+      expect(housing.every((s) => s.vertical === 'housing')).toBe(true);
+    });
+
+    it('fails closed reading a scope record on a mismatched pair (K-3)', async () => {
+      const [any] = await host.admin.listScopes({ tenantId: t5 });
+      // The scope exists — but not under t1. It must read as absent, never as
+      // itself: the same rule getScope applies when minting a stub.
+      expect(await host.admin.getScopeRecord(t1, any!.id)).toBeUndefined();
+      expect(await host.admin.getScopeRecord(t5, scopeId.parse(ulid()))).toBeUndefined();
+    });
+
+    it('projects the applied-migration count into the directory (§5.4)', async () => {
+      // schema_version shipped as a column and was written by nothing — always
+      // '0'. Registered modules carry migrations, so a provisioned scope must
+      // report a count, which is what makes "which scopes are behind" answerable
+      // from the index without fanning out.
+      const [any] = await host.admin.listScopes({ tenantId: t5 });
+      expect(Number(any!.schemaVersion)).toBeGreaterThan(0);
+    });
+
+    it('stamps the audit target with the scope vertical for lifecycle actions (§4.4)', async () => {
+      // `vertical` was plumbed end-to-end and passed by no call site — every row
+      // was null. A lifecycle action on a scope that names one must carry it.
+      const named = (await host.admin.listScopes({ tenantId: t5 })).find(
+        (s) => s.vertical === 'housing',
+      )!;
+      await host.admin.suspendScope(staff, t5, named.id);
+      const rows = (await host.admin.auditLog({ tenantId: t5, scopeId: named.id })).filter(
+        (r) => r.action === 'suspendScope',
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.vertical).toBe('housing');
+      await host.admin.unsuspendScope(staff, t5, named.id);
+    });
+
+    // -- the admin audit log, read side (control-plane.md §4.4/§4.5) ----------
+
+    it('narrows the audit log by scope, actor and action (§4.5)', async () => {
+      const [any] = await host.admin.listScopes({ tenantId: t5 });
+
+      const byScope = await host.admin.auditLog({ tenantId: t5, scopeId: any!.id });
+      expect(byScope.length).toBeGreaterThan(0);
+      expect(byScope.every((r) => r.scopeId === any!.id)).toBe(true);
+
+      const byActor = await host.admin.auditLog({ tenantId: t5, actor: staff });
+      expect(byActor.length).toBeGreaterThan(0);
+      expect(byActor.every((r) => r.actor === staff)).toBe(true);
+      // A different actor shares the log and must not see these rows.
+      expect(await host.admin.auditLog({ actor: platformActorId.parse(ulid()) })).toEqual([]);
+
+      const lifecycle = await host.admin.auditLog({
+        tenantId: t5,
+        action: ['suspendScope', 'unsuspendScope'],
+      });
+      expect(lifecycle.length).toBeGreaterThan(0);
+      expect(
+        lifecycle.every((r) => r.action === 'suspendScope' || r.action === 'unsuspendScope'),
+      ).toBe(true);
+
+      // Single action, not an array — both spellings are accepted.
+      const provisions = await host.admin.auditLog({ tenantId: t5, action: 'provisionScope' });
+      expect(provisions.every((r) => r.action === 'provisionScope')).toBe(true);
+
+      // Empty action list matches nothing rather than everything.
+      expect(await host.admin.auditLog({ tenantId: t5, action: [] })).toEqual([]);
+    });
+
+    it('orders oldest-first by default and newest-first on request (§4.5)', async () => {
+      const asc = await host.admin.auditLog({ tenantId: t5 });
+      const desc = await host.admin.auditLog({ tenantId: t5, order: 'desc' });
+      expect(asc.length).toBe(desc.length);
+      expect(asc.length).toBeGreaterThan(1);
+      // The default preserves the ordering the log shipped with; the console reads desc.
+      expect(desc.map((r) => r.id)).toEqual([...asc.map((r) => r.id)].reverse());
+    });
+
+    it('limits and pages the audit log by cursor (§4.5)', async () => {
+      const all = await host.admin.auditLog({ tenantId: t5 });
+      expect(all.length).toBeGreaterThan(2);
+
+      const first = await host.admin.auditLog({ tenantId: t5, limit: 2 });
+      expect(first.map((r) => r.id)).toEqual(all.slice(0, 2).map((r) => r.id));
+
+      // The cursor IS the last entry's id — ULID order is chronological, so no
+      // separate encoding is needed. Paging forward resumes strictly after it.
+      const next = await host.admin.auditLog({
+        tenantId: t5,
+        limit: 2,
+        cursor: first[first.length - 1]!.id,
+      });
+      expect(next.map((r) => r.id)).toEqual(all.slice(2, 4).map((r) => r.id));
+
+      // Descending pages backward from the cursor.
+      const descPage = await host.admin.auditLog({
+        tenantId: t5,
+        order: 'desc',
+        limit: 2,
+        cursor: all[all.length - 1]!.id,
+      });
+      expect(descPage.map((r) => r.id)).toEqual(
+        all
+          .slice(-3, -1)
+          .map((r) => r.id)
+          .reverse(),
+      );
+    });
+
+    it('bounds the audit log by time (§4.5)', async () => {
+      const all = await host.admin.auditLog({ tenantId: t5 });
+      const pivot = all[1]!.at;
+      // `since` is inclusive, `until` exclusive.
+      const since = await host.admin.auditLog({ tenantId: t5, since: pivot });
+      expect(since.every((r) => r.at >= pivot)).toBe(true);
+      expect(since.some((r) => r.id === all[1]!.id)).toBe(true);
+
+      const until = await host.admin.auditLog({ tenantId: t5, until: pivot });
+      expect(until.every((r) => r.at < pivot)).toBe(true);
     });
   });
 }
