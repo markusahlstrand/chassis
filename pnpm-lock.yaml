@@ -49,6 +49,37 @@ importers:
         specifier: ^6.0.0
         version: 6.4.3(@types/node@26.1.1)(tsx@4.23.1)
 
+  apps/control-plane:
+    dependencies:
+      '@substrat-run/adapter-cloudflare':
+        specifier: workspace:^
+        version: link:../../packages/adapter-cloudflare
+      '@substrat-run/contracts':
+        specifier: workspace:^
+        version: link:../../packages/contracts
+      '@substrat-run/control-plane-api':
+        specifier: workspace:^
+        version: link:../../packages/control-plane-api
+      '@substrat-run/kernel':
+        specifier: workspace:^
+        version: link:../../packages/kernel
+    devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: ^0.8.19
+        version: 0.8.71(@cloudflare/workers-types@4.20260702.1)(@vitest/runner@3.2.7)(@vitest/snapshot@3.2.7)(vitest@3.2.7(@types/node@26.1.1)(tsx@4.23.1))
+      '@cloudflare/workers-types':
+        specifier: ^4.20250109.0
+        version: 4.20260702.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@26.1.1)(tsx@4.23.1)
+      wrangler:
+        specifier: ^4.110.0
+        version: 4.110.0(@cloudflare/workers-types@4.20260702.1)
+
   apps/docs:
     devDependencies:
       '@fontsource/geist-mono':

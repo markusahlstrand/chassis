@@ -1,0 +1,24 @@
+{
+	"name": "substrat-control-plane",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+	"durable_objects": {
+		"bindings": [
+			// The whole directory (control-plane.md §4): tenants, scopes, roles,
+			// entitlements, identities, and the admin audit log. One singleton DO.
+			{ "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" },
+			// A module-less placeholder scope DO — see src/worker.ts's header for
+			// why the coordinator needs it and why nothing domain-shaped runs here.
+			{ "name": "SCOPE", "class_name": "ScopeDO" }
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ControlPlaneDO", "ScopeDO"]
+		}
+	]
+	// No `vars`: ALLOW_DEV_ACTOR is deliberately absent so a real `wrangler deploy`
+	// is fail-closed. `wrangler dev` sets it via the `dev` script; the workerd test
+	// sets it via miniflare bindings. Real staff auth is slice 3.
+}
