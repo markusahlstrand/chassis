@@ -9,57 +9,37 @@ with frozen prices and provenance, ready to hand to whatever actually issues inv
 (typically an accounting connector). It is **not** a ledger, not accounts receivable,
 not payment tracking.
 
-**Full documentation: https://substrat.ahlstrand.es/engines/invoicing**
+## What it owns
 
-## Snapshot, not join
+- **Exported means immutable** — nothing appends, nothing edits, exporting twice throws.
+- **One document, one currency** — a mixed-currency delivery is rejected at write time.
+- **Snapshot, not join** — prices are frozen from the event payload, with provenance kept.
+- **Idempotent on replay** — the source order is the dedup key, so a redelivery never
+  bills twice.
 
-The engine consumes `workorder.completed` with **zero imports** from the work-order
-engine — star topology. The consumer parses its own Zod view of the event payload,
-finds or creates the open underlag for that customer, and copies the billable lines
-with provenance (`source_type`, `source_id`):
+## Install
 
-```ts
-events: {
-  consumes: [{ type: 'workorder.completed', schemaVersion: 1 }],
-}
+```sh
+pnpm add @substrat-run/engine-invoicing
 ```
 
-Prices are frozen from the payload at the moment the work order completed. If the
-vertical's price list changes tomorrow, yesterday's underlag doesn't. Consumers are
-delivered at-least-once; find-or-create, the kernel's delivery journal, and a
-**source-id guard** (the source order is the dedup key) keep each handler idempotent, so
-a replay adds nothing rather than billing twice.
+```ts
+import { invoicingModule } from '@substrat-run/engine-invoicing';
 
-An underlag is **one document in one currency**: totals use the currency-aware `addMoney`,
-and a delivery whose lines disagree on currency is rejected at write time and
-dead-lettered rather than producing a total that means nothing.
+host.registerModule(invoicingModule);
+```
 
-## The immutability invariant
+That's the whole integration. Lines arrive by **event**, never by call: the engine consumes
+`workorder.completed` and `commerce.order-placed` with **zero imports** from either producer,
+parsing its own Zod view of each payload. To make a new domain billable, emit an event — you
+never import this engine to do it.
 
-An underlag is `open` or `exported`:
+## Documentation
 
-- While **open**, consumed events append lines.
-- **`invoicing/export`** flips it to `exported` — from then on it is immutable.
-  Nothing appends, nothing edits, exporting again throws.
-- Billable work arriving *after* export opens a **new** underlag. History is never
-  rewritten; late facts become new facts.
+**https://substrat.ahlstrand.es/engines/invoicing/** — the domain model and invariants, the
+operation/permission surface, event contracts and versioning, and how to compose or extend it.
 
-`invoicing.underlag-exported` (**schemaVersion 2**) is the natural hook for an accounting
-connector that turns the frozen basis into a real invoice. Its payload is
-`{ underlagId, number, total: Money }`; v1's `total` was a bare string with no currency.
-v2 **replaces** v1 rather than dual-emitting, because consumer dispatch keys on event type
-alone — emitting both would deliver both to one consumer and risk a double invoice.
-
-## Operations
-
-| Operation | Permission | Does |
-|---|---|---|
-| `invoicing/list` | `invoicing:read` | list underlag, each with computed total |
-| `invoicing/get` | `invoicing:read` | one underlag with all lines and total |
-| `invoicing/export` | `invoicing:export` | flip to `exported` — the point of no return |
-
-Totals use exact decimal arithmetic from
-[`@substrat-run/contracts`](https://npmjs.com/package/@substrat-run/contracts), never floats.
+The docs site is the single source of truth; this README deliberately doesn't restate it.
 
 ## Related packages
 

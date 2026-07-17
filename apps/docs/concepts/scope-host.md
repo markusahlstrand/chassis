@@ -113,5 +113,5 @@ A module can subscribe to event types (declared in its manifest under
 actor**, with at-least-once delivery tracked in a kernel delivery journal — so handlers
 must be **idempotent**. Ordering is guaranteed only within one (scope, module) pair.
 
-The [invoicing engine](/engines/invoicing) is the reference example: it consumes
+The [invoicing engine](/engines/invoicing/) is the reference example: it consumes
 `workorder.completed` and rebuilds its own state from the event payload alone.

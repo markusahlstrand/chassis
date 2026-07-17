@@ -40,6 +40,24 @@ export default withMermaid(defineConfig({
   },
 }));
 
+// The engine doc pattern, in one place: every engine gets the same five pages in
+// the same order, so a reader who learns one learns all. If a new engine can't
+// fill all five, that's a gap in the engine, not in the template.
+// See the "How these pages are organized" section of /engines/.
+function engineSidebar(slug: string, text: string) {
+  return {
+    text,
+    collapsed: true,
+    items: [
+      { text: 'Overview', link: `/engines/${slug}/` },
+      { text: 'Domain model & invariants', link: `/engines/${slug}/model` },
+      { text: 'Operations & permissions', link: `/engines/${slug}/surface` },
+      { text: 'Events', link: `/engines/${slug}/events` },
+      { text: 'Composing & extending', link: `/engines/${slug}/composing` },
+    ],
+  };
+}
+
 function guideSidebar() {
   return [
     {
@@ -70,9 +88,9 @@ function guideSidebar() {
       text: 'Engines',
       items: [
         { text: 'What is an engine?', link: '/engines/' },
-        { text: 'Work orders', link: '/engines/workorder' },
-        { text: 'Invoicing', link: '/engines/invoicing' },
-        { text: 'Protocols', link: '/engines/protocol' },
+        engineSidebar('workorder', 'Work orders'),
+        engineSidebar('invoicing', 'Invoicing'),
+        engineSidebar('protocol', 'Protocols'),
       ],
     },
     {

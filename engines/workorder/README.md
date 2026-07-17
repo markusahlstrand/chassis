@@ -7,36 +7,27 @@ machine, append-only reporting, and a billable snapshot frozen at completion.
 It deliberately knows nothing about pricing (the vertical's job) or invoicing (a
 sibling engine, reached only via events).
 
-**Full documentation: https://substrat.ahlstrand.es/engines/workorder**
+## What it owns
 
-## Invariants the engine owns
-
-- **The state machine cannot skip states.**
-  `planned → in_progress → completed → closed`; invalid transitions throw. No caller
-  can complete a planned order or restart a completed one.
-- **Time and material are append-only.** There is no update or delete operation for
-  reported entries; corrections are compensating entries, never silent edits.
+- **The state machine cannot skip states** — `planned → in_progress → completed → closed`.
+- **Time and material are append-only** — corrections are compensating entries, never edits.
 - **Attribution comes from the ambient principal**, never from the input.
-- **Every mutation emits a fat event** — `workorder.completed` carries the full
-  billable snapshot, so downstream consumers never query back.
+- **Every mutation emits a fat event** — `workorder.completed` carries the full billable
+  snapshot, so consumers never query back.
 
-## The pricing boundary
+## Install
 
-The vertical prices, the engine freezes. `complete` takes priced billable lines —
-each with provenance (`sourceType`, `sourceId`) back to the reported entry — validates
-them with exact decimal arithmetic, sums the total, and freezes the snapshot into the
-`workorder.completed` payload.
-
-## Composing from a vertical
-
-The registered operations (`workorder/create`, `assign`, `start`, `report-time`,
-`report-material`, `complete`, `close`) are default bindings. For custom flows, call
-the exported in-scope functions inside your own operations — same transaction, your
-permission check:
+```sh
+pnpm add @substrat-run/engine-workorder
+```
 
 ```ts
-import { createWorkOrder, PERM } from '@substrat-run/engine-workorder';
+import { createWorkOrder, PERM, workorderModule } from '@substrat-run/engine-workorder';
 
+host.registerModule(workorderModule);
+
+// Note: the engine registers no `workorder/create` operation. Creation is an
+// in-scope function, because the vertical must price and label the order first.
 host.defineOperation('acme/ticket-to-order', async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.create));
   return createWorkOrder(ctx, {
@@ -48,8 +39,12 @@ host.defineOperation('acme/ticket-to-order', async (ctx, input) => {
 });
 ```
 
-Facilities, customers, and articles are opaque `EntityRef`s the vertical owns; the
-engine records quantities, not prices.
+## Documentation
+
+**https://substrat.ahlstrand.es/engines/workorder/** — the domain model and invariants, the
+full operation/permission surface, event contracts, and how to compose or extend it.
+
+The docs site is the single source of truth; this README deliberately doesn't restate it.
 
 ## Related packages
 
