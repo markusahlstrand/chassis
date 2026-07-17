@@ -13,6 +13,10 @@ import {
   type TenantId,
 } from '@substrat-run/contracts';
 import { ulid, type ScopeStub } from '@substrat-run/kernel';
+import {
+  createControlPlaneApi,
+  UNSAFE_devPlatformActorAuth,
+} from '@substrat-run/control-plane-api';
 import { buildDemoHost, seedDemo, type DemoWorld } from './index.js';
 import { buildAuthNode, migrateAuth } from './auth-node.js';
 import { mountApi } from './routes.js';
@@ -42,6 +46,14 @@ mkdirSync(dataDir, { recursive: true });
 // Override without editing: PORT=… WEB_PORT=… pnpm fsm-demo dev
 const port = Number(process.env.PORT ?? 8871);
 const webPort = Number(process.env.WEB_PORT ?? 5271);
+// The shared control plane rides the SAME SqliteScopeHost on its own port (the
+// console's dev proxy default). One process, one host, one SQLite dir: the
+// directory the console reads and acts on IS the directory this vertical's
+// getScope gates against, so a suspend in the console fails this vertical's next
+// operation closed — the whole flow, no Cloudflare, no second store. In
+// production these are separate deployments reaching one durable directory; the
+// co-location here is a local-dev convenience, not the topology.
+const cpPort = Number(process.env.CP_PORT ?? 8788);
 // The fsm app's Vite dev origin — the browser calls /api/auth/* through its proxy
 // (see app/vite.config.ts, which reads the same two vars), so Better Auth must
 // trust it as an origin or login fails with "Invalid origin" / cookies won't stick.
@@ -149,5 +161,42 @@ async function stub(c: Context): Promise<ScopeStub> {
 mountApi(app, stub);
 
 serve({ fetch: app.fetch, port });
-console.log(`FSM demo API on http://localhost:${port} — data in ${dataDir}`);
-console.log(`  auth adapters: ${adapters.map((a) => a.id).join(', ')}`);
+
+// The shared control plane over the same `host`. UNSAFE dev-actor auth is the
+// only posture a local stub may take (control-plane.md §6); this listener binds
+// localhost only. Any valid ULID is accepted as the platform actor — the console
+// defaults to CONSOLE_ACTOR via VITE_DEV_ACTOR, so it authenticates with no
+// copy-paste.
+const controlPlane = createControlPlaneApi({
+  host,
+  authenticate: UNSAFE_devPlatformActorAuth(),
+});
+serve({ fetch: controlPlane.fetch, port: cpPort, hostname: '127.0.0.1' });
+
+// One consolidated banner instead of scattered log lines, so `pnpm dev` ends on a
+// clear "open this" pointer rather than interleaved startup noise. The console and
+// app URLs are only shown under the root stack (SUBSTRAT_STACK=1) — running this
+// server alone doesn't start those Vite processes, and a banner that named URLs
+// nothing is serving would be a lie. The console dev port is a fixed convention
+// (apps/console/vite.config.ts defaults WEB_PORT to 5272).
+const inStack = process.env.SUBSTRAT_STACK === '1';
+const consolePort = Number(process.env.CONSOLE_PORT ?? 5272);
+const lines = [
+  '',
+  `  substrat · ${inStack ? 'local stack' : 'ServiceCo API'} — one process, one SQLite dir`,
+  '  ' + '─'.repeat(52),
+  ...(inStack
+    ? [
+        `    ▶ Console (open this)   http://localhost:${consolePort}`,
+        `    ▶ Portal — ServiceCo    http://localhost:${webPort}`,
+        '',
+      ]
+    : []),
+  `      vertical API          http://localhost:${port}`,
+  `      control plane API     http://localhost:${cpPort}`,
+  '  ' + '─'.repeat(52),
+  `    data   ${dataDir}`,
+  `    auth   ${adapters.map((a) => a.id).join(', ')}`,
+  '',
+];
+console.log(lines.join('\n'));

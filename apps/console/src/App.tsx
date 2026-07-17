@@ -12,8 +12,10 @@ import { TenantDetail } from './views/TenantDetail';
 import { Tenants } from './views/Tenants';
 
 /**
- * The dev actor. Read from a query param or localStorage so the console can be
- * pointed at whatever the local API printed on boot.
+ * The dev actor. Read from a query param, localStorage, or a build-time default
+ * (`VITE_DEV_ACTOR`, set by the root `pnpm dev` stack) so the console can be
+ * pointed at whatever the local API printed on boot — or just work out of the
+ * box against the shared-host dev stack with no copy-paste.
  *
  * This is the stub end of §6's identity seam. It is not authentication and is
  * not pretending to be: the API is what refuses an unknown actor, and real staff
@@ -24,7 +26,8 @@ function useDevActor(): [string, (v: string) => void] {
   const [actor, setActor] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('actor');
     if (fromUrl) localStorage.setItem('substrat.actor', fromUrl);
-    return fromUrl ?? localStorage.getItem('substrat.actor') ?? '';
+    const envDefault = import.meta.env.VITE_DEV_ACTOR as string | undefined;
+    return fromUrl ?? localStorage.getItem('substrat.actor') ?? envDefault ?? '';
   });
   return [
     actor,
@@ -41,10 +44,35 @@ interface Toast {
   status: 'success' | 'danger';
 }
 
+const VIEWS: ViewKey[] = ['tenants', 'scopes', 'admin-log', 'permissions'];
+
+/**
+ * Navigation lives in the URL — which view, and any drilled-into tenant — so a
+ * refresh or a shared link lands where you were, not back on the start page. The
+ * `actor` param is left untouched (useDevActor owns it). Only top-level nav is
+ * encoded; per-view state (a selected scope, a filter tab) is not, yet.
+ */
+function readNav(): { view: ViewKey; tenant?: TenantId } {
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get('view');
+  const view = v && (VIEWS as string[]).includes(v) ? (v as ViewKey) : 'tenants';
+  return { view, tenant: (p.get('tenant') as TenantId | null) ?? undefined };
+}
+
+function writeNav(view: ViewKey, tenant?: TenantId): void {
+  const p = new URLSearchParams(window.location.search);
+  p.set('view', view);
+  if (tenant) p.set('tenant', tenant);
+  else p.delete('tenant');
+  // replaceState, not push: a refresh should restore state without every nav
+  // click stacking a history entry. Back/forward still works via popstate below.
+  window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`);
+}
+
 export function App() {
   const [actor, setActor] = useDevActor();
-  const [view, setView] = useState<ViewKey>('tenants');
-  const [openTenant, setOpenTenant] = useState<TenantId>();
+  const [view, setView] = useState<ViewKey>(() => readNav().view);
+  const [openTenant, setOpenTenant] = useState<TenantId | undefined>(() => readNav().tenant);
   const [dark, setDark] = useState(false);
   const [toast, setToast] = useState<Toast>();
   const [error, setError] = useState<string>();
@@ -58,6 +86,22 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset['theme'] = dark ? 'dark' : 'light';
   }, [dark]);
+
+  // Reflect nav into the URL so a refresh restores it.
+  useEffect(() => {
+    writeNav(view, openTenant);
+  }, [view, openTenant]);
+
+  // Honour browser back/forward.
+  useEffect(() => {
+    const onPop = () => {
+      const n = readNav();
+      setView(n.view);
+      setOpenTenant(n.tenant);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;

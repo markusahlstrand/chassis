@@ -69,6 +69,7 @@ function guideSidebar() {
         { text: 'Why runtime enforcement?', link: '/guide/why-substrat' },
         { text: 'Architecture', link: '/guide/architecture' },
         { text: 'Getting started', link: '/guide/getting-started' },
+        { text: 'Running locally', link: '/guide/running-locally' },
         { text: 'Building for AI agents', link: '/guide/ai-agents' },
       ],
     },
