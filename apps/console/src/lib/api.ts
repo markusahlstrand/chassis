@@ -1,0 +1,124 @@
+import type {
+  AdminAction,
+  AdminLogEntry,
+  Scope,
+  ScopeId,
+  ScopeStatus,
+  Tenant,
+  TenantId,
+  TenantStatus,
+} from '@substrat-run/contracts';
+
+/**
+ * Client for the control-plane API (packages/control-plane-api).
+ *
+ * The types come from `@substrat-run/contracts` rather than being restated here:
+ * the console renders the kernel's own vocabulary, so a field the platform
+ * renames should break this build rather than render `undefined` in a table.
+ */
+
+/** Dev only. Real staff auth (SSO/MFA) gates exposing the console — §6. */
+const DEV_ACTOR_HEADER = 'x-platform-actor';
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function query(params: Record<string, string | string[] | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined) continue;
+    // Repeatable params (status, action) — the API reads them with c.req.queries().
+    if (Array.isArray(v)) for (const one of v) q.append(k, one);
+    else q.append(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+export interface AdminLogPage {
+  entries: AdminLogEntry[];
+  nextCursor: string | null;
+}
+
+export interface AuditLogQuery {
+  tenantId?: TenantId;
+  scopeId?: ScopeId;
+  actor?: string;
+  action?: AdminAction[];
+  since?: string;
+  until?: string;
+  limit?: number;
+  cursor?: string;
+  order?: 'asc' | 'desc';
+}
+
+export function createApi(actor: string, baseUrl = '/api') {
+  async function call<T>(path: string, init?: RequestInit): Promise<T> {
+    const res = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        [DEV_ACTOR_HEADER]: actor,
+        'content-type': 'application/json',
+        ...init?.headers,
+      },
+    });
+    if (!res.ok) {
+      // The API answers errors as { error }; a proxy or crash may not, so fall
+      // back to the status rather than throwing while handling a throw.
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new ApiError(res.status, body?.error ?? `${res.status} ${res.statusText}`);
+    }
+    return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  }
+
+  const post = <T>(path: string, body?: unknown) =>
+    call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+
+  return {
+    listTenants: () => call<Tenant[]>('/tenants'),
+    getTenant: (id: TenantId) => call<Tenant>(`/tenants/${id}`),
+    createTenant: (input: { id: TenantId; slug: string; name: string }) =>
+      post<Tenant>('/tenants', input),
+    setTenantStatus: (id: TenantId, status: TenantStatus) =>
+      call<Tenant>(`/tenants/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+
+    listEntitlements: (id: TenantId) => call<string[]>(`/tenants/${id}/entitlements`),
+    grantEntitlement: (id: TenantId, key: string) =>
+      call<string[]>(`/tenants/${id}/entitlements/${key}`, { method: 'PUT' }),
+    revokeEntitlement: (id: TenantId, key: string) =>
+      call<string[]>(`/tenants/${id}/entitlements/${key}`, { method: 'DELETE' }),
+
+    listScopes: (filter?: { tenantId?: TenantId; status?: ScopeStatus[]; vertical?: string }) =>
+      call<Scope[]>(`/scopes${query({ ...filter })}`),
+    getScope: (tenantId: TenantId, scopeId: ScopeId) =>
+      call<Scope>(`/tenants/${tenantId}/scopes/${scopeId}`),
+    provisionScope: (input: {
+      tenantId: TenantId;
+      scopeId: ScopeId;
+      slug?: string;
+      kind?: string;
+      name?: string;
+      vertical?: string | null;
+      storageShape?: 'A' | 'B';
+      jurisdiction?: 'eu' | null;
+    }) => post<Scope>('/scopes', input),
+
+    // One method per audited transition, mirroring the API and HostAdmin. The
+    // console renders only legal transitions; the graph is enforced below.
+    suspendScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/suspend`),
+    unsuspendScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/unsuspend`),
+    archiveScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/archive`),
+    unarchiveScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/unarchive`),
+
+    adminLog: (q: AuditLogQuery = {}) => call<AdminLogPage>(`/admin-log${query({ ...q })}`),
+  };
+}
+
+export type Api = ReturnType<typeof createApi>;

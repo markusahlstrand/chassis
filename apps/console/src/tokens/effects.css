@@ -1,0 +1,19 @@
+/* Substrat elevation, motion & focus tokens */
+:root {
+  --shadow-xs:0 1px 2px rgba(16,20,40,0.05);
+  --shadow-sm:0 1px 2px rgba(16,20,40,0.06),0 1px 4px rgba(16,20,40,0.05);
+  --shadow-md:0 2px 4px rgba(16,20,40,0.05),0 4px 12px rgba(16,20,40,0.08);
+  --shadow-lg:0 4px 8px rgba(16,20,40,0.06),0 12px 32px rgba(16,20,40,0.12);
+  --shadow-popover:0 0 0 1px rgba(16,20,40,0.05),0 4px 8px rgba(16,20,40,0.06),0 12px 32px rgba(16,20,40,0.12);
+
+  --ease-out:cubic-bezier(0.16,1,0.3,1);
+  --ease-in-out:cubic-bezier(0.65,0,0.35,1);
+  --duration-fast:120ms; --duration-base:180ms; --duration-slow:280ms;
+}
+[data-theme="dark"] {
+  --shadow-xs:0 1px 2px rgba(0,0,0,0.3);
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.35),0 1px 4px rgba(0,0,0,0.3);
+  --shadow-md:0 2px 4px rgba(0,0,0,0.35),0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg:0 4px 8px rgba(0,0,0,0.4),0 12px 32px rgba(0,0,0,0.5);
+  --shadow-popover:0 0 0 1px rgba(255,255,255,0.06),0 4px 8px rgba(0,0,0,0.4),0 12px 32px rgba(0,0,0,0.5);
+}

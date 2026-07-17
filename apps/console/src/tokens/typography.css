@@ -1,0 +1,26 @@
+/* Substrat typography tokens */
+:root {
+  --font-sans:"Geist",-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"Geist Mono",ui-monospace,"SF Mono",monospace;
+
+  --text-xs:11px;   --lh-xs:16px;
+  --text-sm:12.5px; --lh-sm:18px;
+  --text-base:14px; --lh-base:21px;
+  --text-md:16px;   --lh-md:24px;
+  --text-lg:18px;   --lh-lg:26px;
+  --text-xl:22px;   --lh-xl:29px;
+  --text-2xl:28px;  --lh-2xl:34px;
+  --text-3xl:38px;  --lh-3xl:44px;
+  --text-4xl:52px;  --lh-4xl:56px;
+
+  --weight-regular:400; --weight-medium:500; --weight-semibold:600; --weight-bold:700;
+  --tracking-tight:-0.02em; --tracking-display:-0.03em; --tracking-caps:0.06em;
+}
+body {
+  margin:0; font-family:var(--font-sans); font-size:var(--text-base); line-height:var(--lh-base);
+  color:var(--text-primary); background:var(--surface-page);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+a { color:var(--text-link); text-decoration:none; }
+a:hover { color:var(--text-link-hover); text-decoration:underline; text-underline-offset:2px; }
+code, pre { font-family:var(--font-mono); }

@@ -1,0 +1,226 @@
+import { useState } from 'react';
+import type { Scope, Tenant, TenantId } from '@substrat-run/contracts';
+import { Badge, Button, Card, Dialog, Input, Select, Table, Tag } from '../components';
+import type { TableColumn } from '../components';
+import { effectiveStatus, statusLabel, statusTone, tenantTone } from '../lib/fleet';
+import type { Api } from '../lib/api';
+
+/**
+ * The console-maintained SKU list. The platform has NO entitlement-key catalogue
+ * — `operationEntitlement` is a private in-memory map on the host, built from
+ * manifests at registration. So this list is the console's own guess, and the UI
+ * says so rather than implying the platform validated it. Granting an unknown key
+ * silently does nothing useful; that is worth not hiding.
+ */
+const KNOWN_SKUS = ['workorder', 'invoicing', 'protocol', 'shop'];
+
+export interface TenantDetailProps {
+  api: Api;
+  tenant: Tenant;
+  scopes: Scope[];
+  entitlements: string[];
+  onBack: () => void;
+  onChanged: () => void;
+  onToast: (title: string, detail?: string, status?: 'success' | 'danger') => void;
+}
+
+export function TenantDetail({ api, tenant, scopes, entitlements, onBack, onChanged, onToast }: TenantDetailProps) {
+  const [confirmSuspend, setConfirmSuspend] = useState(false);
+  const [armed, setArmed] = useState('');
+  const [granting, setGranting] = useState(false);
+  const [sku, setSku] = useState(KNOWN_SKUS[0]!);
+
+  const active = tenant.status === 'active';
+
+  async function run(fn: () => Promise<unknown>, title: string, detail?: string) {
+    try {
+      await fn();
+      onChanged();
+      onToast(title, detail);
+    } catch (e) {
+      onToast('Refused', (e as Error).message, 'danger');
+    }
+  }
+
+  const columns: TableColumn<Scope>[] = [
+    { header: 'Scope', render: (s) => s.name },
+    { header: 'Slug', render: (s) => s.slug, mono: true, muted: true },
+    {
+      header: 'Vertical',
+      render: (s) => (s.vertical ? <Tag mono>{s.vertical}</Tag> : <span style={{ color: 'var(--text-placeholder)' }}>—</span>),
+    },
+    { header: 'Kind', render: (s) => <Tag mono>{s.kind}</Tag> },
+    {
+      header: 'Status',
+      align: 'right',
+      render: (s) => {
+        const eff = effectiveStatus(s, tenant);
+        return <Badge status={statusTone(eff)}>{statusLabel(eff)}</Badge>;
+      },
+    },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h1 style={{ margin: 0, fontSize: 22, lineHeight: '29px', fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
+              {tenant.name}
+            </h1>
+            <Badge status={tenantTone(tenant.status)}>{tenant.status}</Badge>
+          </div>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            {tenant.slug} · created {tenant.createdAt.slice(0, 10)}
+          </p>
+        </div>
+        <Button variant="secondary" onClick={onBack}>
+          All tenants
+        </Button>
+        {active ? (
+          <Button variant="danger" onClick={() => setConfirmSuspend(true)}>
+            Suspend tenant
+          </Button>
+        ) : (
+          <Button onClick={() => run(() => api.setTenantStatus(tenant.id, 'active'), 'Tenant unsuspended', tenant.slug)}>
+            Unsuspend tenant
+          </Button>
+        )}
+      </div>
+
+      <Card
+        title="Scopes in this tenant"
+        description="The fleet directory is the canonical list — this is the subset under this tenant."
+        padding={0}
+      >
+        <Table columns={columns} rows={scopes} emptyText="No scopes provisioned yet." />
+      </Card>
+
+      <Card
+        title="Entitlements"
+        description="Per-tenant SKU keys. A module whose key isn't held doesn't register — its operations simply don't resolve."
+        actions={<Button variant="secondary" onClick={() => setGranting(true)}>Grant key</Button>}
+        footer="The platform has no key catalogue — this list is maintained by the console."
+      >
+        {entitlements.length === 0 ? (
+          <span style={{ fontSize: 13, color: 'var(--text-placeholder)' }}>No keys held — no billed module loads for this tenant.</span>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {entitlements.map((k) => (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Tag mono>{k}</Tag>
+                <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)', flex: 1 }}>held</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => run(() => api.revokeEntitlement(tenant.id, k), 'Entitlement revoked', `${k} · operations stop resolving`)}
+                >
+                  Revoke
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* The blast-radius confirmation. Suspending a tenant is a one-click outage
+          for a paying customer (§7), and the radius is exactly the list below —
+          every scope fails closed the moment this confirms.
+
+          DEVIATION FROM THE DESIGN, deliberately: the handoff specs a four-eyes
+          flow here — the button reads "Request suspension" and toasts "awaiting
+          second-administrator approval". There is no pending-approval store
+          anywhere in the platform, so that button would suspend the tenant
+          IMMEDIATELY while telling the operator it had merely queued a request.
+          A console that misreports what it just did to a paying customer's fleet
+          is worse than one without the feature. The type-to-arm gate below is
+          real friction and is kept; four-eyes lands when it has a backing store.
+          (Kernel open question 14 — the action list was supposed to settle it,
+          and the action list is now real.) */}
+      <Dialog
+        open={confirmSuspend}
+        title={`Suspend tenant ${tenant.slug}?`}
+        danger
+        confirmLabel="Suspend tenant"
+        width={520}
+        onConfirm={
+          armed === tenant.slug
+            ? () => {
+                setConfirmSuspend(false);
+                setArmed('');
+                void run(
+                  () => api.setTenantStatus(tenant.id, 'suspended'),
+                  'Tenant suspended',
+                  `${scopes.length} scope${scopes.length === 1 ? '' : 's'} now fail closed`,
+                );
+              }
+            : undefined
+        }
+        onCancel={() => {
+          setConfirmSuspend(false);
+          setArmed('');
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: '19px' }}>
+            This is a tenant-wide outage. Every scope below <strong>fails closed</strong> the moment you confirm —
+            operations rejected, reads refused.
+          </p>
+          <div
+            style={{
+              background: 'var(--status-danger-bg)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 8,
+              padding: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              maxHeight: 180,
+              overflow: 'auto',
+            }}
+          >
+            {scopes.map((s) => (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', flex: 1 }}>
+                  {tenant.slug}/{s.slug}
+                </span>
+                {s.vertical && <Tag mono>{s.vertical}</Tag>}
+                <Badge status={statusTone(effectiveStatus(s, tenant))}>{statusLabel(effectiveStatus(s, tenant))}</Badge>
+                <span style={{ color: 'var(--status-danger-fg)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                  → fails closed
+                </span>
+              </div>
+            ))}
+            {scopes.length === 0 && (
+              <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>No scopes — nothing goes dark.</span>
+            )}
+          </div>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            {scopes.length} scope{scopes.length === 1 ? '' : 's'} affected · a paying customer goes dark.
+          </span>
+          <Input
+            label="Type the tenant slug to arm this action"
+            mono
+            placeholder={tenant.slug}
+            value={armed}
+            onChange={(e) => setArmed(e.target.value)}
+          />
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={granting}
+        title="Grant entitlement"
+        description="Idempotent and audited. Granting a held key changes nothing."
+        confirmLabel="Grant"
+        onConfirm={() => {
+          setGranting(false);
+          void run(() => api.grantEntitlement(tenant.id, sku), 'Entitlement granted', sku);
+        }}
+        onCancel={() => setGranting(false)}
+      >
+        <Select label="SKU key" options={KNOWN_SKUS} value={sku} onChange={(e) => setSku(e.target.value)} />
+      </Dialog>
+    </div>
+  );
+}
