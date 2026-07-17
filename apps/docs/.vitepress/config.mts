@@ -30,6 +30,8 @@ export default withMermaid(defineConfig({
 
     outline: { level: [2, 3] },
 
+    socialLinks: [{ icon: 'github', link: 'https://github.com/substrat-run/substrat' }],
+
     search: {
       provider: 'local',
     },

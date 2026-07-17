@@ -1,0 +1,137 @@
+/* The bridge: Substrat design tokens -> VitePress's own --vp-* variables.
+ *
+ * VitePress's default theme drives nearly all of its color and type from --vp-*
+ * custom properties, so remapping them here restyles every built-in surface —
+ * nav, sidebar, outline, prose, code blocks, prev/next — without forking a
+ * single component. Anything the design asks for that has no --vp-* equivalent
+ * lives further down under "Design deltas".
+ *
+ * Rule of thumb when editing: reach for a token (--brand-600, --text-secondary),
+ * never a raw hex. The tokens in ../tokens are the source of truth and are
+ * meant to stay drop-in replaceable when the design ships a new bundle.
+ */
+
+:root {
+  /* Type */
+  --vp-font-family-base: var(--font-sans);
+  --vp-font-family-mono: var(--font-mono);
+
+  /* Brand ramp — VitePress reads 1..3 for text/solid/hover and -soft for washes */
+  --vp-c-brand-1: var(--brand-600);
+  --vp-c-brand-2: var(--brand-700);
+  --vp-c-brand-3: var(--brand-800);
+  --vp-c-brand-soft: var(--surface-brand-subtle);
+
+  /* Backdrops */
+  --vp-c-bg: var(--surface-card);
+  --vp-c-bg-alt: var(--surface-page);
+  --vp-c-bg-elv: var(--surface-raised);
+  --vp-c-bg-soft: var(--surface-inset);
+
+  /* Text */
+  --vp-c-text-1: var(--text-primary);
+  --vp-c-text-2: var(--text-secondary);
+  --vp-c-text-3: var(--text-tertiary);
+
+  /* Dividers. VitePress distinguishes a hard border from a hairline divider; the
+     design collapses both onto its two border tokens. */
+  --vp-c-border: var(--border-default);
+  --vp-c-divider: var(--border-subtle);
+  --vp-c-gutter: var(--border-subtle);
+
+  /* Semantic accents, mapped onto the design's status scales */
+  --vp-c-tip-1: var(--status-info-fg);
+  --vp-c-tip-soft: var(--status-info-bg);
+  --vp-c-warning-1: var(--status-warning-fg);
+  --vp-c-warning-soft: var(--status-warning-bg);
+  --vp-c-danger-1: var(--status-danger-fg);
+  --vp-c-danger-soft: var(--status-danger-bg);
+
+  /* Buttons */
+  --vp-button-brand-bg: var(--action-primary-bg);
+  --vp-button-brand-hover-bg: var(--action-primary-bg-hover);
+  --vp-button-brand-active-bg: var(--action-primary-bg-hover);
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-text: var(--action-primary-text);
+  --vp-button-brand-hover-text: var(--action-primary-text);
+  --vp-button-alt-bg: var(--surface-card);
+  --vp-button-alt-hover-bg: var(--surface-hover);
+  --vp-button-alt-border: var(--border-default);
+  --vp-button-alt-hover-border: var(--border-strong);
+  --vp-button-alt-text: var(--text-primary);
+  --vp-button-alt-hover-text: var(--text-primary);
+
+  /* Chrome */
+  --vp-nav-height: 64px;
+  --vp-layout-max-width: 1440px;
+  --vp-sidebar-width: var(--sidebar-w);
+
+  /* Motion — the handoff pins 120-180ms on this curve */
+  --vp-t-color: var(--duration-fast) var(--ease-out);
+}
+
+/* Code blocks. VitePress ships its own Shiki palette; only the frame is ours,
+   so token colors inside a block stay legible in both themes. */
+:root {
+  --vp-code-block-bg: var(--surface-inset);
+  --vp-custom-block-tip-bg: var(--status-info-bg);
+  --vp-custom-block-tip-text: var(--text-primary);
+}
+
+/* ---- Design deltas: things with no --vp-* equivalent ---- */
+
+/* The nav bar is a translucent blur in the design. VitePress hardcodes an opaque
+   background, and the handoff's own `rgba(255,255,255,0.8)` is light-only — so
+   derive it from the surface token instead and it follows the theme. */
+.VPNav {
+  background-color: transparent;
+}
+.VPNavBar:not(.has-sidebar):not(.top) {
+  background-color: transparent;
+}
+.VPNavBar {
+  backdrop-filter: blur(8px);
+  background-color: color-mix(in srgb, var(--surface-card) 80%, transparent);
+}
+.VPNavBar.has-sidebar .curtain {
+  display: none;
+}
+
+/* Sentence case everywhere; the default theme shouts a few labels. */
+.VPSidebarItem.level-0 > .item > .text,
+.VPDocOutlineItem > .root > .outline-title,
+.VPDocAsideOutline .outline-title {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-tertiary);
+}
+
+/* Active sidebar item reads as a brand-tinted pill (DocsPage.html) rather than
+   the default bare brand text. */
+.VPSidebarItem.is-active > .item > .link > .text {
+  color: var(--text-brand);
+  font-weight: var(--weight-medium);
+}
+
+/* Section headings sit under a hairline rule in the design refs. */
+.vp-doc h2 {
+  border-top: 1px solid var(--border-subtle);
+  letter-spacing: var(--tracking-tight);
+}
+
+/* Mono for machine identity: package names in the reference sidebar. */
+.VPSidebarItem .text code {
+  font-size: var(--text-sm);
+}
+
+/* Prev/next cards hover to the brand border, per the handoff's note that hover
+   states were stripped from the static refs. */
+.pager-link {
+  transition: border-color var(--duration-base) var(--ease-out);
+}
+.pager-link:hover {
+  border-color: var(--border-brand);
+}
