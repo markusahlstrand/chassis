@@ -17,11 +17,20 @@ import type { Api } from '../lib/api';
  * - **Needs review** works, and works with no new plumbing: a role redefinition
  *   or a grant IS an admin-log row, and `before`/`after` on a `defineRole` row is
  *   literally the permission diff. This is the design's strongest idea.
- * - **Operator roles** and **Capability grants** need `listRoles` / `listGrants`.
- *   Neither exists on `HostAdmin` — there is no way to enumerate roles, grants,
- *   or principals at all. They are rendered as stated gaps rather than mocked:
- *   a permission surface that shows fabricated grants is worse than one that
+ * - **Roles** and **Capability grants** need `listRoles` / `listGrants`. Neither
+ *   exists on `HostAdmin` — there is no way to enumerate roles, grants, or
+ *   principals at all. They are rendered as stated gaps rather than mocked: a
+ *   permission surface that shows fabricated grants is worse than one that
  *   admits it cannot see them.
+ *
+ * The two gaps are NOT the same size, and the copy below says so. Roles are
+ * directory-local (`_substrat_roles` sits beside the tenant registry), so
+ * `listRoles` is a read away. Grants are not: a scope-level grant is a tuple in
+ * the SCOPE's own database, which the control plane must never reach into (§7)
+ * — the only sanctioned path is §5.4's admin-query RPC, which does not exist.
+ * That is why the design's "per scope, operator picks one first" is the right
+ * call for a reason beyond the ergonomics it cites: it is what the architecture
+ * forces anyway.
  */
 
 /** The three writes that create permission state at runtime. */
@@ -67,7 +76,10 @@ export function Permissions({ api, tenants }: PermissionsProps) {
         onChange={setTab}
         tabs={[
           { value: 'review', label: 'Needs review', count: pending.length },
-          { value: 'roles', label: 'Operator roles' },
+          // One Roles tab with a source filter, not a structurally separate
+          // "operator roles" — a reviewer wants code-declared roles next to the
+          // operator-made ones, not a tab that hides them.
+          { value: 'roles', label: 'Roles' },
           { value: 'grants', label: 'Capability grants' },
         ]}
       />
@@ -114,21 +126,21 @@ export function Permissions({ api, tenants }: PermissionsProps) {
           tables; the platform cannot enumerate roles or grants at all, so the
           honest thing is to name the missing read path. */}
       {tab === 'roles' && (
-        <Card>
+        <Card footer="Roles live in the directory beside the tenant registry — this one is a read away, not an architecture change.">
           <EmptyState
             icon={<SubIcon d={SubIcons.cog} size={20} />}
-            title="Operator roles cannot be listed yet"
-            description="Needs listRoles on HostAdmin — roles are writable but not enumerable. Distinguishing an operator-created role from a code-declared one also needs a new RoleDefinition.source value; today it is moduleId | 'vertical', and both mean 'declared in code'."
+            title="Roles cannot be listed yet"
+            description="Needs listRoles on HostAdmin — roles are writable but not enumerable. The source filter will read RoleDefinition.source, which today is moduleId | 'vertical': both mean 'declared in code', so an operator-created role is indistinguishable until the kernel adds an 'operator' value additively."
           />
         </Card>
       )}
 
       {tab === 'grants' && (
-        <Card>
+        <Card footer="Enumeration is per scope by design — and by necessity: grants are tuples in each scope's own database, which the control plane reaches only through the admin-query RPC (§5.4), not by reading scope tables.">
           <EmptyState
             icon={<SubIcon d={SubIcons.cog} size={20} />}
             title="Capability grants cannot be listed yet"
-            description="Needs listGrants on HostAdmin. Every permission write is one-way today — there is no revoke and no enumeration, so this view would be the only witness to grants it cannot read."
+            description="Needs the §5.4 admin-query RPC plus listGrants. Two things to know before this ships: grantedBy is never persisted — the tuple stores only (subject, relation, object, expires_at), so it survives in the admin log alone; and every permission write is one-way today — no revoke, no enumeration — so this view would be the only witness to grants it cannot read."
           />
         </Card>
       )}
