@@ -1,8 +1,10 @@
 # The first end-to-end flow — deploy and manage an external vertical
 
-**Status:** proposed, not scheduled. A milestone plan, not a decision — it commits to a
-*walking skeleton*, not to the scaling shape. Supersedes nothing; the choices it defers
-(facets vs N-deployments, git-hook vs CLI trigger, custom hostnames) stay open.
+**Status:** in progress. A milestone plan, not a decision — it commits to a *walking
+skeleton*, not to the scaling shape. Slices 1 and 2 are done and the slice-4 connect seam
+is built and prototyped locally (see §4 Progress); slice 3 and the Cloudflare-deployed
+join remain. Supersedes nothing; the choices it defers (facets vs N-deployments, git-hook
+vs CLI trigger, custom hostnames) stay open.
 **What this is:** the thinnest sequence of work that lets someone build a vertical in a
 repo *outside* this monorepo, deploy it, watch it register itself with a shared control
 plane, and manage it — suspend, entitle, review permissions — from the console. It is
@@ -74,6 +76,20 @@ control plane that both sides share.**
 
 Four slices, ordered so each is independently mergeable and leaves the tree green. Slice 1
 is the foundation; 2 and 3 can proceed in parallel once it lands; 4 is the join.
+
+**Progress:**
+
+- **Slice 1 — done.** `@substrat-run/control-plane-api` is published; `apps/control-plane`
+  is the deployable worker over `ControlPlaneDO`.
+- **Slice 2 — done.** `examples/external-vertical` builds a vertical from published
+  packages (disconnected from the workspace), verified as a clean external install.
+- **Slice 4 seam — built and prototyped locally.** `ControlPlaneClient` (the vertical side
+  of the connect seam) and the demo's connected mode land the registration + remote-gating
+  semantics; see the note under Slice 4. The Cloudflare-deployed version and Slice 3 (real
+  console auth) remain.
+- **Bonus (not a slice): the local stack.** `pnpm dev` co-locates everything on one SQLite
+  dir for a fast loop; `pnpm dev:connected` runs the *faithful* topology — a separate
+  control plane, a connected vertical, and the console — locally.
 
 ### Slice 1 — A deployable, shared control plane
 
@@ -149,6 +165,32 @@ happen to share a schema.
 
 **Definition of done:** the §1 sentence passes as an automated test — deploy vertical,
 see scope in console, suspend from console, next vertical operation returns denied.
+
+**What was built (the seam):** `ControlPlaneClient` in `@substrat-run/control-plane-api`
+is the vertical side — it registers (tenant → entitlements → scope) into a separately-run
+control plane over HTTP and exposes `assertScopeActive`, a gate that fails closed exactly
+as the kernel's `validateScopeAccess` does (tenant-level cascade included, not just
+per-scope). The demo's `server.ts` uses it in *connected mode* (`CONTROL_PLANE_URL` set):
+it mirrors its seeded directory into the shared plane and calls the gate before every
+`getScope`. Proven locally across two processes — a `control-plane-api` server, a connected
+vertical, and the console pointed at that plane — where a console suspend fails the
+vertical's next request closed. Covered by an automated test
+([client.test.ts](../../packages/control-plane-api/test/client.test.ts)) that exercises
+register → scope-suspend → tenant-cascade → unreachable, and runnable with
+`pnpm dev:connected`.
+
+**Gap this surfaced — role/grant writes are not on the HTTP surface.** `createControlPlaneApi`
+deliberately exposes tenant/scope lifecycle and entitlements but *not* `defineRole`/
+`assignRole`/`grant` (control-plane.md §4.5 — permission writes are the human checkpoint,
+D-22/D-29). So a connected vertical can register lifecycle but cannot push its permission
+model to the shared plane. The prototype keeps that split: **lifecycle and entitlements are
+remote-authoritative; roles stay local.** Making a vertical's roles reviewable-then-shared
+(the permission-diff pipeline over the wire) is its own decision, not something slice 4
+should have smuggled in through a convenient verb.
+
+**Still remote-only for the deployed case:** the Cloudflare vertical embeds its own
+`ControlPlaneDO` — pointing it at a *remote* control plane instead is the adapter-level
+version of this seam, deferred with Slice 3.
 
 ---
 
