@@ -1,0 +1,544 @@
+<script setup lang="ts">
+// The marketing landing page, ported from the design handoff's React prototype
+// (handoff/website/home-page.jsx). It renders inside VitePress's `layout: page`,
+// so the nav and footer are VitePress's own shared chrome — not rebuilt here.
+//
+// Content is deliberately faithful to the prototype; every factual claim
+// (package status, demo names, the `pnpm create substrat` command) was checked
+// against the repo before porting. Links point at real docs routes or the repo.
+
+const layers = [
+  {
+    key: 'kernel',
+    name: 'Kernel',
+    desc: 'Everything true of every B2B SaaS, nothing true of any particular one: identity, nested tenancy, permissions, events & audit, GDPR machinery. Owns no domain entities.',
+  },
+  {
+    key: 'engine',
+    name: 'Engines',
+    desc: 'Shared domain machinery — work orders, invoicing, protocols — that owns invariants: state machines can’t skip states, exported invoices are immutable, every mutation emits an event.',
+  },
+  {
+    key: 'vertical',
+    name: 'Verticals',
+    desc: 'The actual products — your code. Vocabulary, workflows, screens, pricing. The layer where AI tools do their best work, because mistakes there are cosmetic.',
+  },
+];
+
+const cannots = [
+  [
+    'Reach another tenant’s data',
+    'Data access only exists as capability-scoped operations minted for one (tenant, scope) pair — a mismatch fails closed.',
+  ],
+  [
+    'Skip the audit log',
+    'Events are stamped with tenant, scope, actor, and timestamp below the API surface. Calling code cannot forge or suppress them.',
+  ],
+  [
+    'Emit unclassified PII',
+    'Every event carries a mandatory piiClass; a PII-classed event without a data-subject key fails validation, so GDPR erasure is always possible.',
+  ],
+  [
+    'Bypass the permission model',
+    'Operations run inside the scope’s execution domain; every allow carries the proof path that granted it. The secure default is deny everything.',
+  ],
+];
+
+const demos = [
+  ['ServiceCo', 'Field service', 'vertical', 'A Swedish service & installation firm — work orders, time & material reporting, egenkontroll protocols, fakturaunderlag. Runs on SQLite locally and deployed on Cloudflare from one codebase.'],
+  ['Kallkälla Kaffe', 'E-commerce', 'engine', 'An online coffee roaster — catalog, cart, stock, discounts, orders. Proves the attachment contracts aren’t field-service-shaped.'],
+  ['CykelService', 'Bike shop', 'kernel', 'An agent-scaffolded vertical: the same engines re-vocabularied to a bike workshop, from acceptance run 001.'],
+];
+
+const pkgs = [
+  ['@substrat-run/contracts', 'Zod contract schemas — the source of truth', 'Working'],
+  ['@substrat-run/kernel', 'Scope-host contract + tuple permission checker', 'Working'],
+  ['@substrat-run/adapter-sqlite', 'Pure-SQLite scope host — local dev, CI, self-host', 'Working'],
+  ['@substrat-run/adapter-cloudflare', 'Durable-Object scope host — production', 'Working'],
+  ['@substrat-run/contract-tests', 'The conformance suite both adapters pass unchanged', 'Working'],
+  ['@substrat-run/engine-workorder', 'Work orders, time & material', 'Seed'],
+  ['@substrat-run/engine-invoicing', 'Invoice basis, immutable exports', 'Seed'],
+  ['@substrat-run/engine-protocol', 'Checklists & protocols', 'Seed'],
+];
+
+const repo = 'https://github.com/substrat-run/substrat';
+</script>
+
+<template>
+  <div class="mkt">
+    <!-- Hero -->
+    <section class="bleed hero">
+      <div class="wrap hero-inner">
+        <span class="badge badge-info">
+          <span class="dot" />Pre-release 0.x — working end to end on two adapters
+        </span>
+        <h1>The hard parts, hosted.</h1>
+        <p class="lede">
+          AI made building vertical B2B software fast — except multi-tenancy,
+          identity, permissions, audit, and GDPR. Substrat owns those parts and
+          enforces them at runtime, so small teams can build production-grade
+          SaaS on top without the speed being fatal.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/guide/getting-started">Get started</a>
+          <a class="btn btn-secondary" href="/guide/why-substrat">Why runtime enforcement</a>
+          <code class="cmd">pnpm create substrat</code>
+        </div>
+      </div>
+    </section>
+
+    <!-- Three layers -->
+    <section class="wrap section">
+      <div class="kicker">The idea in three layers</div>
+      <h2>We build the substrate. You build the verticals.</h2>
+      <div class="grid-3">
+        <div v-for="l in layers" :key="l.key" class="layer-card">
+          <div class="layer-bar" :class="`layer-${l.key}`" />
+          <div class="layer-body">
+            <div class="layer-head">
+              <span class="layer-name">{{ l.name }}</span>
+              <code class="tag">--layer-{{ l.key }}</code>
+            </div>
+            <p class="muted">{{ l.desc }}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Enforced at runtime -->
+    <section class="bleed band">
+      <div class="wrap section">
+        <div class="kicker">Enforced at runtime</div>
+        <h2>Code built on Substrat cannot:</h2>
+        <p class="muted lede-narrow">
+          None of this depends on the discipline of the code above it — which is
+          the point, because increasingly that code is written by an agent.
+        </p>
+        <div class="grid-2">
+          <div v-for="([title, desc]) in cannots" :key="title" class="cannot">
+            <span class="x">✕</span>
+            <div>
+              <div class="cannot-title">{{ title }}</div>
+              <div class="muted sm">{{ desc }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Reference verticals -->
+    <section class="wrap section">
+      <div class="kicker">Reference verticals</div>
+      <h2>The same kernel, three businesses.</h2>
+      <div class="grid-3">
+        <div v-for="([name, kind, layer, desc]) in demos" :key="name" class="demo-card">
+          <div class="demo-head">
+            <span class="swatch" :class="`layer-${layer}`" />
+            <span class="demo-name">{{ name }}</span>
+            <span class="demo-kind">{{ kind }}</span>
+          </div>
+          <p class="muted sm">{{ desc }}</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Current status -->
+    <section class="bleed band">
+      <div class="wrap section">
+        <div class="kicker">Current status</div>
+        <h2>What exists today</h2>
+        <div class="pkg-table">
+          <div v-for="([pkg, desc, status]) in pkgs" :key="pkg" class="pkg-row">
+            <code class="pkg-name">{{ pkg }}</code>
+            <span class="muted sm pkg-desc">{{ desc }}</span>
+            <span class="badge" :class="status === 'Working' ? 'badge-success' : 'badge-neutral'">
+              {{ status.toLowerCase() }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="bleed cta">
+      <div class="wrap cta-inner">
+        <div class="cta-copy">
+          <div class="cta-bars">
+            <span class="cta-bar layer-vertical" />
+            <span class="cta-bar layer-engine" />
+            <span class="cta-bar layer-kernel" />
+          </div>
+          <div class="cta-title">Build the vertical.<br />The substrate holds.</div>
+        </div>
+        <div class="cta-actions">
+          <a class="btn btn-primary" href="/guide/getting-started">Get started</a>
+          <a class="btn btn-ondark" :href="repo">View on GitHub</a>
+        </div>
+      </div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+/* Full-bleed helper: break out of VitePress's centered page container so section
+   backgrounds span edge to edge, while inner .wrap keeps content at 1080. */
+.bleed {
+  width: 100vw;
+  margin-left: 50%;
+  transform: translateX(-50vw);
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+.section {
+  padding: 80px 32px;
+}
+.muted {
+  color: var(--text-secondary);
+}
+.sm {
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+h1 {
+  font-size: var(--text-4xl);
+  line-height: var(--lh-4xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-display);
+  margin: 0;
+  max-width: 640px;
+  border: 0;
+  padding: 0;
+}
+h2 {
+  font-size: var(--text-2xl);
+  line-height: var(--lh-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.kicker {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-brand);
+  font-weight: var(--weight-semibold);
+  margin-bottom: 10px;
+}
+
+/* Hero */
+.hero {
+  border-bottom: 1px solid var(--border-subtle);
+  /* theme-aware wash — the prototype hardcoded --brand-50, light-only */
+  background: linear-gradient(180deg, var(--surface-brand-subtle) 0%, var(--surface-card) 70%);
+}
+.hero-inner {
+  padding: 96px 32px 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+}
+.lede {
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+  color: var(--text-secondary);
+  max-width: 620px;
+  margin: 0;
+}
+.lede-narrow {
+  max-width: 620px;
+  margin-top: 10px;
+}
+.cta-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.cmd {
+  margin-left: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  color: var(--text-secondary);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-lg);
+  padding: 0 18px;
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-medium);
+  font-size: var(--text-base);
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+.btn-primary {
+  background: var(--action-primary-bg);
+  color: var(--action-primary-text);
+  box-shadow: var(--shadow-xs);
+}
+.btn-primary:hover {
+  background: var(--action-primary-bg-hover);
+  text-decoration: none;
+}
+.btn-secondary {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-xs);
+}
+.btn-secondary:hover {
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+.btn-ondark {
+  background: transparent;
+  color: #f2f3f7;
+  border: 1px solid #343a50;
+}
+.btn-ondark:hover {
+  border-color: #4a5170;
+  text-decoration: none;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+}
+.badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-info-dot);
+}
+.badge-info {
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+}
+.badge-success {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
+}
+.badge-neutral {
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-fg);
+}
+
+/* Bands alternate the page surface behind a section */
+.band {
+  background: var(--surface-page);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Layer accents */
+.layer-kernel {
+  background: var(--layer-kernel);
+}
+.layer-engine {
+  background: var(--layer-engine);
+}
+.layer-vertical {
+  background: var(--layer-vertical);
+}
+
+/* Grids */
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 32px;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+/* Three-layer cards */
+.layer-card {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  background: var(--surface-card);
+}
+.layer-bar {
+  height: 4px;
+}
+.layer-body {
+  padding: 20px 20px 22px;
+}
+.layer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.layer-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+}
+
+/* Cannots */
+.cannot {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  display: flex;
+  gap: 12px;
+}
+.x {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--status-danger-fg);
+  font-weight: var(--weight-medium);
+  margin-top: 1px;
+}
+.cannot-title {
+  font-weight: var(--weight-semibold);
+  margin-bottom: 4px;
+}
+
+/* Demo cards */
+.demo-card {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-xs);
+  background: var(--surface-card);
+}
+.demo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.demo-name {
+  font-weight: var(--weight-semibold);
+}
+.demo-kind {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  margin-left: auto;
+}
+
+/* Package table */
+.pkg-table {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  margin-top: 28px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.pkg-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+}
+.pkg-row + .pkg-row {
+  border-top: 1px solid var(--border-subtle);
+}
+.pkg-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  width: 300px;
+  color: var(--text-primary);
+}
+.pkg-desc {
+  flex: 1;
+}
+
+/* CTA */
+.cta {
+  background: var(--gray-950);
+}
+.cta-inner {
+  padding: 72px 32px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.cta-copy {
+  flex: 1;
+}
+.cta-bars {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.cta-bar {
+  width: 22px;
+  height: 5px;
+  border-radius: 3px;
+}
+.cta-title {
+  font-size: var(--text-3xl);
+  line-height: var(--lh-3xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-display);
+  color: #f2f3f7;
+}
+.cta-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .cta-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .pkg-name {
+    width: auto;
+  }
+  .pkg-row {
+    flex-wrap: wrap;
+  }
+}
+</style>
