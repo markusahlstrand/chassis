@@ -7,6 +7,7 @@ import {
   roleDefinition,
   scope as scopeSchema,
   tenant as tenantSchema,
+  tenantRole,
   type AdminAction,
   type AdminLogEntry,
   type CapabilityGrant,
@@ -25,6 +26,7 @@ import {
   type ScopeStatus,
   type Tenant,
   type TenantId,
+  type TenantRole,
   type TenantStatus,
 } from '@substrat-run/contracts';
 import {
@@ -36,11 +38,12 @@ import {
   type OperationHandler,
   type PermissionChecker,
   type ProvisionScopeInput,
+  type RoleFilter,
   type ScopeFilter,
   type ScopeHost,
   type ScopeStub,
 } from '@substrat-run/kernel';
-import type { AuditLogQuery, ScopeRow } from './control-plane-do.js';
+import type { AuditLogQuery, RoleRow, ScopeRow } from './control-plane-do.js';
 
 /**
  * `CloudflareScopeHost` — the coordinator (design doc §5.7). It runs in the
@@ -100,6 +103,7 @@ interface ControlPlaneStub {
     action: string,
   ): Promise<{ status: string; vertical: string | null }>;
   defineRole(tenantId: string, role: RoleDefinition): Promise<RoleDefinition | null>;
+  listRoles(filter: { tenantId?: string; source?: string }): Promise<RoleRow[]>;
   writeTenantTuple(
     tenantId: string,
     subject: string,
@@ -410,6 +414,19 @@ export class CloudflareScopeHost implements ScopeHost {
         const parsed = roleDefinition.parse(role);
         const before = await this.cp.defineRole(tenantId, parsed);
         await this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
+      },
+      listRoles: async (filter?: RoleFilter): Promise<TenantRole[]> => {
+        const rows = await this.cp.listRoles({ tenantId: filter?.tenantId, source: filter?.source });
+        // Parsed, not cast — the same parse the pure adapter does, which is what
+        // makes the shared contract suite mean anything.
+        return rows.map((r) =>
+          tenantRole.parse({
+            tenantId: r.tenant_id,
+            key: r.role_key,
+            permissions: JSON.parse(r.permissions),
+            source: r.source,
+          }),
+        );
       },
       assignRole: async (actor, assignment: RoleAssignment) => {
         const subject = `principal:${assignment.principalId}`;

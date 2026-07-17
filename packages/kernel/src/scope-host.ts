@@ -23,6 +23,7 @@ import type {
   StorageShape,
   Tenant,
   TenantId,
+  TenantRole,
   TenantStatus,
 } from '@substrat-run/contracts';
 
@@ -161,6 +162,20 @@ export interface ModuleRegistration {
  */
 export interface HostAdmin {
   defineRole(actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition): Promise<void>;
+  /**
+   * Every role the directory holds, ordered by (tenantId, key).
+   *
+   * Roles were writable and not enumerable: `defineRole` has existed since the
+   * permission model shipped, and nothing could ask what roles exist. That makes
+   * the console's half of the permission checkpoint unbuildable — CI diffs the
+   * roles declared in CODE, and this is the only way to see what a live
+   * deployment actually holds, which is not the same question.
+   *
+   * Directory-local, unlike grants: `_substrat_roles` sits beside the tenant
+   * registry, so this is a read. A grant is a tuple in the scope's own database
+   * and needs §5.4's admin-query RPC — the two are not the same size of problem.
+   */
+  listRoles(filter?: RoleFilter): Promise<TenantRole[]>;
   assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
   grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
@@ -307,6 +322,20 @@ export interface ProvisionScopeInput {
   vertical?: string | null;
   storageShape?: StorageShape;
   jurisdiction?: Jurisdiction;
+}
+
+/**
+ * Narrow `listRoles` (control-plane.md §4.5 console item 4 — the permission
+ * diff's runtime half).
+ */
+export interface RoleFilter {
+  tenantId?: TenantId;
+  /**
+   * A module id, or 'vertical'. Both mean "declared in code" — see
+   * `roleDefinition.source`. Filtering for operator-created roles is not
+   * possible until something can create one.
+   */
+  source?: string;
 }
 
 /** Narrow `listScopes` (control-plane.md §4.5 console items 1 and 6). */

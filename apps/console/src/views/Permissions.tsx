@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import type { AdminLogEntry, Tenant, TenantId } from '@substrat-run/contracts';
-import { Badge, Button, Card, EmptyState, SubIcon, SubIcons, Tabs } from '../components';
+import { useEffect, useMemo, useState } from 'react';
+import type { AdminLogEntry, Tenant, TenantId, TenantRole } from '@substrat-run/contracts';
+import { Badge, Button, Card, EmptyState, Select, SubIcon, SubIcons, Table, Tabs, Tag } from '../components';
+import type { TableColumn } from '../components';
 import { ActorCell } from '../patterns/ActorCell';
 import { JsonDiff } from '../patterns/JsonDiff';
 import type { Api } from '../lib/api';
@@ -12,25 +13,21 @@ import type { Api } from '../lib/api';
  * CI-diffed. What only exists at runtime — operator-defined roles and
  * per-principal capability grants — is visible nowhere but here.
  *
- * Only ONE of the three tabs the design draws can be built today:
+ * Two of the three tabs are live:
  *
- * - **Needs review** works, and works with no new plumbing: a role redefinition
- *   or a grant IS an admin-log row, and `before`/`after` on a `defineRole` row is
- *   literally the permission diff. This is the design's strongest idea.
- * - **Roles** and **Capability grants** need `listRoles` / `listGrants`. Neither
- *   exists on `HostAdmin` — there is no way to enumerate roles, grants, or
- *   principals at all. They are rendered as stated gaps rather than mocked: a
- *   permission surface that shows fabricated grants is worse than one that
- *   admits it cannot see them.
- *
- * The two gaps are NOT the same size, and the copy below says so. Roles are
- * directory-local (`_substrat_roles` sits beside the tenant registry), so
- * `listRoles` is a read away. Grants are not: a scope-level grant is a tuple in
- * the SCOPE's own database, which the control plane must never reach into (§7)
- * — the only sanctioned path is §5.4's admin-query RPC, which does not exist.
- * That is why the design's "per scope, operator picks one first" is the right
- * call for a reason beyond the ergonomics it cites: it is what the architecture
- * forces anyway.
+ * - **Needs review** needs no plumbing at all: a role redefinition or a grant IS
+ *   an admin-log row, and `before`/`after` on a `defineRole` row is literally the
+ *   permission diff. This is the design's strongest idea.
+ * - **Roles** reads `listRoles`. Roles were writable and not enumerable since the
+ *   permission model shipped — CI diffs what code DECLARES, and this is the only
+ *   way to see what a live deployment HOLDS, which is a different question.
+ * - **Capability grants** is still a stated gap, and not because the work was
+ *   skipped: it is a genuinely bigger problem than roles were. Roles are
+ *   directory-local (`_substrat_roles` sits beside the tenant registry). A grant
+ *   is a tuple in the SCOPE's own database, which the control plane must never
+ *   reach into (§7) — the only sanctioned path is §5.4's admin-query RPC, which
+ *   does not exist. It renders as a gap rather than a mock: a permission surface
+ *   showing fabricated grants is worse than one admitting it cannot see them.
  */
 
 /** The three writes that create permission state at runtime. */
@@ -44,13 +41,20 @@ export interface PermissionsProps {
 export function Permissions({ api, tenants }: PermissionsProps) {
   const [tab, setTab] = useState('review');
   const [rows, setRows] = useState<AdminLogEntry[]>([]);
+  const [roles, setRoles] = useState<TenantRole[]>([]);
+  const [source, setSource] = useState('all');
   const [reviewed, setReviewed] = useState<Record<string, true>>({});
 
   useEffect(() => {
     let live = true;
     void (async () => {
-      const page = await api.adminLog({ order: 'desc', limit: 50, action: [...REVIEWABLE] });
-      if (live) setRows(page.entries);
+      const [page, allRoles] = await Promise.all([
+        api.adminLog({ order: 'desc', limit: 50, action: [...REVIEWABLE] }),
+        api.listRoles(),
+      ]);
+      if (!live) return;
+      setRows(page.entries);
+      setRoles(allRoles);
     })();
     return () => {
       live = false;
@@ -58,6 +62,29 @@ export function Permissions({ api, tenants }: PermissionsProps) {
   }, [api]);
 
   const pending = rows.filter((r) => !reviewed[r.id]);
+  // Filtered client-side: the whole role set is small (one row per tenant per
+  // role key) and already loaded, so a round-trip per filter change would buy
+  // nothing. The API takes `source` for callers that aren't holding the list.
+  const sources = useMemo(() => [...new Set(roles.map((r) => r.source))].sort(), [roles]);
+
+  const roleColumns: TableColumn<TenantRole>[] = [
+    { header: 'Role', render: (r) => <Tag mono>{r.key}</Tag> },
+    { header: 'Tenant', render: (r) => tenants.get(r.tenantId)?.slug ?? r.tenantId, mono: true, muted: true },
+    {
+      header: 'Permissions',
+      render: (r) => (
+        <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+          {r.permissions.map((p) => (
+            <Tag key={p} mono>
+              {p}
+            </Tag>
+          ))}
+        </span>
+      ),
+    },
+    { header: 'Count', render: (r) => r.permissions.length, mono: true, align: 'right', width: 70 },
+    { header: 'Source', render: (r) => r.source, mono: true, muted: true, align: 'right' },
+  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -122,17 +149,30 @@ export function Permissions({ api, tenants }: PermissionsProps) {
         </div>
       )}
 
-      {/* Rendered as gaps, not mocks. The design draws both of these as live
-          tables; the platform cannot enumerate roles or grants at all, so the
-          honest thing is to name the missing read path. */}
       {tab === 'roles' && (
-        <Card footer="Roles live in the directory beside the tenant registry — this one is a read away, not an architecture change.">
-          <EmptyState
-            icon={<SubIcon d={SubIcons.cog} size={20} />}
-            title="Roles cannot be listed yet"
-            description="Needs listRoles on HostAdmin — roles are writable but not enumerable. The source filter will read RoleDefinition.source, which today is moduleId | 'vertical': both mean 'declared in code', so an operator-created role is indistinguishable until the kernel adds an 'operator' value additively."
-          />
-        </Card>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Select
+              options={[
+                { value: 'all', label: 'All sources' },
+                ...sources.map((s) => ({ value: s, label: s })),
+              ]}
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              style={{ width: 260 }}
+            />
+          </div>
+          <Card
+            padding={0}
+            footer="Every role here is declared in code — an engine's manifest or a vertical's constants. There is no source meaning 'an operator created this against a live deployment': nothing can create one yet, so the value would have no producer. It lands with whatever writes it."
+          >
+            <Table
+              columns={roleColumns}
+              rows={roles.filter((r) => source === 'all' || r.source === source)}
+              emptyText="No roles defined."
+            />
+          </Card>
+        </div>
       )}
 
       {tab === 'grants' && (

@@ -41,6 +41,14 @@ interface TenantRow {
   created_at: string;
 }
 
+/** The raw role row; `permissions` is a JSON blob in a TEXT column. */
+export interface RoleRow {
+  tenant_id: string;
+  role_key: string;
+  permissions: string;
+  source: string;
+}
+
 /** The raw directory row; the coordinator maps it through the `scope` contract. */
 export interface ScopeRow {
   scope_id: string;
@@ -470,6 +478,25 @@ export class ControlPlaneDO extends DurableObject {
       String(role.source),
     );
     return before;
+  }
+
+  /** Raw rows; the coordinator parses them through the `tenantRole` contract. */
+  listRoles(filter: { tenantId?: string; source?: string }): RoleRow[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.tenantId) {
+      where.push('tenant_id = ?');
+      params.push(filter.tenantId);
+    }
+    if (filter.source) {
+      where.push('source = ?');
+      params.push(filter.source);
+    }
+    const sql =
+      'SELECT tenant_id, role_key, permissions, source FROM _substrat_roles' +
+      (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+      ' ORDER BY tenant_id, role_key';
+    return this.sql.exec(sql, ...params).toArray() as unknown as RoleRow[];
   }
 
   getRole(tenantId: string, key: string): RoleDefinition | undefined {

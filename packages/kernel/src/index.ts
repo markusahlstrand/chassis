@@ -7,6 +7,7 @@ export type {
   OperationContext,
   OperationHandler,
   ProvisionScopeInput,
+  RoleFilter,
   ScopedSql,
   ScopeFilter,
   ScopeHost,

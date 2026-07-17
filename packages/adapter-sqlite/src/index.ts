@@ -16,6 +16,7 @@ import {
   roleDefinition,
   scope as scopeSchema,
   tenant as tenantSchema,
+  tenantRole,
   type AdminAction,
   type AdminLogEntry,
   type CapabilityGrant,
@@ -36,6 +37,7 @@ import {
   type ScopeStatus,
   type Tenant,
   type TenantId,
+  type TenantRole,
   type TenantStatus,
 } from '@substrat-run/contracts';
 import {
@@ -50,6 +52,7 @@ import {
   type OperationHandler,
   type PermissionChecker,
   type ProvisionScopeInput,
+  type RoleFilter,
   type ScopedSql,
   type ScopeFilter,
   type ScopeHost,
@@ -837,6 +840,39 @@ export class SqliteScopeHost implements ScopeHost {
           .run(tenantId, parsed.key, JSON.stringify(parsed.permissions), String(parsed.source));
         this.roles.set(`${tenantId}/${parsed.key}`, parsed);
         this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
+      },
+      listRoles: async (filter?: RoleFilter): Promise<TenantRole[]> => {
+        const where: string[] = [];
+        const params: string[] = [];
+        if (filter?.tenantId) {
+          where.push('tenant_id = ?');
+          params.push(filter.tenantId);
+        }
+        if (filter?.source) {
+          where.push('source = ?');
+          params.push(filter.source);
+        }
+        const sql =
+          'SELECT tenant_id, role_key, permissions, source FROM _substrat_roles' +
+          (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+          ' ORDER BY tenant_id, role_key';
+        const rows = this.directory.prepare(sql).all(...params) as {
+          tenant_id: string;
+          role_key: string;
+          permissions: string;
+          source: string;
+        }[];
+        // Parsed, not cast: `permissions` is a JSON blob in a TEXT column, so the
+        // contract is the only thing standing between a corrupted row and the
+        // console rendering a role with permissions nobody declared.
+        return rows.map((r) =>
+          tenantRole.parse({
+            tenantId: r.tenant_id,
+            key: r.role_key,
+            permissions: JSON.parse(r.permissions),
+            source: r.source,
+          }),
+        );
       },
       assignRole: async (actor: PlatformActorId, assignment: RoleAssignment) => {
         const subject = `principal:${assignment.principalId}`;

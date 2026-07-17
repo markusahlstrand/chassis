@@ -76,6 +76,15 @@ if (firstTenant) {
     permissions: ['workorder:read', 'workorder:create', 'workorder:close', 'invoice:read'],
     source: 'vertical',
   });
+  // A second source, so the Roles tab's filter has something to distinguish.
+  // Both of these are code-declared — an engine's manifest and a vertical's
+  // constants. Nothing seeds an operator-created role because nothing can make
+  // one: role writes are not on the HTTP surface, and `source` has no value for it.
+  await host.admin.defineRole(staff, firstTenant.id, {
+    key: 'technician',
+    permissions: ['workorder:read', 'workorder:close'],
+    source: '@substrat-run/engine-workorder',
+  });
 }
 
 const app = createControlPlaneApi({ host, authenticate: UNSAFE_devPlatformActorAuth() });

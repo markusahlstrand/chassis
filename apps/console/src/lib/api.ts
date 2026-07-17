@@ -6,6 +6,7 @@ import type {
   ScopeStatus,
   Tenant,
   TenantId,
+  TenantRole,
   TenantStatus,
 } from '@substrat-run/contracts';
 
@@ -116,6 +117,10 @@ export function createApi(actor: string, baseUrl = '/api') {
     unsuspendScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/unsuspend`),
     archiveScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/archive`),
     unarchiveScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/unarchive`),
+
+    // Read only — there is no route that writes a role, by design.
+    listRoles: (filter?: { tenantId?: TenantId; source?: string }) =>
+      call<TenantRole[]>(`/roles${query({ ...filter })}`),
 
     adminLog: (q: AuditLogQuery = {}) => call<AdminLogPage>(`/admin-log${query({ ...q })}`),
   };

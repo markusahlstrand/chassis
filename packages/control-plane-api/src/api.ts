@@ -55,6 +55,14 @@ const listScopesQuery = z.object({
   vertical: z.string().optional(),
 });
 
+const listRolesQuery = z.object({
+  tenantId: tenantIdSchema.optional(),
+  // Free-form: a module id or 'vertical'. Not narrowed to the source union here
+  // — an unknown source should return nothing, not 400. The console offers only
+  // sources it has seen.
+  source: z.string().optional(),
+});
+
 const auditLogQuery = z.object({
   tenantId: tenantIdSchema.optional(),
   scopeId: scopeIdSchema.optional(),
@@ -207,6 +215,19 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       return c.json(await admin.getScopeRecord(tenantId, scopeId));
     });
   }
+
+  // -- roles, read only (§4.5 console item 4) --------------------------------
+  // The READ lands; `defineRole` deliberately does not. Creating a role over
+  // HTTP is a permission change, and the permission diff is a human checkpoint
+  // (D-22/D-29) — that surface needs its own decision, not a route added because
+  // the verb was adjacent.
+  app.get('/roles', async (c) => {
+    const filter = listRolesQuery.parse({
+      tenantId: c.req.query('tenantId'),
+      source: c.req.query('source'),
+    });
+    return c.json(await admin.listRoles(filter));
+  });
 
   // -- the admin log (§4.4/§4.5) ---------------------------------------------
 

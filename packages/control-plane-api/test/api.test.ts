@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { ulid } from '@substrat-run/kernel';
-import { platformActorId, scopeId, tenantId } from '@substrat-run/contracts';
+import { permissionKey, platformActorId, scopeId, tenantId } from '@substrat-run/contracts';
 import { createControlPlaneApi, DEV_ACTOR_HEADER, UNSAFE_devPlatformActorAuth } from '../src/index.js';
 
 /**
@@ -204,6 +204,29 @@ describe('control-plane API', () => {
 
     const restored = await json(`/tenants/${t1}/scopes/${s1}/unarchive`, 'POST');
     expect(await restored.json()).toMatchObject({ status: 'active' });
+  });
+
+  // -- roles (§4.5) ----------------------------------------------------------
+
+  it('lists roles and filters by tenant and source', async () => {
+    await host.admin.defineRole(platformActorId.parse(ulid()), t1, {
+      key: 'site-manager',
+      permissions: [permissionKey.parse('workorder:read')],
+      source: 'vertical',
+    });
+    const roles = await (await req(`/roles?tenantId=${t1}`)).json();
+    expect(roles).toHaveLength(1);
+    expect(roles[0]).toMatchObject({ tenantId: t1, key: 'site-manager', source: 'vertical' });
+
+    // An unknown source returns nothing rather than 400 — the console filters
+    // over sources it has seen, and a typo is an empty list, not an error.
+    expect(await (await req('/roles?source=nope')).json()).toEqual([]);
+  });
+
+  it('exposes no route that writes a role', async () => {
+    // defineRole stays off the wire: creating a role is a permission change, and
+    // the permission diff is a human checkpoint.
+    expect((await json('/roles', 'POST', { key: 'x', permissions: ['a:b'], source: 'vertical' })).status).toBe(404);
   });
 
   // -- the admin log (§4.4/§4.5) --------------------------------------------
