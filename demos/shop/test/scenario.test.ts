@@ -12,7 +12,9 @@ import { buildShopHost, seedShop, type ShopWorld, type OrderRow, type OrderLineR
  * migrations → catalogue → the OVERSELL throw → denials (roles, cart ownership,
  * cross-tenant) → priced checkout mot faktura → the invoicing engine builds a
  * fakturaunderlag from the RETAIL event (reuse + additive consume) → portal
- * isolation → lazy TTL release → the order state machine can't skip.
+ * isolation → lazy TTL release → the order state machine can't skip → the
+ * warehouse's on-hand/reserved view stays behind stock:manage, and drafts stay
+ * behind catalog:manage.
  */
 describe('Kallkälla Kaffe e-commerce scenario (concept §9)', () => {
   let dir: string;
@@ -29,6 +31,12 @@ describe('Kallkälla Kaffe e-commerce scenario (concept §9)', () => {
   interface CatalogProduct {
     slug: string;
     variants: { id: string; sku: string; available: number }[];
+  }
+  interface StockOverviewRow {
+    sku: string;
+    onHand: number;
+    reserved: number;
+    available: number;
   }
   const availabilityOf = (cat: CatalogProduct[], sku: string): number =>
     cat.flatMap((p) => p.variants).find((v) => v.sku === sku)?.available ?? -1;
@@ -190,5 +198,47 @@ describe('Kallkälla Kaffe e-commerce scenario (concept §9)', () => {
     const closed = await astrid.invoke<OrderRow>('shop/close-order', { orderId });
     expect(closed.status).toBe('closed');
     await expect(astrid.invoke('shop/close-order', { orderId })).rejects.toThrow(/invalid transition/);
+  });
+
+  it('10. the warehouse view splits on-hand from reserved; browse never sees either', async () => {
+    // Otto's hold from §8 is still live: 1 on the shelf, 1 held, 0 sellable.
+    const rows = await gustav.invoke<StockOverviewRow[]>('shop/stock-overview');
+    const chelbesa = rows.find((r) => r.sku === 'CHEL-250-HB');
+    expect(chelbesa).toMatchObject({ onHand: 1, reserved: 1, available: 0 });
+
+    // The storefront's own read exposes availability and nothing behind it — a
+    // shopper must never be able to infer the reservation ledger.
+    const cat = await elin.invoke<CatalogProduct[]>('shop/catalog');
+    const browseVariant = cat.flatMap((p) => p.variants).find((v) => v.sku === 'CHEL-250-HB');
+    expect(browseVariant).toBeDefined();
+    expect(browseVariant).not.toHaveProperty('onHand');
+    expect(browseVariant).not.toHaveProperty('reserved');
+
+    // stock:manage gates the view: a shopper and a guest are turned away.
+    await expect(elin.invoke('shop/stock-overview')).rejects.toThrow(/permission denied/);
+    await expect(guest.invoke('shop/stock-overview')).rejects.toThrow(/permission denied/);
+  });
+
+  it('11. drafts are catalogue-authors-only, even though browse is public', async () => {
+    const draft = await astrid.invoke<{ id: string; published: number }>('shop/create-product', {
+      slug: 'kommande-lot',
+      name: 'Kommande lot',
+      origin: 'Ej klar',
+      notes: 'Utkast',
+    });
+    expect(draft.published).toBe(0);
+
+    const slugs = (c: CatalogProduct[]) => c.map((p) => p.slug);
+    // catalog:manage sees the draft…
+    const asAdmin = await astrid.invoke<CatalogProduct[]>('shop/catalog', { includeUnpublished: true });
+    expect(slugs(asAdmin)).toContain('kommande-lot');
+    // …the published storefront never does…
+    expect(slugs(await astrid.invoke<CatalogProduct[]>('shop/catalog'))).not.toContain('kommande-lot');
+    expect(slugs(await guest.invoke<CatalogProduct[]>('shop/catalog'))).not.toContain('kommande-lot');
+
+    // …and asking for it without catalog:manage is denied, not silently ignored.
+    // Gustav holds stock:manage + shop:browse, which is the near-miss that matters.
+    await expect(guest.invoke('shop/catalog', { includeUnpublished: true })).rejects.toThrow(/permission denied/);
+    await expect(gustav.invoke('shop/catalog', { includeUnpublished: true })).rejects.toThrow(/permission denied/);
   });
 });

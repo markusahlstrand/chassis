@@ -74,26 +74,6 @@ export interface OrderLineRow {
   currency: string;
 }
 
-export interface Underlag {
-  id: string;
-  number: number;
-  customer_id: string;
-  status: 'open' | 'exported';
-  total: string;
-}
-export interface UnderlagLine {
-  id: string;
-  source_type: string;
-  source_id: string;
-  article: string;
-  description: string;
-  qty: string;
-  unit: string;
-  unit_price_amount: string;
-  currency: string;
-  line_total_amount: string;
-}
-
 /** Thrown so views can distinguish a permission wall (403) from other failures. */
 export class ApiError extends Error {
   status: number;
@@ -148,7 +128,8 @@ export const api = {
   signIn: (email: string, password: string) => authCall('/sign-in/email', { email, password }),
   signOut: () => authCall('/sign-out'),
 
-  // storefront
+  // storefront — published rows only; drafts need catalog:manage, which is the
+  // back-office's business, not the shop's.
   catalog: () => call<CatalogProduct[]>('/catalog'),
   createCart: () => call<{ id: string }>('/carts', { method: 'POST', body: '{}' }),
   cart: (id: string) => call<Cart>(`/carts/${id}`),
@@ -177,17 +158,11 @@ export const api = {
     body: JSON.stringify(input),
   }),
 
-  // portal + admin
+  // portal — the shopper's own orders, reachable through an entity-narrowed
+  // grant rather than a role. `order` is the same operation the back-office
+  // calls; the kernel decides who may read which one.
   portalOrders: () => call<OrderRow[]>('/portal/orders'),
-  orders: () => call<OrderRow[]>('/orders'),
   order: (id: string) => call<{ order: OrderRow; lines: OrderLineRow[] }>(`/orders/${id}`),
-  fulfil: (id: string) => call<OrderRow>(`/orders/${id}/fulfil`, { method: 'POST', body: '{}' }),
-  close: (id: string) => call<OrderRow>(`/orders/${id}/close`, { method: 'POST', body: '{}' }),
-
-  // reused invoicing engine
-  invoicing: () => call<Underlag[]>('/invoicing'),
-  underlag: (id: string) => call<{ underlag: Underlag; lines: UnderlagLine[]; total: string }>(`/invoicing/${id}`),
-  exportUnderlag: (id: string) => call<Underlag>(`/invoicing/${id}/export`, { method: 'POST', body: '{}' }),
 };
 
 export const kr = (amount: string): string =>

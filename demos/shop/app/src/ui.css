@@ -184,6 +184,7 @@ td .num, th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; 
 .pill.closed { background: color-mix(in srgb, var(--out) 20%, transparent); color: var(--out); }
 .pill.open { background: color-mix(in srgb, var(--spruce) 16%, transparent); color: var(--spruce-bright); }
 .pill.exported { background: color-mix(in srgb, var(--out) 20%, transparent); color: var(--out); }
+.pill.cancelled { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 
 /* ---- cart drawer ---- */
 .overlay { position: fixed; inset: 0; background: rgba(10,18,14,.42); opacity: 0; pointer-events: none; transition: opacity .22s ease; z-index: 50; display: grid; place-items: center; padding: 20px; }

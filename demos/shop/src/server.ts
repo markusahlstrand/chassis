@@ -27,16 +27,23 @@ mkdirSync(dataDir, { recursive: true });
 
 // Dev ports sit in a private 887x/527x block, clear of the Vite (5173) and
 // Wrangler (8787) defaults that every other project on the machine also wants.
-// Override without editing: PORT=… WEB_PORT=… pnpm dev
+// Override without editing: PORT=… WEB_PORT=… ADMIN_PORT=… pnpm dev
+//
+// Two front ends, one API: the storefront (:5273) and the admin dashboard
+// (:5274) are separate Vite apps that both proxy /api to this server. There is
+// one kernel and one permission check behind both — the split is chrome and
+// audience, never a second source of truth.
 const PORT = Number(process.env.PORT ?? 8873);
 const WEB_PORT = Number(process.env.WEB_PORT ?? 5273);
+const ADMIN_PORT = Number(process.env.ADMIN_PORT ?? 5274);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? `http://localhost:${WEB_PORT}`;
+const ADMIN_ORIGIN = process.env.ADMIN_ORIGIN ?? `http://localhost:${ADMIN_PORT}`;
 
 const host = buildShopHost(dataDir);
 const world: ShopWorld = await seedShop(host, dataDir);
 
 // Better Auth — its own store, migrated on startup, then seed the persona logins.
-const auth = buildAuth(dataDir, PORT, WEB_ORIGIN);
+const auth = buildAuth(dataDir, PORT, [WEB_ORIGIN, ADMIN_ORIGIN]);
 await migrateAuth(auth);
 await seedPersonaLogins(auth, host, world, dataDir);
 
@@ -91,8 +98,16 @@ app.onError((err, c) => {
 });
 
 
-// storefront
-app.get('/api/catalog', async (c) => c.json(await (await stub(c)).invoke('shop/catalog')));
+// storefront — `?includeUnpublished=1` is how the catalogue admin sees drafts;
+// the operation gates that flag on catalog:manage, so the storefront's own
+// anonymous callers get the published rows and nothing more.
+app.get('/api/catalog', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('shop/catalog', {
+      includeUnpublished: c.req.query('includeUnpublished') === '1',
+    }),
+  ),
+);
 app.post('/api/carts', async (c) => c.json(await (await stub(c)).invoke('shop/create-cart')));
 app.get('/api/carts/:id', async (c) => c.json(await (await stub(c)).invoke('shop/cart', { cartId: c.req.param('id') })));
 app.post('/api/carts/:id/lines', async (c) =>
@@ -128,6 +143,7 @@ app.post('/api/products/:id/variants', async (c) =>
 app.post('/api/products/:id/publish', async (c) =>
   c.json(await (await stub(c)).invoke('shop/publish-product', { ...(await body(c)), productId: c.req.param('id') })),
 );
+app.get('/api/stock', async (c) => c.json(await (await stub(c)).invoke('shop/stock-overview')));
 app.post('/api/variants/:id/stock', async (c) =>
   c.json(await (await stub(c)).invoke('shop/set-stock', { ...(await body(c)), variantId: c.req.param('id') })),
 );
@@ -148,3 +164,4 @@ app.post('/api/invoicing/:id/export', async (c) => c.json(await (await stub(c)).
 serve({ fetch: app.fetch, port: PORT });
 console.log(`Kallkälla shop demo API on http://localhost:${PORT} — data in ${dataDir}`);
 console.log(`  auth adapters: ${adapters.map((a) => a.id).join(', ')}`);
+console.log(`  storefront: ${WEB_ORIGIN} · admin: ${ADMIN_ORIGIN}`);

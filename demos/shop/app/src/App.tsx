@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, kr, type Cart, type Me, type Quote } from './api';
 import { Storefront } from './views/Storefront';
-import { Orders } from './views/Orders';
-import { Invoicing } from './views/Invoicing';
 import { Portal } from './views/Portal';
 import { Login } from './views/Login';
 import { bagColor } from './components';
@@ -17,9 +15,15 @@ function useHashRoute(): string {
   return route;
 }
 
-const canSeeOrders = (r: string) => r === 'shop-admin' || r === 'warehouse';
-const canSeeInvoicing = (r: string) => r === 'shop-admin';
+// This app is the storefront only — browse, cart, checkout, "Mina ordrar". The
+// back-office is a separate app on :5274 (demos/shop/admin), against this same
+// API. Staff who land here are just shoppers with no cart.
 const canShop = (r: string) => r === 'customer'; // only logged-in customers get a cart
+const isStaff = (r: string) => r === 'shop-admin' || r === 'warehouse';
+
+// Injected by vite.config.ts from ADMIN_PORT, so the hand-off follows the admin
+// app if its port moves.
+declare const __ADMIN_ORIGIN__: string;
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -160,8 +164,8 @@ export default function App() {
     setCart(null);
     setQuote(null);
     setReload((n) => n + 1);
-    location.hash = m.role === 'shop-admin' || m.role === 'warehouse' ? '#/orders' : '#/';
-    notify('Inloggad', true);
+    location.hash = '#/';
+    notify(isStaff(m.role ?? '') ? 'Inloggad — back-office finns i menyn' : 'Inloggad', true);
   }, [notify]);
 
   const onLogout = useCallback(async () => {
@@ -184,11 +188,8 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
-  const viewKey = me?.principal ?? 'anon';
   let view = <Storefront onAdd={addToCart} reloadKey={reload} />;
-  if (route.startsWith('/orders')) view = <Orders key={viewKey} notify={notify} />;
-  else if (route.startsWith('/invoicing')) view = <Invoicing key={viewKey} notify={notify} />;
-  else if (route.startsWith('/portal')) view = <Portal reloadKey={reload} />;
+  if (route.startsWith('/portal')) view = <Portal reloadKey={reload} />;
 
   const tab = (to: string, label: string, on: boolean) =>
     on ? (
@@ -208,8 +209,9 @@ export default function App() {
           <nav className="main">
             {tab('/', 'Butik', true)}
             {tab('/portal', 'Mina ordrar', role === 'customer')}
-            {tab('/orders', 'Orderbok', canSeeOrders(role))}
-            {tab('/invoicing', 'Fakturaunderlag', canSeeInvoicing(role))}
+            {isStaff(role) && (
+              <a href={__ADMIN_ORIGIN__}>Back-office ↗</a>
+            )}
           </nav>
           <div className="bar-right">
             {session ? (

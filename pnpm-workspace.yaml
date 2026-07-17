@@ -3,4 +3,5 @@ packages:
   - "engines/*"
   - "demos/*"
   - "demos/*/app"
+  - "demos/*/admin"
   - "apps/*"

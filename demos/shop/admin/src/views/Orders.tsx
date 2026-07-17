@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, kr, type OrderRow } from '../api';
+
+const FILTERS = [
+  { key: 'all', label: 'Alla' },
+  { key: 'placed', label: 'Att plocka' },
+  { key: 'fulfilled', label: 'Att avsluta' },
+  { key: 'closed', label: 'Avslutade' },
+] as const;
 
 export function Orders({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [orders, setOrders] = useState<OrderRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]['key']>('all');
 
   const load = useCallback(() => {
     setError(null);
@@ -24,37 +32,58 @@ export function Orders({ notify }: { notify: (msg: string, ok?: boolean) => void
     }
   };
 
-  if (error) return <div className="wrap page"><div className="notice deny">{error}</div></div>;
-  if (!orders) return <div className="wrap page"><div className="notice">Laddar ordrar…</div></div>;
+  const shown = useMemo(
+    () => (orders ?? []).filter((o) => (filter === 'all' ? true : o.status === filter)),
+    [orders, filter],
+  );
+
+  if (error) return <div className="notice deny">{error}</div>;
+  if (!orders) return <div className="notice">Laddar ordrar…</div>;
 
   return (
-    <div className="wrap page">
+    <>
       <div className="sec-head">
         <div className="eyebrow">Lager &amp; expedition</div>
-        <h1>Orderbok</h1>
+        <h1>Ordrar</h1>
       </div>
+
+      <div className="panel actions" style={{ marginBottom: 16 }}>
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            className={`btn sm ${filter === f.key ? '' : 'ghost'}`}
+            onClick={() => setFilter(f.key)}
+          >
+            {f.label}
+            {f.key !== 'all' && ` (${orders.filter((o) => o.status === f.key).length})`}
+          </button>
+        ))}
+      </div>
+
       <div className="panel">
         <table>
           <thead>
             <tr>
               <th className="num">Nr</th>
-              <th>Status</th>
-              <th>Betalning</th>
+              <th className="l">Status</th>
+              <th className="l">Betalning</th>
+              <th className="l">Lagd</th>
               <th className="num">Summa</th>
-              <th>Åtgärd</th>
+              <th className="l">Åtgärd</th>
             </tr>
           </thead>
           <tbody>
-            {orders.length === 0 && (
-              <tr><td colSpan={5}><div className="notice">Inga ordrar ännu.</div></td></tr>
+            {shown.length === 0 && (
+              <tr><td colSpan={6}><div className="notice">Inga ordrar i det här läget.</div></td></tr>
             )}
-            {orders.map((o) => (
-              <tr key={o.id}>
+            {shown.map((o) => (
+              <tr key={o.id} className="clickable" onClick={() => { location.hash = `#/orders/${o.id}`; }}>
                 <td className="num">#{o.number}</td>
                 <td><span className={`pill ${o.status}`}>{o.status}</span></td>
                 <td>{o.payment_method === 'invoice' ? 'Mot faktura' : 'Kort'}</td>
+                <td className="muted">{new Date(o.placed_at).toLocaleString('sv-SE')}</td>
                 <td className="num">{kr(o.total_amount)}</td>
-                <td>
+                <td onClick={(e) => e.stopPropagation()}>
                   {o.status === 'placed' && (
                     <button className="btn sm" onClick={() => advance(o, 'fulfil')}>Plocka</button>
                   )}
@@ -68,6 +97,6 @@ export function Orders({ notify }: { notify: (msg: string, ok?: boolean) => void
           </tbody>
         </table>
       </div>
-    </div>
+    </>
   );
 }
