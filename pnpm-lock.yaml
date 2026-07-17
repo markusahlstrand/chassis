@@ -11,6 +11,9 @@ importers:
       '@changesets/cli':
         specifier: ^2.31.0
         version: 2.31.0(@types/node@26.1.1)
+      concurrently:
+        specifier: ^9.0.0
+        version: 9.2.4
       tsx:
         specifier: ^4.19.0
         version: 4.23.1
@@ -189,6 +192,9 @@ importers:
       '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts
+      '@substrat-run/control-plane-api':
+        specifier: workspace:^
+        version: link:../../packages/control-plane-api
       '@substrat-run/engine-invoicing':
         specifier: workspace:^
         version: link:../../engines/invoicing
