@@ -11,6 +11,7 @@ import {
   statusLabel,
   statusTone,
 } from '../lib/fleet';
+import { portalUrl } from '../lib/portal';
 import type { Api } from '../lib/api';
 
 export interface ScopesProps {
@@ -165,7 +166,17 @@ export function Scopes({ api, scopes, tenants, entitlements, onChanged, onToast 
           title={selected.name}
           description={`Scope detail — ${scopeHandle(selected, tenants)}`}
           actions={
-            <span style={{ display: 'inline-flex', gap: 8 }}>
+            <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+              {portalUrl(selected) && (
+                <a
+                  href={portalUrl(selected)!}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--brand-700)', textDecoration: 'none', marginRight: 4 }}
+                >
+                  Open portal ↗
+                </a>
+              )}
               {actions.includes('unsuspend') && (
                 <Button onClick={() => run(() => api.unsuspendScope(selected.tenantId, selected.id), 'Scope unsuspended', selected.slug)}>
                   Unsuspend

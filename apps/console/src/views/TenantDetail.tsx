@@ -3,6 +3,7 @@ import type { Scope, Tenant, TenantId } from '@substrat-run/contracts';
 import { Badge, Button, Card, Dialog, Input, Select, Table, Tag } from '../components';
 import type { TableColumn } from '../components';
 import { effectiveStatus, statusLabel, statusTone, tenantTone } from '../lib/fleet';
+import { portalUrl } from '../lib/portal';
 import type { Api } from '../lib/api';
 
 /**
@@ -56,6 +57,29 @@ export function TenantDetail({ api, tenant, scopes, entitlements, onBack, onChan
       render: (s) => {
         const eff = effectiveStatus(s, tenant);
         return <Badge status={statusTone(eff)}>{statusLabel(eff)}</Badge>;
+      },
+    },
+    {
+      // The tenant-facing portal for this scope's vertical. Only rendered when a
+      // portal origin is configured (portalUrl → null otherwise), so it stays
+      // dark in a deployment until the hostname router exists.
+      header: '',
+      align: 'right',
+      width: 96,
+      render: (s) => {
+        const url = portalUrl(s);
+        if (!url) return null;
+        return (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--brand-700)', textDecoration: 'none', whiteSpace: 'nowrap' }}
+          >
+            Portal ↗
+          </a>
+        );
       },
     },
   ];
