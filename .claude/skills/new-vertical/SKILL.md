@@ -90,9 +90,12 @@ which columns matter; keep the api.ts pattern (typed wrappers over the server ro
   may reuse a key (`customer:manage`); rename only when the meaning differs. Roles are
   vertical vocabulary — name them for the persona (`workshop-admin`), don't copy the
   reference's role names.
-- **Side-by-side demos**: pick the next free API port (fsm uses :8787, bike-shop :8788)
-  and web port (:5173, :5174), and a vertical-specific localStorage key for the
-  principal picker, so demos coexist.
+- **Side-by-side demos**: demo dev ports live in a private `887x`/`527x` block, kept
+  clear of the Vite (5173) and Wrangler (8787) defaults that collide with unrelated
+  projects. Pick the next free pair (fsm :8871/:5271, bike-shop :8872/:5272, shop
+  :8873/:5273), read both from `PORT`/`WEB_PORT` in `server.ts` *and* `vite.config.ts`
+  so one env var moves both ends of the proxy, and use a vertical-specific
+  localStorage key for the principal picker, so demos coexist.
 - **Declare every link edge you traverse**: engines link the refs you hand them
   verbatim (workorder → your facility-shaped entity), and the adapter rejects links
   undeclared in any registered manifest — so your `entityRelations` must cover both

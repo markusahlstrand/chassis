@@ -37,18 +37,22 @@ import {
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '.data');
 mkdirSync(dataDir, { recursive: true });
 
-const port = Number(process.env.PORT ?? 8787);
+// Dev ports sit in a private 887x/527x block, clear of the Vite (5173) and
+// Wrangler (8787) defaults that every other project on the machine also wants.
+// Override without editing: PORT=… WEB_PORT=… pnpm fsm-demo dev
+const port = Number(process.env.PORT ?? 8871);
+const webPort = Number(process.env.WEB_PORT ?? 5271);
 // The fsm app's Vite dev origin — the browser calls /api/auth/* through its proxy
-// (see app/vite.config.ts: port 5173 → proxy /api to :8787), so Better Auth must
+// (see app/vite.config.ts, which reads the same two vars), so Better Auth must
 // trust it as an origin or login fails with "Invalid origin" / cookies won't stick.
-const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173';
+const webOrigin = process.env.WEB_ORIGIN ?? `http://localhost:${webPort}`;
 
 const host = buildDemoHost(dataDir);
 const world: DemoWorld = await seedDemo(host, dataDir);
 
 // Node Better Auth — its own better-sqlite3 store, migrated on startup, then seed
 // the persona logins. baseURL is the web origin; both the web origin and the API
-// port are trusted (raw curl against :8787 uses the :8787 origin).
+// port are trusted (raw curl against the API uses the API port's own origin).
 const auth = buildAuthNode(dataDir, webOrigin, [webOrigin, `http://localhost:${port}`]);
 await migrateAuth(auth);
 

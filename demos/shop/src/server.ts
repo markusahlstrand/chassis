@@ -25,8 +25,12 @@ import {
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '.data');
 mkdirSync(dataDir, { recursive: true });
 
-const PORT = Number(process.env.PORT ?? 8789);
-const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:5175';
+// Dev ports sit in a private 887x/527x block, clear of the Vite (5173) and
+// Wrangler (8787) defaults that every other project on the machine also wants.
+// Override without editing: PORT=… WEB_PORT=… pnpm dev
+const PORT = Number(process.env.PORT ?? 8873);
+const WEB_PORT = Number(process.env.WEB_PORT ?? 5273);
+const WEB_ORIGIN = process.env.WEB_ORIGIN ?? `http://localhost:${WEB_PORT}`;
 
 const host = buildShopHost(dataDir);
 const world: ShopWorld = await seedShop(host, dataDir);

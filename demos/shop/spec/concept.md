@@ -156,7 +156,7 @@ timestamps ISO-8601 TEXT. Append-only migrations, prefix `shop_`.
 
 ## 10. Build order
 
-1. Vertical skeleton (`@substrat-run/demo-shop`, private; API :8789, web :5175; principal
+1. Vertical skeleton (`@substrat-run/demo-shop`, private; API :8873, web :5273; principal
    picker localStorage key `shop`).
 2. `shop/*` module: catalog + variants + stock, the reservation ledger, cart, the
    checkout/pricing moment emitting `commerce.order-placed`, the order state machine.

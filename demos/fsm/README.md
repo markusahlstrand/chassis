@@ -9,13 +9,17 @@ enforcing every call.
 
 ```bash
 pnpm install
-pnpm fsm-demo dev   # from anywhere in the repo — starts API (:8787) + web app (:5173)
+pnpm fsm-demo dev   # from anywhere in the repo — starts API (:8871) + web app (:5271)
 ```
 
 (`pnpm fsm-demo <script>` is a root-level pass-through to this package: `dev`,
 `server`, `test`, `typecheck` all work.)
 
-Open http://localhost:5173 and **sign in** as any persona (auth is Better Auth on
+Ports sit in a private `887x`/`527x` block so they don't fight Vite's `5173` or
+Wrangler's `8787` default. If either is taken, `PORT=9001 WEB_PORT=5999 pnpm
+fsm-demo dev` moves both ends of the proxy together.
+
+Open http://localhost:5271 and **sign in** as any persona (auth is Better Auth on
 both the node server and the Worker — see below; password is `demo1234` for all):
 
 | Sign in as | Role | What to try |
