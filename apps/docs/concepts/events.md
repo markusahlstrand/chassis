@@ -59,7 +59,7 @@ unreadable.
 The composition rule for the whole system: engines and scopes integrate by **reacting to
 each other's events**, never by querying each other's tables.
 
-The [invoicing engine](/engines/invoicing) demonstrates the pattern. It declares in its
+The [invoicing engine](/engines/invoicing/) demonstrates the pattern. It declares in its
 manifest:
 
 ```ts

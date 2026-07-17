@@ -1,0 +1,68 @@
+# Operations, functions & permissions
+
+An engine has **no endpoints**. It exposes operations (invoked through a scope stub) and
+in-scope functions (called by a vertical inside its own transaction). HTTP, where it exists,
+is a generated artifact pointed at by the manifest's `api` field.
+
+Most of this engine's surface, though, isn't either one — it's the **consumers**. Lines
+arrive by event, not by call. See [Events](./events).
+
+## Operations
+
+| Operation | Permission | Does |
+|---|---|---|
+| `invoicing/list` | `invoicing:read` | list underlag (optionally by status), each with its computed total |
+| `invoicing/get` | `invoicing:read` | one underlag with all lines and total |
+| `invoicing/export` | `invoicing:export` | flip to `exported` — the point of no return |
+
+There is no `create` and no `add-line`: an underlag is never authored, only accumulated. The
+only way to put a line on one is to emit an event this engine consumes. That is the design —
+a basis nobody can hand-write is a basis nobody can forge.
+
+## In-scope functions
+
+**This engine exports none.** All three operations carry their logic inline.
+
+::: warning No composable surface — an artifact, not a decision
+The convention is that engine operations are thin (a permission check plus one exported
+in-scope function) so verticals extend by composition rather than forking. This engine doesn't
+meet it: `list`, `get`, and `export` have no exported function behind them.
+
+The practical consequence: a vertical **cannot** export an underlag and touch its own tables
+in the same transaction, and cannot wrap export in its own vocabulary without re-implementing
+it. Compare the [work-order engine](/engines/workorder/surface#in-scope-functions), which
+exports `createWorkOrder`, `completeWorkOrder`, and friends.
+
+Unlike the work-order engine's deliberately missing `create`, there is no design reason for
+this gap. Extracting `exportUnderlag(ctx, …)` would be a purely additive change.
+:::
+
+What *is* exported today: `INVOICING_PERM`, `invoicingManifest`, `invoicingMigrations`, the
+`UnderlagRow` / `UnderlagLine` row types, and `invoicingModule`.
+
+## Permissions
+
+| Key | Description |
+|---|---|
+| `invoicing:read` | Read fakturaunderlag |
+| `invoicing:export` | Export a fakturaunderlag (makes it immutable) |
+
+Two keys, and the split is the point: reading a basis is routine, and **export is
+irreversible**. Keep `invoicing:export` on a back-office role, not on whoever can see totals.
+
+## Entitlement
+
+`entitlementKey: 'invoicing'`. This engine is priceable independently of any other — a tenant
+can hold `workorder` without `invoicing`. The gate is checked per invoke and fails closed.
+
+::: warning The entitlement gate is on operations, not consumers
+`dispatch` iterates every registered module's consumers with **no entitlement check** — only
+`invoke` consults `operationEntitlement`. So if the invoicing module is registered on the
+host, an unentitled tenant's `workorder.completed` events still build underlag rows in their
+scope; they simply can't `list`, `get`, or `export` them.
+
+"Not entitled" therefore means *invisible*, not *inert* — the accumulation happens either way.
+Grant the entitlement later and the history is already there, which is convenient, but it is
+not what "a module loads for a tenant only if the tenant holds its SKU flag" implies. Worth
+knowing before you price this engine as off.
+:::

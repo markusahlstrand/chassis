@@ -9,29 +9,27 @@ The engine owns only the invariants. Template *content* — which protocols exis
 what they contain — is 100% vertical-owned, and an instance binds to any `EntityRef`
 (a work order today, anything tomorrow).
 
-**Full documentation: https://substrat.ahlstrand.es/engines/protocol**
-
-## Invariants the engine owns
+## What it owns
 
 1. **Sign freezes** — any write to a signed instance's responses fails.
 2. **Content hash** — SHA-256 over template content + latest responses at sign time,
    verifiable against replayed state.
-3. **Counter-sign** — an *additional* signature on the same frozen content (the hash
-   is recomputed and must match; a principal never counter-signs their own signature).
-   Exactly one primary signature per instance.
+3. **Counter-sign** — a second signature on the *same* frozen content; the hash is
+   recomputed and must match.
 4. **Append-only responses** — an edit is a new row; history is audit material.
-5. **Version-pinned templates** — templates version immutably; an instance pins
-   `(key, version)` at instantiation forever.
+5. **Version-pinned templates** — an instance pins `(key, version)` at instantiation forever.
 6. **Void, not delete** — a protocol is superseded, never mutated or removed.
 
-## Composing from a vertical
+## Install
 
-Operations (`protocol/define-template`, `instantiate`, `fill`, `sign`, `countersign`,
-`void`, `get`, `list-for-entity`) are default bindings over exported in-scope
-functions your own operations can call — same transaction, your permission check:
+```sh
+pnpm add @substrat-run/engine-protocol
+```
 
 ```ts
-import { instantiateProtocol, requireSigned, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
+import { instantiateProtocol, PROTOCOL_PERM, protocolModule } from '@substrat-run/engine-protocol';
+
+host.registerModule(protocolModule);
 
 host.defineOperation('acme/start-inspection', async (ctx, input) => {
   assertAllowed(await ctx.check(PROTOCOL_PERM.create));
@@ -42,13 +40,18 @@ host.defineOperation('acme/start-inspection', async (ctx, input) => {
 });
 ```
 
-`requireSigned(ctx, entity, templateKey)` is the completion-guard building block: a
-vertical can refuse to close its own entity until the protocol on it is signed.
+`requireSigned(ctx, entity, templateKey)` is the completion-guard building block: a vertical
+can refuse to close its own entity until the protocol on it is signed. The engine also
+contributes a `protocol/all-signed` guard predicate, so the same rule can be **declared** in a
+vertical's manifest instead — where dropping it shows up in a reviewable diff.
 
-Signing records the authenticated principal with an `in-app` method; connector-backed
-methods (BankID/Scrive-class) arrive later through the same operation shape with
-upgraded evidence. Signed/countersigned events carry the frozen answers in the
-payload — consumers never query back.
+## Documentation
+
+**https://substrat.ahlstrand.es/engines/protocol/** — the domain model and invariants, the
+signature/evidence model, the full operation and permission surface, event contracts, and how
+to compose or extend it.
+
+The docs site is the single source of truth; this README deliberately doesn't restate it.
 
 ## Related packages
 

@@ -143,7 +143,9 @@ export function defineScopeDO(
     private readonly checker: PermissionChecker;
     private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
     private readonly applied = new Set<string>();
-    private migrationPromise?: Promise<void>;
+    private migrationPromise?: Promise<boolean>;
+    /** Latch: the applied count is reported to the directory once per DO instance. */
+    private schemaVersionReported = false;
 
     constructor(ctx: DurableObjectState, env: ScopeDoEnv) {
       super(ctx, env);
@@ -208,9 +210,22 @@ export function defineScopeDO(
 
     // -- RPC surface ----------------------------------------------------------
 
-    /** Trigger lazy migration (the coordinator calls this at provision time). */
-    async migrate(): Promise<void> {
-      await this.ensureMigrations();
+    /**
+     * Trigger lazy migration (the coordinator calls this at provision time).
+     * Returns the applied-migration count if this call applied any, else null —
+     * the coordinator projects the count into the directory's `schema_version`
+     * and skips the write when nothing changed.
+     *
+     * `ensureMigrations` memoises its promise, so every later call on a warm DO
+     * resolves to the SAME `true` without applying anything. Reporting on each of
+     * those would bill a control-plane RPC per stub mint to store a number that
+     * has not moved — hence the once-per-instance latch.
+     */
+    async migrate(): Promise<number | null> {
+      const applied = await this.ensureMigrations();
+      if (!applied || this.schemaVersionReported) return null;
+      this.schemaVersionReported = true;
+      return this.applied.size;
     }
 
     /** Admin scope-tuple write (role assignment / grant scoped to this scope). */
@@ -285,12 +300,13 @@ export function defineScopeDO(
 
     // -- migrations (port of applyPendingMigrations) --------------------------
 
-    private ensureMigrations(): Promise<void> {
+    private ensureMigrations(): Promise<boolean> {
       if (!this.migrationPromise) this.migrationPromise = this.applyPendingMigrations();
       return this.migrationPromise;
     }
 
-    private async applyPendingMigrations(): Promise<void> {
+    /** Resolves true if this call applied at least one migration. */
+    private async applyPendingMigrations(): Promise<boolean> {
       const pending: { moduleId: string; migration: SqlMigration }[] = [];
       for (const mod of this.modules.values()) {
         for (const migration of mod.migrations) {
@@ -299,7 +315,7 @@ export function defineScopeDO(
           }
         }
       }
-      if (pending.length === 0) return;
+      if (pending.length === 0) return false;
       await this.queue.enqueue(async () => {
         for (const { moduleId, migration } of pending) {
           const key = `${moduleId}@${migration.version}`;
@@ -334,6 +350,7 @@ export function defineScopeDO(
           this.applied.add(key);
         }
       });
+      return true;
     }
 
     // -- event dispatch (port of dispatch) ------------------------------------

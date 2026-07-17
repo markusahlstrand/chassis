@@ -45,6 +45,16 @@ export const scope = z.object({
   status: scopeStatus,
   storageShape,
   jurisdiction,
+  // Which vertical's deployment executes this scope (control-plane.md §1: the DO
+  // class is the app binary). Nullable — a scope provisioned before the caller
+  // names one, and the bare hosts in tests, carry null. It is what makes the
+  // audit log's `vertical` target real for scope-lifecycle actions, and what
+  // console item 1 means by "which vertical each scope runs".
+  vertical: z.string().min(1).nullable(),
+  // The scope's migration state: the count of applied (module, version) pairs,
+  // as a string. Written host-side after migrations apply — never caller-supplied.
+  // '0' means "provisioned, nothing applied yet". Comparing it against the host's
+  // registered migration total is what answers §5.4's "which scopes are behind".
   schemaVersion: z.string(),
   createdAt: instant,
 });

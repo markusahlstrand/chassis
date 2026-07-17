@@ -18,9 +18,25 @@ export const roleKey = z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
 export const roleDefinition = z.object({
   key: roleKey,
   permissions: z.array(permissionKey).min(1),
+  // Who declared this role. Both members mean "declared in CODE" — an engine's
+  // manifest or a vertical's provisioning constants. There is deliberately no
+  // value for "an operator created this against a live deployment": nothing can
+  // create one yet (role writes are not on the control-plane HTTP surface), and
+  // an enum member no code path can produce is the same promise-with-no-mechanism
+  // this codebase keeps finding. It lands with whatever writes it.
   source: z.union([moduleId, z.literal('vertical')]),
 });
 export type RoleDefinition = z.infer<typeof roleDefinition>;
+
+/**
+ * A role as the directory holds it — the definition plus the tenant it belongs
+ * to (control-plane.md §4.5's roles surface). `RoleDefinition` is what a caller
+ * AUTHORS, and a tenant is ambient at that point (`defineRole(actor, tenantId,
+ * role)`); this is what a caller READS back, where the tenant is the answer to
+ * "where does this role apply?" and has to travel with it.
+ */
+export const tenantRole = roleDefinition.extend({ tenantId });
+export type TenantRole = z.infer<typeof tenantRole>;
 
 export const roleAssignment = z.object({
   principalId,

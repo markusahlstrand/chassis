@@ -1,4 +1,5 @@
 import type {
+  AdminAction,
   AdminLogEntry,
   CapabilityGrant,
   CreateTenantInput,
@@ -16,10 +17,13 @@ import type {
   ResolvedIdentity,
   RoleAssignment,
   RoleDefinition,
+  Scope,
   ScopeId,
+  ScopeStatus,
   StorageShape,
   Tenant,
   TenantId,
+  TenantRole,
   TenantStatus,
 } from '@substrat-run/contracts';
 
@@ -158,6 +162,20 @@ export interface ModuleRegistration {
  */
 export interface HostAdmin {
   defineRole(actor: PlatformActorId, tenantId: TenantId, role: RoleDefinition): Promise<void>;
+  /**
+   * Every role the directory holds, ordered by (tenantId, key).
+   *
+   * Roles were writable and not enumerable: `defineRole` has existed since the
+   * permission model shipped, and nothing could ask what roles exist. That makes
+   * the console's half of the permission checkpoint unbuildable — CI diffs the
+   * roles declared in CODE, and this is the only way to see what a live
+   * deployment actually holds, which is not the same question.
+   *
+   * Directory-local, unlike grants: `_substrat_roles` sits beside the tenant
+   * registry, so this is a read. A grant is a tuple in the scope's own database
+   * and needs §5.4's admin-query RPC — the two are not the same size of problem.
+   */
+  listRoles(filter?: RoleFilter): Promise<TenantRole[]>;
   assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
   grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
@@ -197,6 +215,31 @@ export interface HostAdmin {
   /** The tenant registry — the directory's inventory (control-plane.md §4.5 console item 1). */
   listTenants(): Promise<Tenant[]>;
   getTenant(tenantId: TenantId): Promise<Tenant | undefined>;
+
+  // -- the scope directory, read side (control-plane.md §3.2/§4.5) -----------
+  // §3.2 calls the directory "the ONLY complete inventory of tenants and scopes,
+  // and the input to reconciliation, migration sweeps, billing, and ops". Every
+  // one of those needs to ENUMERATE, and until now nothing could: the write side
+  // was complete and the read side did not exist. These two methods are that
+  // sentence becoming true.
+  //
+  // Read-only and unaudited, deliberately: a durable record of who READ the
+  // directory is a different feature (staff access logging) with a different
+  // retention story, and conflating it with §4.4's mutation trail would make the
+  // trail's "every row is an effect" property false.
+
+  /** The scope inventory. Ordered by scope_id (ULID = chronological). */
+  listScopes(filter?: ScopeFilter): Promise<Scope[]>;
+  /**
+   * One scope's directory record. Cross-checks the (tenantId, scopeId) pair and
+   * returns undefined on a mismatch rather than another tenant's scope (K-3) —
+   * the same fail-closed rule `ScopeHost.getScope` applies when minting a stub.
+   *
+   * Distinct from `ScopeHost.getScope`, which mints a capability stub for a
+   * principal and grants no read of the record. This returns the record and
+   * grants no execution.
+   */
+  getScopeRecord(tenantId: TenantId, scopeId: ScopeId): Promise<Scope | undefined>;
 
   // -- scope lifecycle (control-plane.md §4.2) -------------------------------
   // The §3.3 transitions that existed only on paper. Each fails closed on an
@@ -251,18 +294,90 @@ export interface HostAdmin {
   resolveIdentity(provider: string, externalId: string): Promise<ResolvedIdentity | undefined>;
 
   /**
-   * The append-only admin audit trail, newest-comparable last (ULID order is
+   * The append-only admin audit trail, oldest first by default (ULID order is
    * chronological). Read path for the console history and the permission-diff
-   * human checkpoint (control-plane.md §4.5).
+   * human checkpoint (control-plane.md §4.5) — where the interesting column is
+   * `before`/`after`: a redefined role captures its old and new shape there, and
+   * that diff IS the checkpoint.
    */
-  auditLog(filter?: { tenantId?: TenantId }): Promise<AdminLogEntry[]>;
+  auditLog(filter?: AuditLogFilter): Promise<AdminLogEntry[]>;
 }
 
 export interface ProvisionScopeInput {
   tenantId: TenantId;
   scopeId: ScopeId;
+  /**
+   * Unique within the tenant; the console's human handle for the scope, shown as
+   * `{tenant.slug}/{scope.slug}`. Optional and defaulted to the lowercased
+   * scopeId — a ULID lowercases into a valid slug, so the default is structurally
+   * valid and unique by construction. A caller that means something by the name
+   * supplies one; the default is a placeholder, not a convention.
+   */
+  slug?: string;
+  /** Vertical vocabulary ('brf', 'filial'). The kernel never branches on it. Defaults to 'scope'. */
+  kind?: string;
+  /** Display name. Defaults to the slug. */
+  name?: string;
+  /** Which vertical's deployment executes this scope. Defaults to null. */
+  vertical?: string | null;
   storageShape?: StorageShape;
   jurisdiction?: Jurisdiction;
+}
+
+/**
+ * Narrow `listRoles` (control-plane.md §4.5 console item 4 — the permission
+ * diff's runtime half).
+ */
+export interface RoleFilter {
+  tenantId?: TenantId;
+  /**
+   * A module id, or 'vertical'. Both mean "declared in code" — see
+   * `roleDefinition.source`. Filtering for operator-created roles is not
+   * possible until something can create one.
+   */
+  source?: string;
+}
+
+/** Narrow `listScopes` (control-plane.md §4.5 console items 1 and 6). */
+export interface ScopeFilter {
+  tenantId?: TenantId;
+  /** One status or any of several — the console's All / Suspended / Archived tabs. */
+  status?: ScopeStatus | ScopeStatus[];
+  vertical?: string;
+}
+
+/**
+ * Narrow the admin audit trail (control-plane.md §4.4/§4.5). Every field is a
+ * conjunctive AND; omitting all of them reads the whole log, which is why `limit`
+ * exists — the table is append-only and only grows.
+ */
+export interface AuditLogFilter {
+  tenantId?: TenantId;
+  scopeId?: ScopeId;
+  actor?: PlatformActorId;
+  /** One action or any of several. */
+  action?: AdminAction | AdminAction[];
+  /** Inclusive lower / exclusive upper bound on `at` (ISO 8601). */
+  since?: string;
+  until?: string;
+  /**
+   * Page size. Unset means unbounded — kept as the default because the read is
+   * `AdminLogEntry[]`, and a silent cap would let a caller mistake a truncated
+   * page for the whole log. The console always passes one.
+   */
+  limit?: number;
+  /**
+   * Page anchor: the `id` of the last entry of the previous page. Entries are
+   * returned strictly after it in `asc` order, strictly before it in `desc` —
+   * ULID order is chronological, so the cursor is the entry id itself and needs
+   * no separate encoding. There is no `nextCursor`: it is `entries.at(-1)?.id`.
+   */
+  cursor?: string;
+  /**
+   * Default 'asc' — oldest first, preserving the ordering the log shipped with.
+   * The console reads 'desc'.
+   */
+  order?: 'asc' | 'desc';
 }
 
 export interface ScopeHost {

@@ -5,7 +5,9 @@ import {
   moduleManifest,
   resolvedIdentity,
   roleDefinition,
+  scope as scopeSchema,
   tenant as tenantSchema,
+  tenantRole,
   type AdminAction,
   type AdminLogEntry,
   type CapabilityGrant,
@@ -19,22 +21,29 @@ import {
   type ResolvedIdentity,
   type RoleAssignment,
   type RoleDefinition,
+  type Scope,
   type ScopeId,
   type ScopeStatus,
   type Tenant,
   type TenantId,
+  type TenantRole,
   type TenantStatus,
 } from '@substrat-run/contracts';
 import {
+  resolveScopeRecord,
   ulid,
+  type AuditLogFilter,
   type HostAdmin,
   type ModuleRegistration,
   type OperationHandler,
   type PermissionChecker,
   type ProvisionScopeInput,
+  type RoleFilter,
+  type ScopeFilter,
   type ScopeHost,
   type ScopeStub,
 } from '@substrat-run/kernel';
+import type { AuditLogQuery, RoleRow, ScopeRow } from './control-plane-do.js';
 
 /**
  * `CloudflareScopeHost` — the coordinator (design doc §5.7). It runs in the
@@ -72,10 +81,19 @@ interface ControlPlaneStub {
   provisionScope(
     tenantId: string,
     scopeId: string,
-    storageShape: string,
-    jurisdiction: string | null,
+    record: {
+      slug: string;
+      kind: string;
+      name: string;
+      vertical: string | null;
+      storageShape: string;
+      jurisdiction: string | null;
+    },
     createdAt: string,
   ): Promise<boolean>;
+  setSchemaVersion(scopeId: string, schemaVersion: string): Promise<void>;
+  listScopes(filter: { tenantId?: string; status?: string[]; vertical?: string }): Promise<ScopeRow[]>;
+  getScopeRecord(tenantId: string, scopeId: string): Promise<ScopeRow | undefined>;
   validateScopeAccess(tenantId: string, scopeId: string): Promise<void>;
   transitionScope(
     tenantId: string,
@@ -83,8 +101,9 @@ interface ControlPlaneStub {
     from: string[],
     to: ScopeStatus,
     action: string,
-  ): Promise<string>;
+  ): Promise<{ status: string; vertical: string | null }>;
   defineRole(tenantId: string, role: RoleDefinition): Promise<RoleDefinition | null>;
+  listRoles(filter: { tenantId?: string; source?: string }): Promise<RoleRow[]>;
   writeTenantTuple(
     tenantId: string,
     subject: string,
@@ -109,7 +128,7 @@ interface ControlPlaneStub {
     externalId: string,
   ): Promise<{ principal: string; tenantId: string; scopeId: string | null } | undefined>;
   recordAdmin(entry: AdminEntry): Promise<void>;
-  auditLog(tenantId: string | null): Promise<AdminLogEntry[]>;
+  auditLog(query: AuditLogQuery): Promise<AdminLogEntry[]>;
 }
 
 interface AdminEntry {
@@ -125,7 +144,8 @@ interface AdminEntry {
 }
 
 interface ScopeStubRpc {
-  migrate(): Promise<void>;
+  /** The applied-migration count if this call applied any, else null (nothing changed). */
+  migrate(): Promise<number | null>;
   invoke(
     operation: string,
     input: unknown,
@@ -237,27 +257,39 @@ export class CloudflareScopeHost implements ScopeHost {
   // -- scope lifecycle ------------------------------------------------------
 
   async provisionScope(actor: PlatformActorId, input: ProvisionScopeInput): Promise<void> {
+    // Shared with the pure adapter so the defaults cannot drift between them.
+    const record = resolveScopeRecord(input);
     // Fail-closed tenant gate throws out of the awaited cp call BEFORE migrate
     // or audit, so a rejected provision creates nothing and writes no audit row.
     const created = await this.cp.provisionScope(
       input.tenantId,
       input.scopeId,
-      input.storageShape ?? 'A',
-      input.jurisdiction ?? null,
+      record,
       new Date().toISOString(),
     );
     // Instantiate the scope DO and trigger its lazy migration.
-    await this.scopeStub(input.scopeId).migrate();
+    await this.migrateAndRecord(input.scopeId);
     // Audit a real provision only; an idempotent re-provision changed nothing.
     if (created) {
       await this.recordAdmin(
         actor,
         'provisionScope',
-        { tenantId: input.tenantId, scopeId: input.scopeId },
+        { tenantId: input.tenantId, scopeId: input.scopeId, vertical: record.vertical },
         null,
-        { storageShape: input.storageShape ?? 'A', jurisdiction: input.jurisdiction ?? null },
+        record,
       );
     }
+  }
+
+  /**
+   * Migrate a scope and project its resulting migration count into the directory
+   * (§5.4: fleet questions never fan out). The ScopeDO reports null when nothing
+   * was pending, which skips the write — otherwise every stub mint would cost an
+   * extra control-plane RPC to store a number that did not change.
+   */
+  private async migrateAndRecord(scopeId: ScopeId): Promise<void> {
+    const applied = await this.scopeStub(scopeId).migrate();
+    if (applied !== null) await this.cp.setSchemaVersion(scopeId, String(applied));
   }
 
   async getScope(
@@ -270,7 +302,7 @@ export class CloudflareScopeHost implements ScopeHost {
     await this.cp.validateScopeAccess(tenantId, scopeId);
 
     const stub = this.scopeStub(scopeId);
-    await stub.migrate();
+    await this.migrateAndRecord(scopeId);
     const cp = this.cp;
     const operationEntitlement = this.operationEntitlement;
 
@@ -300,6 +332,27 @@ export class CloudflareScopeHost implements ScopeHost {
   // -- admin surface --------------------------------------------------------
 
   private buildAdmin(): HostAdmin {
+    // The directory row → the `scope` contract. Parsed, not cast: the columns are
+    // nullable in the DO's SQLite (ALTER TABLE cannot add NOT NULL to a populated
+    // table) while the contract requires them, so this parse is where that gap is
+    // held shut — and it is the same parse the pure adapter does, which is what
+    // makes the shared contract suite meaningful.
+    const mapScope = (r: ScopeRow): Scope =>
+      scopeSchema.parse({
+        id: r.scope_id,
+        tenantId: r.tenant_id,
+        parentScopeId: r.parent_scope_id,
+        slug: r.slug,
+        kind: r.kind,
+        name: r.name,
+        status: r.status,
+        storageShape: r.storage_shape,
+        jurisdiction: r.jurisdiction,
+        vertical: r.vertical,
+        schemaVersion: r.schema_version,
+        createdAt: r.created_at,
+      });
+
     const transitionScope = async (
       actor: PlatformActorId,
       action: AdminAction,
@@ -309,7 +362,17 @@ export class CloudflareScopeHost implements ScopeHost {
       to: ScopeStatus,
     ) => {
       const before = await this.cp.transitionScope(tenantId, scopeId, from, to, action);
-      await this.recordAdmin(actor, action, { tenantId, scopeId }, { status: before }, { status: to });
+      // The audit target carries the scope's vertical (control-plane.md §4.4:
+      // "vertical stays null until §4.2 lifecycle actions that name one"). The DO
+      // returns it with the previous status, so the trail cannot disagree with
+      // the directory about which deployment the action touched.
+      await this.recordAdmin(
+        actor,
+        action,
+        { tenantId, scopeId, vertical: before.vertical },
+        { status: before.status },
+        { status: to },
+      );
     };
 
     const writeGrant = async (
@@ -351,6 +414,19 @@ export class CloudflareScopeHost implements ScopeHost {
         const parsed = roleDefinition.parse(role);
         const before = await this.cp.defineRole(tenantId, parsed);
         await this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
+      },
+      listRoles: async (filter?: RoleFilter): Promise<TenantRole[]> => {
+        const rows = await this.cp.listRoles({ tenantId: filter?.tenantId, source: filter?.source });
+        // Parsed, not cast — the same parse the pure adapter does, which is what
+        // makes the shared contract suite mean anything.
+        return rows.map((r) =>
+          tenantRole.parse({
+            tenantId: r.tenant_id,
+            key: r.role_key,
+            permissions: JSON.parse(r.permissions),
+            source: r.source,
+          }),
+        );
       },
       assignRole: async (actor, assignment: RoleAssignment) => {
         const subject = `principal:${assignment.principalId}`;
@@ -437,6 +513,22 @@ export class CloudflareScopeHost implements ScopeHost {
         const t = await this.cp.getTenant(tenantId);
         return t ? tenantSchema.parse(t) : undefined;
       },
+      listScopes: async (filter?: ScopeFilter): Promise<Scope[]> => {
+        const rows = await this.cp.listScopes({
+          tenantId: filter?.tenantId,
+          status: filter?.status
+            ? Array.isArray(filter.status)
+              ? filter.status
+              : [filter.status]
+            : undefined,
+          vertical: filter?.vertical,
+        });
+        return rows.map(mapScope);
+      },
+      getScopeRecord: async (tenantId, scopeId): Promise<Scope | undefined> => {
+        const row = await this.cp.getScopeRecord(tenantId, scopeId);
+        return row ? mapScope(row) : undefined;
+      },
       suspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'suspendScope', tenantId, scopeId, ['active'], 'suspended'),
       unsuspendScope: async (actor, tenantId, scopeId) =>
@@ -485,8 +577,23 @@ export class CloudflareScopeHost implements ScopeHost {
           scopeId: row.scopeId,
         });
       },
-      auditLog: async (filter): Promise<AdminLogEntry[]> => {
-        const rows = await this.cp.auditLog(filter?.tenantId ?? null);
+      auditLog: async (filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
+        const rows = await this.cp.auditLog({
+          tenantId: filter?.tenantId,
+          scopeId: filter?.scopeId,
+          actor: filter?.actor,
+          // Normalised to an array here so the DO has one shape to handle.
+          action: filter?.action
+            ? Array.isArray(filter.action)
+              ? filter.action
+              : [filter.action]
+            : undefined,
+          since: filter?.since,
+          until: filter?.until,
+          limit: filter?.limit,
+          cursor: filter?.cursor,
+          order: filter?.order,
+        });
         return rows.map((r) => adminLogEntry.parse(r));
       },
     };

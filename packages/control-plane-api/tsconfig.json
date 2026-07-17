@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    // The base lib is ES2023 only — correct for the kernel, which touches no
+    // platform API at all. This package is the HTTP transport, so it needs the
+    // web-standard fetch types (`Request`/`Headers`): real in Node, in Workers,
+    // and in the browser alike — the "web-standard APIs always" rule, not a DOM
+    // dependency. Nothing here touches `window` or `document`.
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["src"]
+}

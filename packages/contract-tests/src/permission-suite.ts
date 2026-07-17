@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
+  moduleId,
   permissionKey,
   platformActorId,
   principalId,
@@ -15,6 +16,8 @@ import { permMod } from './modules.js';
 
 const PERM_USE = permissionKey.parse('perm:use');
 const PERM_READ = permissionKey.parse('perm:read');
+const PERM_ADMIN = permissionKey.parse('perm:admin');
+const ENGINE_SOURCE = moduleId.parse('@substrat-run/engine-workorder');
 
 /**
  * Contract suite for the default (tuple) permission checker (design doc §4.2,
@@ -177,6 +180,61 @@ export function permissionContractSuite(
       const last = redefines[redefines.length - 1]!;
       expect((last.before as { permissions: string[] }).permissions).toEqual([PERM_READ]);
       expect((last.after as { permissions: string[] }).permissions).toEqual([PERM_USE]);
+    });
+
+    // -- the roles read path (control-plane.md §4.5 console item 4) -----------
+    // defineRole shipped with the permission model; nothing could ask what roles
+    // exist. CI diffs the roles declared in CODE — this is the only way to see
+    // what a live deployment holds, which is a different question.
+
+    it('lists the roles the directory holds, with their tenant (§4.5)', async () => {
+      await host.admin.defineRole(staff, t1, {
+        key: 'listed-role',
+        permissions: [PERM_READ, PERM_USE],
+        source: 'vertical',
+      });
+      const roles = await host.admin.listRoles({ tenantId: t1 });
+      const found = roles.find((r) => r.key === 'listed-role');
+      expect(found).toMatchObject({
+        tenantId: t1,
+        key: 'listed-role',
+        permissions: [PERM_READ, PERM_USE],
+        source: 'vertical',
+      });
+      // Ordered by (tenantId, key) so the console renders stably.
+      expect(roles.map((r) => r.key)).toEqual([...roles.map((r) => r.key)].sort());
+    });
+
+    it('reflects a redefinition rather than duplicating the role (§4.5)', async () => {
+      await host.admin.defineRole(staff, t1, {
+        key: 'listed-role',
+        permissions: [PERM_READ, PERM_USE, PERM_ADMIN],
+        source: 'vertical',
+      });
+      const listed = (await host.admin.listRoles({ tenantId: t1 })).filter((r) => r.key === 'listed-role');
+      // defineRole is an upsert keyed on (tenant, key) — a redefinition replaces.
+      expect(listed).toHaveLength(1);
+      expect(listed[0]!.permissions).toContain(PERM_ADMIN);
+    });
+
+    it('filters roles by source, and scopes the read by tenant (§4.5)', async () => {
+      await host.admin.defineRole(staff, t1, {
+        key: 'engine-role',
+        permissions: [PERM_READ],
+        source: ENGINE_SOURCE,
+      });
+      const bySource = await host.admin.listRoles({ tenantId: t1, source: 'vertical' });
+      expect(bySource.length).toBeGreaterThan(0);
+      expect(bySource.every((r) => r.source === 'vertical')).toBe(true);
+      expect(bySource.some((r) => r.key === 'engine-role')).toBe(false);
+
+      const engine = await host.admin.listRoles({ source: ENGINE_SOURCE });
+      expect(engine.some((r) => r.key === 'engine-role')).toBe(true);
+
+      // Another tenant's roles are not this tenant's, the same way the audit read
+      // is scoped — the console must never show one tenant's role design to another.
+      const other = await host.admin.listRoles({ tenantId: tenantId.parse(ulid()) });
+      expect(other.some((r) => r.key === 'listed-role')).toBe(false);
     });
 
     it('scopes the audit read by tenant', async () => {

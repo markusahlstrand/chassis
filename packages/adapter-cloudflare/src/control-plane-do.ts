@@ -41,6 +41,30 @@ interface TenantRow {
   created_at: string;
 }
 
+/** The raw role row; `permissions` is a JSON blob in a TEXT column. */
+export interface RoleRow {
+  tenant_id: string;
+  role_key: string;
+  permissions: string;
+  source: string;
+}
+
+/** The raw directory row; the coordinator maps it through the `scope` contract. */
+export interface ScopeRow {
+  scope_id: string;
+  tenant_id: string;
+  parent_scope_id: string | null;
+  slug: string;
+  kind: string;
+  name: string;
+  vertical: string | null;
+  storage_shape: string;
+  jurisdiction: string | null;
+  status: string;
+  schema_version: string;
+  created_at: string;
+}
+
 interface AdminLogRow {
   id: string;
   actor: string;
@@ -51,6 +75,19 @@ interface AdminLogRow {
   before: string | null;
   after: string | null;
   at: string;
+}
+
+/** The audit filter, flattened for the RPC hop (`action` always an array or absent). */
+export interface AuditLogQuery {
+  tenantId?: string;
+  scopeId?: string;
+  actor?: string;
+  action?: string[];
+  since?: string;
+  until?: string;
+  limit?: number;
+  cursor?: string;
+  order?: 'asc' | 'desc';
 }
 
 /** The shape the coordinator hands `recordAdmin`; before/after are arbitrary JSON. */
@@ -74,9 +111,18 @@ const DIRECTORY_DDL = `
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL
   );
+  -- slug/kind/name/vertical are nullable here but required (except vertical) by
+  -- the scope contract — the column set must match whether the table was created
+  -- fresh or ALTERed up (see ensureDirectoryColumns), and SQLite cannot ADD a NOT
+  -- NULL column to a populated table. Zod is the enforcement point on read.
   CREATE TABLE IF NOT EXISTS scopes (
     scope_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
+    parent_scope_id TEXT,
+    slug TEXT,
+    kind TEXT,
+    name TEXT,
+    vertical TEXT,
     storage_shape TEXT NOT NULL DEFAULT 'A',
     jurisdiction TEXT,
     status TEXT NOT NULL DEFAULT 'active',
@@ -123,7 +169,27 @@ const DIRECTORY_DDL = `
     after TEXT,
     at TEXT NOT NULL
   );
+  -- Read-path indexes for the console (control-plane.md §4.5). The admin log is
+  -- append-only and only grows, so every filter it offers needs one.
+  -- NOTE: keep every comment in this DDL free of semicolons. The constructor
+  -- splits this string on the statement separator, and a semicolon inside a
+  -- comment strands a comment-only fragment that execs as "no statement".
+  CREATE INDEX IF NOT EXISTS _substrat_admin_log_tenant ON _substrat_admin_log (tenant_id, id);
+  CREATE INDEX IF NOT EXISTS _substrat_admin_log_scope ON _substrat_admin_log (scope_id, id);
+  CREATE INDEX IF NOT EXISTS _substrat_admin_log_actor ON _substrat_admin_log (actor, id);
+  CREATE INDEX IF NOT EXISTS _substrat_admin_log_action ON _substrat_admin_log (action, id);
+  CREATE INDEX IF NOT EXISTS _substrat_admin_log_at ON _substrat_admin_log (at);
+  CREATE INDEX IF NOT EXISTS scopes_tenant ON scopes (tenant_id, scope_id);
 `;
+
+/** The scope columns added after the directory's first shape shipped. */
+const SCOPE_COLUMNS_ADDED = [
+  'parent_scope_id TEXT',
+  'slug TEXT',
+  'kind TEXT',
+  'name TEXT',
+  'vertical TEXT',
+] as const;
 
 export class ControlPlaneDO extends DurableObject {
   private readonly sql: SqlStorage;
@@ -135,6 +201,39 @@ export class ControlPlaneDO extends DurableObject {
       const s = stmt.trim();
       if (s) this.sql.exec(s);
     }
+    this.ensureDirectoryColumns();
+  }
+
+  /**
+   * The directory's own migration path (control-plane.md §7). A singleton DO that
+   * was created before the scope record grew its naming columns keeps its storage
+   * across a deploy, so the DDL above — all `IF NOT EXISTS` — would leave it on
+   * the old shape. ALTER the columns in, backfill to the same defaults
+   * `resolveScopeRecord` applies, then add the uniqueness the contract claims.
+   *
+   * The ALTER is attempted-and-tolerated rather than guarded by a column probe:
+   * DO SQLite restricts PRAGMA, so `table_info` is not reliably available here
+   * (the pure adapter, which has it, probes instead). A duplicate column is the
+   * expected steady state on every cold start after the first — anything else
+   * rethrows.
+   */
+  private ensureDirectoryColumns(): void {
+    for (const ddl of SCOPE_COLUMNS_ADDED) {
+      try {
+        this.sql.exec(`ALTER TABLE scopes ADD COLUMN ${ddl}`);
+      } catch (err) {
+        if (!/duplicate column name/i.test((err as Error).message)) throw err;
+      }
+    }
+    this.sql.exec("UPDATE scopes SET slug = lower(scope_id) WHERE slug IS NULL");
+    this.sql.exec("UPDATE scopes SET kind = 'scope' WHERE kind IS NULL");
+    this.sql.exec('UPDATE scopes SET name = slug WHERE name IS NULL');
+    // After the backfill: a UNIQUE index over NULL slugs would permit the
+    // duplicates it exists to forbid (SQLite treats NULLs as distinct).
+    this.sql.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS scopes_tenant_slug ON scopes (tenant_id, slug)',
+    );
+    this.sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug ON tenants (slug)');
   }
 
   // -- tenant registry (control-plane.md §4.1) --------------------------------
@@ -156,11 +255,21 @@ export class ControlPlaneDO extends DurableObject {
     return row ? this.mapTenant(row) : undefined;
   }
 
-  /** INSERT OR IGNORE; return the new tenant, or null if it already existed. */
+  /** Idempotent on the id; return the new tenant, or null if it already existed. */
   createTenant(id: string, slug: string, name: string, createdAt: string): Tenant | null {
     if (this.readTenant(id)) return null; // idempotent — nothing created
+    // Checked explicitly rather than left to `INSERT OR IGNORE` + the
+    // `tenants_slug` UNIQUE index: OR IGNORE would swallow a collision from a
+    // DIFFERENT id and report the create as idempotent, silently not creating the
+    // tenant the caller asked for. Fail closed instead.
+    const slugOwner = this.sql
+      .exec('SELECT tenant_id FROM tenants WHERE slug = ?', slug)
+      .toArray()[0] as { tenant_id: string } | undefined;
+    if (slugOwner) {
+      throw new Error(`tenant slug '${slug}' already taken by ${slugOwner.tenant_id} (slugs are unique)`);
+    }
     this.sql.exec(
-      `INSERT OR IGNORE INTO tenants (tenant_id, slug, name, status, created_at)
+      `INSERT INTO tenants (tenant_id, slug, name, status, created_at)
        VALUES (?, ?, ?, 'active', ?)`,
       id,
       slug,
@@ -198,8 +307,14 @@ export class ControlPlaneDO extends DurableObject {
   provisionScope(
     tenantId: string,
     scopeId: string,
-    storageShape: string,
-    jurisdiction: string | null,
+    record: {
+      slug: string;
+      kind: string;
+      name: string;
+      vertical: string | null;
+      storageShape: string;
+      jurisdiction: string | null;
+    },
     createdAt: string,
   ): boolean {
     const tenantRow = this.sql
@@ -213,20 +328,86 @@ export class ControlPlaneDO extends DurableObject {
         `cannot provision scope under non-active tenant (status: ${tenantRow.status}): ${tenantId}`,
       );
     }
+    // Idempotency is on the scope_id (§3.3: idempotent and journaled — safe to
+    // re-run), so an existing scope short-circuits before the slug check:
+    // re-provisioning must not collide with itself.
     const existed =
       this.sql.exec('SELECT 1 FROM scopes WHERE scope_id = ?', scopeId).toArray()[0] !== undefined;
     if (!existed) {
+      const slugOwner = this.sql
+        .exec('SELECT scope_id FROM scopes WHERE tenant_id = ? AND slug = ?', tenantId, record.slug)
+        .toArray()[0] as { scope_id: string } | undefined;
+      if (slugOwner) {
+        throw new Error(
+          `scope slug '${record.slug}' already taken under tenant ${tenantId} ` +
+            `by ${slugOwner.scope_id} (slugs are unique within a tenant)`,
+        );
+      }
       this.sql.exec(
-        `INSERT OR IGNORE INTO scopes (scope_id, tenant_id, storage_shape, jurisdiction, status, created_at)
-         VALUES (?, ?, ?, ?, 'active', ?)`,
+        `INSERT INTO scopes
+           (scope_id, tenant_id, parent_scope_id, slug, kind, name, vertical,
+            storage_shape, jurisdiction, status, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?)`,
         scopeId,
         tenantId,
-        storageShape,
-        jurisdiction,
+        record.slug,
+        record.kind,
+        record.name,
+        record.vertical,
+        record.storageShape,
+        record.jurisdiction,
         createdAt,
       );
     }
     return !existed;
+  }
+
+  /**
+   * The scope's migration state, projected into the directory so the fleet
+   * question ("which scopes are behind?") is answerable from the index alone —
+   * §5.4's "fleet questions never fan out". Written by the coordinator after the
+   * ScopeDO reports what it applied.
+   */
+  setSchemaVersion(scopeId: string, schemaVersion: string): void {
+    this.sql.exec('UPDATE scopes SET schema_version = ? WHERE scope_id = ?', schemaVersion, scopeId);
+  }
+
+  listScopes(filter: {
+    tenantId?: string;
+    status?: string[];
+    vertical?: string;
+  }): ScopeRow[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.tenantId) {
+      where.push('tenant_id = ?');
+      params.push(filter.tenantId);
+    }
+    if (filter.status) {
+      // An empty array means "no status is acceptable" — match nothing, rather
+      // than degenerating into an unfiltered read of the whole fleet.
+      if (filter.status.length === 0) return [];
+      where.push(`status IN (${filter.status.map(() => '?').join(', ')})`);
+      params.push(...filter.status);
+    }
+    if (filter.vertical) {
+      where.push('vertical = ?');
+      params.push(filter.vertical);
+    }
+    const sql =
+      'SELECT * FROM scopes' +
+      (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+      ' ORDER BY scope_id';
+    return this.sql.exec(sql, ...params).toArray() as unknown as ScopeRow[];
+  }
+
+  /** Cross-checks the pair (K-3): a scope under a DIFFERENT tenant reads as absent. */
+  getScopeRecord(tenantId: string, scopeId: string): ScopeRow | undefined {
+    const row = this.sql
+      .exec('SELECT * FROM scopes WHERE scope_id = ?', scopeId)
+      .toArray()[0] as ScopeRow | undefined;
+    if (!row || row.tenant_id !== tenantId) return undefined;
+    return row;
   }
 
   /**
@@ -256,8 +437,9 @@ export class ControlPlaneDO extends DurableObject {
 
   /**
    * Validate ownership, enforce the legal transition graph (fail closed on an
-   * illegal one), flip the status. Returns the previous status for the audit.
-   * `action` rides along only to name the illegal-transition message.
+   * illegal one), flip the status. Returns the previous status AND the scope's
+   * vertical — both for the audit entry, sparing the coordinator a read
+   * round-trip. `action` rides along only to name the illegal-transition message.
    */
   transitionScope(
     tenantId: string,
@@ -265,10 +447,10 @@ export class ControlPlaneDO extends DurableObject {
     from: string[],
     to: ScopeStatus,
     action: string,
-  ): string {
+  ): { status: string; vertical: string | null } {
     const row = this.sql
-      .exec('SELECT tenant_id, status FROM scopes WHERE scope_id = ?', scopeId)
-      .toArray()[0] as { tenant_id: string; status: string } | undefined;
+      .exec('SELECT tenant_id, status, vertical FROM scopes WHERE scope_id = ?', scopeId)
+      .toArray()[0] as { tenant_id: string; status: string; vertical: string | null } | undefined;
     if (!row || row.tenant_id !== tenantId) {
       throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
     }
@@ -279,7 +461,7 @@ export class ControlPlaneDO extends DurableObject {
       );
     }
     this.sql.exec('UPDATE scopes SET status = ? WHERE scope_id = ?', to, scopeId);
-    return row.status;
+    return { status: row.status, vertical: row.vertical };
   }
 
   // -- roles (checker rule 1) -------------------------------------------------
@@ -296,6 +478,25 @@ export class ControlPlaneDO extends DurableObject {
       String(role.source),
     );
     return before;
+  }
+
+  /** Raw rows; the coordinator parses them through the `tenantRole` contract. */
+  listRoles(filter: { tenantId?: string; source?: string }): RoleRow[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.tenantId) {
+      where.push('tenant_id = ?');
+      params.push(filter.tenantId);
+    }
+    if (filter.source) {
+      where.push('source = ?');
+      params.push(filter.source);
+    }
+    const sql =
+      'SELECT tenant_id, role_key, permissions, source FROM _substrat_roles' +
+      (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+      ' ORDER BY tenant_id, role_key';
+    return this.sql.exec(sql, ...params).toArray() as unknown as RoleRow[];
   }
 
   getRole(tenantId: string, key: string): RoleDefinition | undefined {
@@ -467,15 +668,49 @@ export class ControlPlaneDO extends DurableObject {
     );
   }
 
-  auditLog(tenantId: string | null): AdminLogEntry[] {
-    const rows = (
-      tenantId
-        ? this.sql.exec(
-            'SELECT * FROM _substrat_admin_log WHERE tenant_id = ? ORDER BY id',
-            tenantId,
-          )
-        : this.sql.exec('SELECT * FROM _substrat_admin_log ORDER BY id')
-    ).toArray() as unknown as AdminLogRow[];
+  auditLog(query: AuditLogQuery): AdminLogEntry[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (query.tenantId) {
+      where.push('tenant_id = ?');
+      params.push(query.tenantId);
+    }
+    if (query.scopeId) {
+      where.push('scope_id = ?');
+      params.push(query.scopeId);
+    }
+    if (query.actor) {
+      where.push('actor = ?');
+      params.push(query.actor);
+    }
+    if (query.action) {
+      if (query.action.length === 0) return []; // no action is acceptable — match nothing
+      where.push(`action IN (${query.action.map(() => '?').join(', ')})`);
+      params.push(...query.action);
+    }
+    if (query.since) {
+      where.push('at >= ?');
+      params.push(query.since);
+    }
+    if (query.until) {
+      where.push('at < ?');
+      params.push(query.until);
+    }
+    const order = query.order === 'desc' ? 'DESC' : 'ASC';
+    if (query.cursor) {
+      // ULID order is chronological, so the entry id IS the cursor.
+      where.push(order === 'DESC' ? 'id < ?' : 'id > ?');
+      params.push(query.cursor);
+    }
+    let sql =
+      'SELECT * FROM _substrat_admin_log' +
+      (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+      ` ORDER BY id ${order}`;
+    if (query.limit !== undefined) {
+      sql += ' LIMIT ?';
+      params.push(query.limit);
+    }
+    const rows = this.sql.exec(sql, ...params).toArray() as unknown as AdminLogRow[];
     return rows.map(
       (r) =>
         ({

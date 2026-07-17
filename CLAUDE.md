@@ -13,8 +13,10 @@ Substrat is a hosted substrate for vertical business software: a multi-tenant ke
 | `packages/kernel` | Scope-host contract, permission checker, ulid | AGPL + commercial |
 | `packages/adapter-sqlite` | Pure-SQLite scope host (dev, CI, self-host, escrow) | AGPL + commercial |
 | `packages/contract-tests` | Suites every adapter must pass | AGPL + commercial |
+| `packages/control-plane-api` | HTTP surface over `HostAdmin` — the audited control-plane transport | AGPL + commercial |
 | `engines/*` | Domain engines (workorder, invoicing) | AGPL + commercial |
 | `demos/*` | Demo verticals (ServiceCo = `demos/fsm`) | private, never published |
+| `apps/console` | Control-plane admin console (tenants, fleet, admin log, permissions) | private |
 | `apps/docs` | Docs site | private |
 
 ## Commands

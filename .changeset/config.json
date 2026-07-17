@@ -8,7 +8,8 @@
       "@substrat-run/kernel",
       "@substrat-run/adapter-sqlite",
       "@substrat-run/adapter-cloudflare",
-      "@substrat-run/contract-tests"
+      "@substrat-run/contract-tests",
+      "@substrat-run/control-plane-api"
     ]
   ],
   "linked": [],

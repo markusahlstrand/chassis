@@ -82,9 +82,9 @@ host.defineOperation('acme/create-order', async (ctx, input) => {
 
 | Engine | Package | What it owns |
 |---|---|---|
-| [Work orders](/engines/workorder) | `@substrat-run/engine-workorder` | the order state machine, append-only time & material reporting |
-| [Invoicing](/engines/invoicing) | `@substrat-run/engine-invoicing` | invoice-basis accumulation from billable events, immutability on export |
-| [Protocols](/engines/protocol) | `@substrat-run/engine-protocol` | protocols/checklists with the sign → immutable invariant, verifiable content hash |
+| [Work orders](/engines/workorder/) | `@substrat-run/engine-workorder` | the order state machine, append-only time & material reporting |
+| [Invoicing](/engines/invoicing/) | `@substrat-run/engine-invoicing` | invoice-basis accumulation from billable events, immutability on export |
+| [Protocols](/engines/protocol/) | `@substrat-run/engine-protocol` | protocols/checklists with the sign → immutable invariant, verifiable content hash |
 
 All three are **product seeds**, extracted from the demo verticals — small deliberately,
 hardened as real verticals consume them. The protocol engine is the extraction proof
@@ -92,3 +92,31 @@ itself: it was forced out of vertical code only when a *second* vertical (a bike
 per-bike condition report) needed the same sign-immutability invariant in a different
 shape. Planned next, in the order verticals force them: scheduling/dispatch and
 ticketing (ärende).
+
+## How these pages are organized
+
+Every engine documents itself the same way, in the same five pages. The shape is a
+contract: a page that has nothing to say is a finding, not an omission.
+
+| Page | Answers |
+|---|---|
+| **index** | *Is this a good match?* — what it owns, what it won't do, when to reach for it |
+| **Domain model & invariants** | the tables, and the rules the engine will not let you break |
+| **Operations, functions & permissions** | the callable surface, and which parts are composable |
+| **Events** | what it emits and consumes, payload contracts, versioning |
+| **Composing & extending** | using it from a vertical, configuration, the connector seam |
+
+Two conventions worth knowing before you read:
+
+**Engines have no endpoints.** They expose *operations* (named handlers invoked through a
+scope stub, each doing its own permission check) and *in-scope functions* (plain exports a
+vertical calls inside its own transaction, where the caller owns the check). Any HTTP surface
+is generated from the manifest's `api` field, never hand-written. The split between those two
+surfaces **is** the extension model, which is why every engine has a page for it.
+
+**Engines take no configuration.** `registerModule` accepts one frozen constant; there is no
+options object, no factory, and no `config` field on the manifest. When behaviour must vary,
+you compose (your own operation calling in-scope functions), declare (a guard predicate with
+its own kernel-opaque config), store (tenant content as data in the scope), or gate (the
+entitlement flag). *Configuration is dynamic; composition is code.* The Composing page of
+each engine says which of those applies, and admits where the engine doesn't yet allow it.

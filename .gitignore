@@ -6,6 +6,11 @@ coverage/
 **/.vitepress/cache/
 .data/
 
+# Design handoff bundles dropped in the repo root. The tokens, brand assets and
+# component contracts they carry are ported into apps/console — the zip itself is
+# a delivery vehicle, not a source, and a new revision lands with every iteration.
+*.zip
+
 # Cloudflare Workers build/dev artifacts
 .wrangler/
 dist-worker/
