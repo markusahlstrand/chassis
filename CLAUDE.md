@@ -21,6 +21,8 @@ Substrat is a hosted substrate for vertical business software: a multi-tenant ke
 
 - `pnpm install` · `pnpm -r build` · `pnpm -r typecheck` · `pnpm test` (builds first)
 - `node tools/boundary-lint.mjs` — the layer rules below, enforced mechanically (runs in CI)
+- `pnpm lint:permissions` — emit each vertical's `PERMISSIONS.md` (the permission-diff
+  checkpoint below); CI runs it with `--check` and fails on drift
 - `pnpm fsm-demo dev` — run the ServiceCo demo (API :8787 + web :5173)
 - One vitest scenario per demo vertical: `pnpm --filter @substrat-run/demo-fsm test`
 - `pnpm --filter @substrat-run/docs run deploy` — build + ship the docs site to
@@ -77,8 +79,17 @@ Module code = everything reachable from a `ModuleRegistration` (operations, cons
 ## Two human checkpoints (agents never self-approve)
 
 1. **Migration diff** — new/changed `SqlMigration[]` presented for review before merge.
-2. **Permission diff** — new permission keys, role definitions, and grants presented
-   as a readable table (key → description → which roles hold it).
+2. **Permission diff** — new permission keys and role definitions presented as a readable
+   table (key → description → which roles hold it). This one has a **mechanical home**:
+   each vertical exports `MODULES` + `ROLES` from its seed, and `pnpm lint:permissions`
+   renders `demos/*/PERMISSIONS.md` from those same objects. The file is checked in and CI
+   re-emits with `--check`, so a widened role cannot merge without appearing in the PR diff.
+   Entity-narrowed **grants** are per-principal and ULID-keyed, so only their declared
+   *shapes* (`ENTITY_GRANTS`) are in the artifact — the grants themselves are a runtime
+   console concern (control-plane.md §4.5).
+
+Both are still a *human* reading a diff. CI going red is what makes the reading unskippable;
+it is not itself the approval.
 
 Everything else the platform pushes back on mechanically: the typed SDK rejects invalid
 states at compile time, `tools/boundary-lint.mjs` blocks raw access, contract tests and

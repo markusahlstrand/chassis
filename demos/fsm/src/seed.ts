@@ -5,7 +5,9 @@ import {
   principalId,
   scopeId,
   tenantId,
+  type PermissionKey,
   type PrincipalId,
+  type RoleDefinition,
   type ScopeId,
   type TenantId,
 } from '@substrat-run/contracts';
@@ -32,15 +34,53 @@ export interface DemoWorld {
   kontorId: string; // facility of Kontorshotellet
 }
 
+/**
+ * The modules this vertical composes, in registration order — which is a
+ * migration-ordering contract: the protocol engine's 0001-init must journal
+ * before serviceco's 0003-protocols-to-engine copies milestone-A data into its
+ * tables.
+ *
+ * Exported because `tools/permission-diff.mts` renders the permission
+ * checkpoint from this same array — the emitter and the running host read the
+ * one object, so the artifact cannot drift from what is actually registered.
+ */
+export const MODULES = [workorderModule, invoicingModule, protocolModule, servicecoModule];
+
+const officePerms = [
+  SC_PERM.customerManage, SC_PERM.facilityManage,
+  WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
+  INV.read, INV.export,
+  PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
+];
+
+/**
+ * This vertical's role table — identical in every tenant, which is why it is a
+ * plain constant and why the permission snapshot can render it without naming a
+ * tenant. Per-tenant customisation is a console concern (runtime), not a
+ * build-time one. Exported for the same reason as MODULES.
+ */
+export const ROLES: RoleDefinition[] = [
+  { key: 'office-admin', permissions: officePerms, source: 'vertical' },
+  // Technicians fill protocols; SIGNING stays with the office (arbetsledare) —
+  // the fill/sign permission split from engine-protocol.md §4.6.
+  { key: 'technician', permissions: [WO.read, WO.report, PROTO.read, PROTO.fill], source: 'vertical' },
+];
+
+/** What a portal customer receives, narrowed to their own customer record. */
+const portalPerms = [WO.read];
+
+/**
+ * Entity-narrowed grant SHAPES. The grants themselves are per-principal and
+ * minted at runtime, so they can never be a build artifact; their shape can, and
+ * it is what tells a reviewer which keys are reachable outside the role table.
+ */
+export const ENTITY_GRANTS: { entityType: string; permissions: PermissionKey[] }[] = [
+  { entityType: 'customer', permissions: portalPerms },
+];
+
 export function buildDemoHost(dir: string): SqliteScopeHost {
   const host = new SqliteScopeHost({ dir }); // default checker: the tuple engine
-  host.registerModule(workorderModule);
-  host.registerModule(invoicingModule);
-  // Registration order is a migration-ordering contract: the protocol
-  // engine's 0001-init must journal before serviceco's
-  // 0003-protocols-to-engine copies milestone-A data into its tables.
-  host.registerModule(protocolModule);
-  host.registerModule(servicecoModule);
+  for (const m of MODULES) host.registerModule(m);
   return host;
 }
 
@@ -85,22 +125,9 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
   await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
-  // Roles: identical definitions in both tenants (vertical-defined).
-  const officePerms = [
-    SC_PERM.customerManage, SC_PERM.facilityManage,
-    WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
-    INV.read, INV.export,
-    PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
-  ];
+  // Roles: identical definitions in both tenants (vertical-defined) — see ROLES.
   for (const t of [world.t1, world.t2]) {
-    await host.admin.defineRole(staff, t, { key: 'office-admin', permissions: officePerms, source: 'vertical' });
-    // Technicians fill protocols; SIGNING stays with the office (arbetsledare) —
-    // the fill/sign permission split from engine-protocol.md §4.6.
-    await host.admin.defineRole(staff, t, {
-      key: 'technician',
-      permissions: [WO.read, WO.report, PROTO.read, PROTO.fill],
-      source: 'vertical',
-    });
+    for (const role of ROLES) await host.admin.defineRole(staff, t, role);
   }
   await host.admin.assignRole(staff, { principalId: world.anna, roleKey: 'office-admin', node: { tenantId: world.t1, scopeId: null } });
   await host.admin.assignRole(staff, { principalId: world.harald, roleKey: 'technician', node: { tenantId: world.t1, scopeId: world.s1 } });
@@ -177,22 +204,20 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     });
   }
 
-  // Portal grants (idempotent): entity-narrowed workorder:read per customer.
-  if (world.grundenId) {
-    await host.admin.grant(staff, {
-      principalId: world.berit, permission: WO.read,
-      node: { tenantId: world.t1, scopeId: world.s1 },
-      entity: { entityType: 'customer', entityId: world.grundenId },
-      grantedBy: world.anna,
-    });
-  }
-  if (world.kontorshotelletId) {
-    await host.admin.grant(staff, {
-      principalId: world.styrbjorn, permission: WO.read,
-      node: { tenantId: world.t1, scopeId: world.s1 },
-      entity: { entityType: 'customer', entityId: world.kontorshotelletId },
-      grantedBy: world.anna,
-    });
+  // Portal grants (idempotent): entity-narrowed per customer — see ENTITY_GRANTS.
+  for (const [principal, customerId] of [
+    [world.berit, world.grundenId],
+    [world.styrbjorn, world.kontorshotelletId],
+  ] as const) {
+    if (!customerId) continue;
+    for (const permission of portalPerms) {
+      await host.admin.grant(staff, {
+        principalId: principal, permission,
+        node: { tenantId: world.t1, scopeId: world.s1 },
+        entity: { entityType: 'customer', entityId: customerId },
+        grantedBy: world.anna,
+      });
+    }
   }
 
   return world;

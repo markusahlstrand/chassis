@@ -3,8 +3,10 @@
 **Status:** partly implemented. Implements plan decision 30; kernel design log K-20.
 §4.1 (tenant record), §4.2 (scope lifecycle, minus hostnames), §4.3 (entitlement store), and
 §4.4 (`PlatformActor` + admin audit log) are **shipped on both adapters and covered by
-contract tests**. Still unbuilt: hostname provisioning and the `hostname → (tenant, scope,
-vertical)` map (§4.2, §5.5), §4.5's console, and §5's meters. §2's "the tenant does not
+contract tests**. §4.5's permission diff shipped its **build-time half** outside the console
+(`tools/permission-diff.mts` → checked-in `demos/*/PERMISSIONS.md`, CI-diffed) — see §4.5.
+Still unbuilt: hostname provisioning and the `hostname → (tenant, scope, vertical)` map
+(§4.2, §5.5), the console itself, and §5's meters. §2's "the tenant does not
 exist" finding is **historical** — it is what this document caused to be fixed; it is kept
 because the argument for the shared layer still reads from it.
 **What this is:** the **shared platform layer that N per-vertical deployments sit on** —
@@ -215,17 +217,32 @@ Thin, over the above. In build order:
 1. Tenant list; tenant detail (scopes, entitlements, status, **which vertical** each scope runs).
 2. Create tenant; provision scope; suspend / archive.
 3. Entitlement grants.
-4. **Roles and grants — the permission diff.**
+4. **Roles and grants — the permission diff** (the *runtime* half; see below).
 5. Read-only history: the admin audit log; per-scope events via §5.4's admin-query RPC.
 6. Fleet view: per-vertical deployment versions, migration status, scopes-behind counts —
    the §5.4 "fleet questions never fan out" surface, answered from the directory index.
 
-**The permission diff is the sleeper feature.** CLAUDE.md names two human checkpoints agents
-may never self-approve — the migration diff and the permission diff — and *neither has a
-home*. Rendering "key → description → which roles hold it" is exactly what D-23's proof
-paths were built to power ("explain / view-as / the reviewable permission diff"). The
-console is where that checkpoint stops being a convention in a markdown file and becomes a
-screen someone has to click. That is a stronger argument for building it than tenant CRUD is.
+**The permission diff is the sleeper feature** — and it split in two once built.
+
+The **build-time half shipped first, without the console and without a kernel change**:
+`tools/permission-diff.mts` renders `demos/*/PERMISSIONS.md` from each vertical's exported
+`MODULES` + `ROLES`, checked in and CI-diffed with `--check`. It turns out roles are
+tenant-agnostic constants and manifests are exported consts, so the whole artifact is a pure
+function of code — nothing to boot, and therefore no ULID to launder out of the output. It is
+also the **first instance of D-22/D-29's emit → check-in → CI-diff pipeline**, which both
+decisions describe in the present tense and neither had built; OAS and event-schema emission
+plug into the same convention.
+
+That leaves the console the **runtime half**, which the artifact structurally cannot cover:
+capability **grants** (per-principal, per-entity, minted with random ULIDs — only their
+declared *shapes* are in the artifact) and **operator-defined roles** (created against a live
+deployment, never in provisioning code). Rendering those is exactly what D-23's proof paths
+were built to power ("explain / view-as / the reviewable permission diff").
+
+So the argument for the console is now narrower and more honest than "the checkpoint has no
+home". It has one; CI goes red on an unreviewed change to shipped role design. What the
+console adds is the surface for permission state that *only exists at runtime* — and turning
+"someone should read this diff" into "someone clicked approve".
 
 Plan §6 already lists the ops console as **build, internal first** — registry/tenant health,
 migration and reconciliation status, billing state, and consented, audited support

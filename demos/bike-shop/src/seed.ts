@@ -5,7 +5,9 @@ import {
   principalId,
   scopeId,
   tenantId,
+  type PermissionKey,
   type PrincipalId,
+  type RoleDefinition,
   type ScopeId,
   type TenantId,
 } from '@substrat-run/contracts';
@@ -32,12 +34,60 @@ export interface BikeShopWorld {
   bianchiId: string; // Otto's bike
 }
 
+/**
+ * The modules this vertical composes, in registration order. Exported because
+ * `tools/permission-diff.mts` renders the permission checkpoint from this same
+ * array — the emitter and the running host read the one object, so the artifact
+ * cannot drift from what is actually registered.
+ */
+export const MODULES = [workorderModule, invoicingModule, protocolModule, bikeShopModule];
+
+// protocol:countersign is deliberately in NO role: the counter-signature is the
+// CUSTOMER's act at pickup, granted entity-narrowed per customer via
+// ENTITY_GRANTS — not even the verkstadschef can counter-sign on the customer's
+// behalf. The permission snapshot renders it as held by no role, which is the
+// design working, not a gap.
+const adminPerms = [
+  CS_PERM.customerManage, CS_PERM.bikeManage,
+  WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
+  INV.read, INV.export,
+  PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
+];
+
+/**
+ * This vertical's role table — identical in every tenant, which is why it is a
+ * plain constant and why the permission snapshot can render it without naming a
+ * tenant. Per-tenant customisation is a console concern (runtime), not a
+ * build-time one. Exported for the same reason as MODULES.
+ */
+export const ROLES: RoleDefinition[] = [
+  { key: 'workshop-admin', permissions: adminPerms, source: 'vertical' },
+  // The mechanic fills the condition report; SIGNING stays with the workshop
+  // lead — the fill/sign permission split (engine-protocol.md §4.6).
+  { key: 'mechanic', permissions: [WO.read, WO.report, PROTO.read, PROTO.fill], source: 'vertical' },
+];
+
+/**
+ * What a portal customer receives, narrowed to their own customer record.
+ * workorder:read lets them see their repairs; protocol:read + protocol:countersign
+ * let them review and counter-sign the condition report at pickup — the grants
+ * resolve along protocol → workorder → bike → customer.
+ */
+const portalPerms = [WO.read, PROTO.read, PROTO.countersign];
+
+/**
+ * Entity-narrowed grant SHAPES. The grants themselves are per-principal and
+ * minted at runtime, so they can never be a build artifact; their shape can, and
+ * it is what tells a reviewer which keys are reachable outside the role table —
+ * protocol:countersign above all.
+ */
+export const ENTITY_GRANTS: { entityType: string; permissions: PermissionKey[] }[] = [
+  { entityType: 'customer', permissions: portalPerms },
+];
+
 export function buildBikeShopHost(dir: string): SqliteScopeHost {
   const host = new SqliteScopeHost({ dir }); // default checker: the tuple engine
-  host.registerModule(workorderModule);
-  host.registerModule(invoicingModule);
-  host.registerModule(protocolModule);
-  host.registerModule(bikeShopModule);
+  for (const m of MODULES) host.registerModule(m);
   return host;
 }
 
@@ -85,24 +135,9 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
 
   // Roles: identical definitions in both tenants (vertical-defined).
-  // protocol:countersign is deliberately in NO role: the counter-signature is
-  // the CUSTOMER's act at pickup, granted entity-narrowed per customer below —
-  // not even the verkstadschef can counter-sign on the customer's behalf.
-  const adminPerms = [
-    CS_PERM.customerManage, CS_PERM.bikeManage,
-    WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
-    INV.read, INV.export,
-    PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
-  ];
+  // Roles: identical definitions in both tenants (vertical-defined) — see ROLES.
   for (const t of [world.t1, world.t2]) {
-    await host.admin.defineRole(staff, t, { key: 'workshop-admin', permissions: adminPerms, source: 'vertical' });
-    // The mechanic fills the condition report; SIGNING stays with the
-    // workshop lead — the fill/sign permission split (engine-protocol.md §4.6).
-    await host.admin.defineRole(staff, t, {
-      key: 'mechanic',
-      permissions: [WO.read, WO.report, PROTO.read, PROTO.fill],
-      source: 'vertical',
-    });
+    for (const role of ROLES) await host.admin.defineRole(staff, t, role);
   }
   await host.admin.assignRole(staff, { principalId: world.greta, roleKey: 'workshop-admin', node: { tenantId: world.t1, scopeId: null } });
   await host.admin.assignRole(staff, { principalId: world.mans, roleKey: 'mechanic', node: { tenantId: world.t1, scopeId: world.s1 } });
@@ -179,11 +214,7 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
     });
   }
 
-  // Portal grants (idempotent): entity-narrowed per customer. workorder:read
-  // lets the customer see their repairs; protocol:read + protocol:countersign
-  // let them review and counter-sign the condition report at pickup — the
-  // grants resolve along protocol → workorder → bike → customer.
-  const portalPerms = [WO.read, PROTO.read, PROTO.countersign];
+  // Portal grants (idempotent): entity-narrowed per customer — see ENTITY_GRANTS.
   if (world.lisbethId) {
     for (const permission of portalPerms) {
       await host.admin.grant(staff, {
