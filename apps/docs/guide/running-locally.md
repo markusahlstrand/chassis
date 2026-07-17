@@ -148,13 +148,46 @@ HTTP, rather than co-locating the directory in its own host as the demo does for
 convenience. Until that seam exists, the local stack is one vertical + the console; the
 console's fleet view is designed for the many-vertical world it will grow into.
 
+## The faithful topology: `pnpm dev:connected`
+
+`pnpm dev` co-locates the control plane and the vertical in one process for speed. To run
+the shape production actually uses — a **separate** control plane that the vertical
+*registers into* and is *gated by* — use:
+
+```sh
+pnpm dev:connected
+```
+
+This starts three things: a standalone control plane (its own process, on `:8788`), the
+ServiceCo vertical in **connected mode**, and the console pointed at that control plane. On
+boot the vertical registers its tenants and scopes into the control plane over HTTP; before
+every request it asks the control plane "is this scope still active?" So when you suspend a
+scope in the console, the vertical's next action fails closed — the same outcome as the
+co-located stack, but now crossing a real process boundary, exactly as it would cross a
+deployment boundary in production.
+
+```mermaid
+flowchart LR
+  CO["Console<br/>:5272"] -->|writes| CP["Control plane<br/>:8788 — own process"]
+  V["ServiceCo vertical<br/>:8871 — own process"] -->|"register + gate (HTTP)"| CP
+  V -->|local execution| DB[("scope SQLite")]
+```
+
+The seam is `ControlPlaneClient` from `@substrat-run/control-plane-api`: `createTenant` /
+`provisionScope` / `grantEntitlement` to register, and `assertScopeActive` to gate. One
+deliberate limit — the control-plane HTTP surface exposes lifecycle and entitlements but
+**not role or grant writes** (those are the permission-diff human checkpoint), so a
+connected vertical keeps its permission model local while the shared plane is authoritative
+for tenant/scope lifecycle and entitlements.
+
 ## How production differs
 
-Co-location is a local convenience, not the topology. In production the control plane is
-its **own deployment** and each vertical is a **separate deployment**, all reaching one
-durable directory — the same surfaces you see here, split across processes and hosts. The
-SQLite adapter you run locally and the Cloudflare adapter you deploy on are the same kernel
-above [the scope-host contract](/concepts/scope-host); only the composition root changes.
+Co-location is a local convenience, not the topology; `pnpm dev:connected` above is the
+faithful shape on one machine. In production the control plane is its **own deployment** and
+each vertical is a **separate deployment**, all reaching one durable directory — the same
+surfaces you see here, split across processes and hosts. The SQLite adapter you run locally
+and the Cloudflare adapter you deploy on are the same kernel above
+[the scope-host contract](/concepts/scope-host); only the composition root changes.
 
 ## Next steps
 

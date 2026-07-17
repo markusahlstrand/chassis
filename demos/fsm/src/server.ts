@@ -14,6 +14,8 @@ import {
 } from '@substrat-run/contracts';
 import { ulid, type ScopeStub } from '@substrat-run/kernel';
 import {
+  ControlPlaneClient,
+  ControlPlaneError,
   createControlPlaneApi,
   UNSAFE_devPlatformActorAuth,
 } from '@substrat-run/control-plane-api';
@@ -148,11 +150,30 @@ app.get('/api/me', async (c) => {
   });
 });
 
-// A protected route resolves the caller across the mounted adapters, then getScope
-// for the RESOLVED tenant/scope (so mallory lands in t2/s2). None matched → 401.
+// The connect seam (first-flow.md slice 4). With CONTROL_PLANE_URL set, this
+// vertical registers into a SEPARATELY-run shared control plane and gates every
+// request on its authoritative lifecycle — a suspend in the console (pointed at
+// that same control plane) fails this vertical's next request closed, across the
+// process boundary. Without it, the vertical embeds its own control plane on
+// cpPort, co-located in this process (the simple local default).
+const cpUrl = process.env.CONTROL_PLANE_URL;
+let cpClient: ControlPlaneClient | undefined;
+
+// A protected route resolves the caller, gates on the directory (remote when
+// connected), then getScope for the RESOLVED tenant/scope (so mallory lands in
+// t2/s2). None matched → 401.
 async function stub(c: Context): Promise<ScopeStub> {
   const r: AuthResult | null = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!r) throw new HTTPException(401, { message: 'unauthorized' });
+  if (cpClient) {
+    // Remote lifecycle gate: the shared control plane is the authority. A suspend
+    // there (via the console) fails this request closed, across the boundary.
+    try {
+      await cpClient.assertScopeActive(r.tenantId, r.scopeId);
+    } catch (e) {
+      throw new HTTPException(403, { message: e instanceof ControlPlaneError ? e.message : String(e) });
+    }
+  }
   return host.getScope(r.principal, r.tenantId, r.scopeId);
 }
 
@@ -160,18 +181,54 @@ async function stub(c: Context): Promise<ScopeStub> {
 // also installs the shared fail-closed error handler.
 mountApi(app, stub);
 
-serve({ fetch: app.fetch, port });
+if (cpUrl) {
+  // Connected: mirror the seeded directory into the shared control plane so the
+  // console (pointed there) sees this vertical's tenants and scopes; the gate
+  // above then enforces its lifecycle. Roles stay LOCAL — role writes are not on
+  // the control-plane HTTP surface (the permission-diff checkpoint), so the shared
+  // plane is the authority for tenant/scope lifecycle and entitlements only.
+  cpClient = new ControlPlaneClient({ baseUrl: cpUrl, actor: platformActorId.parse(ulid()) });
+  const tenants = await host.admin.listTenants();
+  const scopes = await host.admin.listScopes();
+  // Everything below is idempotent, so retry the whole registration while the
+  // control plane is still starting up (concurrently launches both at once).
+  for (let attempt = 1; ; attempt++) {
+    try {
+      for (const t of tenants) {
+        await cpClient.createTenant({ id: t.id, slug: t.slug, name: t.name });
+        for (const key of await host.admin.listEntitlements(t.id)) {
+          await cpClient.grantEntitlement(t.id, key);
+        }
+      }
+      for (const s of scopes) {
+        await cpClient.provisionScope({
+          tenantId: s.tenantId,
+          scopeId: s.id,
+          slug: s.slug,
+          kind: s.kind,
+          name: s.name,
+          vertical: s.vertical,
+          jurisdiction: (s.jurisdiction ?? null) as 'eu' | null,
+        });
+      }
+      break;
+    } catch (e) {
+      if (e instanceof ControlPlaneError && e.status === 0 && attempt < 40) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      throw e;
+    }
+  }
+} else {
+  // Co-located: the shared control plane over the same `host`, on cpPort. UNSAFE
+  // dev-actor auth is the only posture a local stub may take (control-plane.md §6);
+  // this listener binds localhost only.
+  const controlPlane = createControlPlaneApi({ host, authenticate: UNSAFE_devPlatformActorAuth() });
+  serve({ fetch: controlPlane.fetch, port: cpPort, hostname: '127.0.0.1' });
+}
 
-// The shared control plane over the same `host`. UNSAFE dev-actor auth is the
-// only posture a local stub may take (control-plane.md §6); this listener binds
-// localhost only. Any valid ULID is accepted as the platform actor — the console
-// defaults to CONSOLE_ACTOR via VITE_DEV_ACTOR, so it authenticates with no
-// copy-paste.
-const controlPlane = createControlPlaneApi({
-  host,
-  authenticate: UNSAFE_devPlatformActorAuth(),
-});
-serve({ fetch: controlPlane.fetch, port: cpPort, hostname: '127.0.0.1' });
+serve({ fetch: app.fetch, port });
 
 // One consolidated banner instead of scattered log lines, so `pnpm dev` ends on a
 // clear "open this" pointer rather than interleaved startup noise. The console and
@@ -181,9 +238,13 @@ serve({ fetch: controlPlane.fetch, port: cpPort, hostname: '127.0.0.1' });
 // (apps/console/vite.config.ts defaults WEB_PORT to 5272).
 const inStack = process.env.SUBSTRAT_STACK === '1';
 const consolePort = Number(process.env.CONSOLE_PORT ?? 5272);
+const subtitle = cpUrl ? 'connected to a shared control plane' : 'one process, one SQLite dir';
+const cpLine = cpUrl
+  ? `      control plane         ${cpUrl}  (shared, connected)`
+  : `      control plane API     http://localhost:${cpPort}`;
 const lines = [
   '',
-  `  substrat · ${inStack ? 'local stack' : 'ServiceCo API'} — one process, one SQLite dir`,
+  `  substrat · ${inStack ? 'local stack' : 'ServiceCo API'} — ${subtitle}`,
   '  ' + '─'.repeat(52),
   ...(inStack
     ? [
@@ -193,7 +254,7 @@ const lines = [
       ]
     : []),
   `      vertical API          http://localhost:${port}`,
-  `      control plane API     http://localhost:${cpPort}`,
+  cpLine,
   '  ' + '─'.repeat(52),
   `    data   ${dataDir}`,
   `    auth   ${adapters.map((a) => a.id).join(', ')}`,
