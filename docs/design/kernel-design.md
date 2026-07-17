@@ -985,6 +985,42 @@ externalization convention is day one; translations are not).
     accumulates a year of links; retrofitting revocation onto edges already in production
     means auditing every grant that ever resolved through them.
 
+16. **Consumer dispatch routes on event *type* alone, so D-28's dual-emit deprecation
+    window is unimplementable — and actively dangerous.** D-28 says a real change to a
+    shipped payload means a `schemaVersion` bump plus dual-emit through a deprecation
+    window, so consumers can migrate. The kernel offers nothing to make that safe. A
+    manifest's `consumes` entry carries a `schemaVersion`, but registration discards it
+    (`declaredConsumes = new Set(manifest.events.consumes.map((c) => c.type))`), the
+    registry is `Record<eventType, ConsumerHandler>` with no version dimension, and dispatch
+    selects `WHERE o.type = ?` with no version predicate. Both adapters agree, so this is
+    the contract, not an adapter quirk. Consequence: dual-emitting v1 and v2 delivers **both
+    events to the same consumer**, and the deprecation window — the mechanism meant to make
+    migration safe — becomes the mechanism that double-processes. For
+    `invoicing.underlag-exported`, whose consumer is by design an accounting connector, that
+    is a double invoice, silently, in production. The declared `schemaVersion` is currently
+    decorative: it reads like a routing key and is not one, which is worse than absent.
+    Found while bumping that event to v2 (docs/design/commerce-gaps.md §3.1); the bump
+    shipped as a **replace**, deliberately violating D-28's dual-emit rule, because a
+    replace fails loudly (a v1 consumer's strict parse rejects v2 and dead-letters) where
+    dual-emit fails silently and expensively. That is a workaround, not a resolution: either
+    dispatch honours `(type, schemaVersion)` and D-28 works as written, or D-28's dual-emit
+    clause is struck and every payload change is a replace with a loud-failure contract.
+    The current state — a decision the platform cannot execute — is the one option that
+    should not survive review. Decide before a third party consumes an engine event; after
+    that, the choice is someone else's outage.
+
+17. **Is vertical-owned PII inside the erasure guarantee, or outside it?** D-27's
+    guarantee-surface test says data that must sit inside the permission/audit/**GDPR**
+    surface belongs in an engine rather than a template. Events carry a `piiClass`, which
+    classifies the *event*; nothing classifies a **table**. A vertical storing a customer's
+    shipping address in its own side table (the placement docs/design/commerce-gaps.md §4.2
+    argues for on reshaping grounds) is holding personal data the kernel has no view of and
+    no erasure story for. Either the kernel offers an erasure/retention primitive that
+    vertical tables can declare into — in which case §4.2's placement needs revisiting — or
+    every vertical re-implements erasure, which is precisely the duplication the
+    guarantee-surface test exists to prevent. Unowned today because no demo stores personal
+    data worth erasing; a real customer address is the trigger.
+
 ## 14. Design log
 
 | # | Date | Design decision | Notes |

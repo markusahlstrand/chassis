@@ -308,7 +308,7 @@ them (K-16).
 | `workorder.completed` | 1 | none | `{orderId, number, facility, customer, billable: BillableLine[], total: Money}` |
 | `workorder.closed` | 1 | none | `{orderId}` |
 | `invoicing.underlag-updated` | 1 | none | `{underlagId, addedLines, source: EntityRef}` |
-| `invoicing.underlag-exported` | 1 | none | `{underlagId, number, total: Money}` |
+| `invoicing.underlag-exported` | 2 | none | `{underlagId, number, total: Money}` |
 | `protocol.instantiated` | 1 | none | `{instanceId, templateKey, templateVersion, title, entity: EntityRef}` |
 | `protocol.response-recorded` | 1 | pseudonymous → filler | `{instanceId, responseId, itemKey, value, entity}` |
 | `protocol.signed` | 1 | pseudonymous → signer | `{instanceId, templateKey, templateVersion, entity, signedBy, method, contentHash, responses}` — fat: the frozen answers travel |

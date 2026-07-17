@@ -26,8 +26,13 @@ events: {
 
 Prices are frozen from the payload at the moment the work order completed. If the
 vertical's price list changes tomorrow, yesterday's underlag doesn't. Consumers are
-delivered at-least-once; find-or-create plus the kernel's delivery journal keep the
-handler idempotent.
+delivered at-least-once; find-or-create, the kernel's delivery journal, and a
+**source-id guard** (the source order is the dedup key) keep each handler idempotent, so
+a replay adds nothing rather than billing twice.
+
+An underlag is **one document in one currency**: totals use the currency-aware `addMoney`,
+and a delivery whose lines disagree on currency is rejected at write time and
+dead-lettered rather than producing a total that means nothing.
 
 ## The immutability invariant
 
@@ -39,8 +44,11 @@ An underlag is `open` or `exported`:
 - Billable work arriving *after* export opens a **new** underlag. History is never
   rewritten; late facts become new facts.
 
-`invoicing.underlag-exported` is the natural hook for an accounting connector that
-turns the frozen basis into a real invoice.
+`invoicing.underlag-exported` (**schemaVersion 2**) is the natural hook for an accounting
+connector that turns the frozen basis into a real invoice. Its payload is
+`{ underlagId, number, total: Money }`; v1's `total` was a bare string with no currency.
+v2 **replaces** v1 rather than dual-emitting, because consumer dispatch keys on event type
+alone — emitting both would deliver both to one consumer and risk a double invoice.
 
 ## Operations
 
