@@ -1,0 +1,137 @@
+import type { Scope, ScopeId, Tenant, TenantId } from '@substrat-run/contracts';
+import { DEV_ACTOR_HEADER } from './auth.js';
+
+/**
+ * A typed HTTP client for the control-plane API — the vertical side of the
+ * connect seam (first-flow.md slice 4).
+ *
+ * A vertical that runs against a *separately deployed* shared control plane uses
+ * this to (a) register its tenant, entitlements, and scope on boot, and (b) gate
+ * each request on the directory's authoritative lifecycle — `assertScopeActive`
+ * fails closed exactly as the kernel's own `getScope` does, so a suspend in the
+ * console bites the vertical's next operation even across process and deployment
+ * boundaries.
+ *
+ * What it deliberately does NOT do: write roles or grants. Those are not on the
+ * control-plane HTTP surface (api.ts §4.5 — permission writes are the human
+ * checkpoint, D-22/D-29), so a connected vertical keeps its permission model
+ * local and treats the shared plane as the authority for tenant/scope lifecycle
+ * and entitlements only.
+ *
+ * `fetch` is injectable: pass a Worker service-binding's fetch, or the router's
+ * own `app.fetch` for an in-process test, instead of the global.
+ */
+export interface ControlPlaneClientOptions {
+  /** Base URL of the control-plane API, e.g. `https://cp.example.com` or `http://127.0.0.1:8788`. */
+  baseUrl: string;
+  /** The platform actor id stamped as the audit subject on every write. */
+  actor: string;
+  /** Defaults to the global `fetch`. */
+  fetch?: typeof globalThis.fetch;
+}
+
+export interface ClientProvisionScopeInput {
+  tenantId: TenantId;
+  scopeId: ScopeId;
+  slug?: string;
+  kind?: string;
+  name?: string;
+  vertical?: string | null;
+  jurisdiction?: 'eu' | null;
+}
+
+/** A non-2xx (or unreachable) control-plane response. `status` is 0 on a transport error. */
+export class ControlPlaneError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ControlPlaneError';
+  }
+}
+
+export class ControlPlaneClient {
+  private readonly baseUrl: string;
+  private readonly actor: string;
+  private readonly fetchImpl: typeof globalThis.fetch;
+
+  constructor(options: ControlPlaneClientOptions) {
+    this.baseUrl = options.baseUrl.replace(/\/$/, '');
+    this.actor = options.actor;
+    this.fetchImpl = options.fetch ?? globalThis.fetch;
+  }
+
+  private async call<T>(path: string, init?: RequestInit, allow404 = false): Promise<T> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          [DEV_ACTOR_HEADER]: this.actor,
+          'content-type': 'application/json',
+          ...init?.headers,
+        },
+      });
+    } catch (e) {
+      // A transport failure (control plane down) must fail closed, not silently
+      // pass — a vertical that cannot reach the authority does not get to run.
+      throw new ControlPlaneError(0, `control plane unreachable: ${(e as Error).message}`);
+    }
+    if (res.status === 404 && allow404) return undefined as T;
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new ControlPlaneError(res.status, body?.error ?? `${res.status} ${res.statusText}`);
+    }
+    return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  }
+
+  // -- registration (idempotent, mirrors HostAdmin) --------------------------
+
+  createTenant(input: { id: TenantId; slug: string; name: string }): Promise<Tenant> {
+    return this.call('/tenants', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  grantEntitlement(tenantId: TenantId, key: string): Promise<string[]> {
+    return this.call(`/tenants/${tenantId}/entitlements/${key}`, { method: 'PUT' });
+  }
+
+  provisionScope(input: ClientProvisionScopeInput): Promise<Scope> {
+    return this.call('/scopes', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  // -- reads used for gating -------------------------------------------------
+
+  getTenant(tenantId: TenantId): Promise<Tenant | undefined> {
+    return this.call(`/tenants/${tenantId}`, undefined, true);
+  }
+
+  getScopeRecord(tenantId: TenantId, scopeId: ScopeId): Promise<Scope | undefined> {
+    return this.call(`/tenants/${tenantId}/scopes/${scopeId}`, undefined, true);
+  }
+
+  listEntitlements(tenantId: TenantId): Promise<string[]> {
+    return this.call(`/tenants/${tenantId}/entitlements`);
+  }
+
+  /**
+   * The gate. Throws unless the tenant is active AND the scope exists and is
+   * active — the same fail-closed logic the kernel's `validateScopeAccess`
+   * applies locally, so a tenant-level cascade suspend bites too, not just a
+   * per-scope one. Call it before handing a request to the local scope host.
+   */
+  async assertScopeActive(tenantId: TenantId, scopeId: ScopeId): Promise<void> {
+    const [tenant, scope] = await Promise.all([
+      this.getTenant(tenantId),
+      this.getScopeRecord(tenantId, scopeId),
+    ]);
+    if (!tenant) throw new ControlPlaneError(403, `unknown tenant: ${tenantId}`);
+    if (tenant.status !== 'active') {
+      throw new ControlPlaneError(403, `tenant not active (status: ${tenant.status}): ${tenantId}`);
+    }
+    if (!scope) throw new ControlPlaneError(403, `unknown scope for tenant: (${tenantId}, ${scopeId})`);
+    if (scope.status !== 'active') {
+      throw new ControlPlaneError(403, `scope not active (status: ${scope.status}): ${scopeId}`);
+    }
+  }
+}
