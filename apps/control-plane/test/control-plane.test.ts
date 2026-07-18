@@ -27,14 +27,14 @@ const authed = {
 
 describe('shared control-plane worker', () => {
   it('serves an empty tenant registry before anything is created', async () => {
-    const res = await SELF.fetch('https://cp.test/tenants', { headers: authed });
+    const res = await SELF.fetch('https://cp.test/api/tenants', { headers: authed });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
   });
 
   it('persists a created tenant through the durable DO', async () => {
     const id = ulid();
-    const create = await SELF.fetch('https://cp.test/tenants', {
+    const create = await SELF.fetch('https://cp.test/api/tenants', {
       method: 'POST',
       headers: authed,
       body: JSON.stringify({ id, slug: 'acme', name: 'Acme AB' }),
@@ -43,7 +43,7 @@ describe('shared control-plane worker', () => {
     expect(await create.json()).toMatchObject({ id, slug: 'acme', name: 'Acme AB', status: 'active' });
 
     // Read back through the worker.
-    const list = (await (await SELF.fetch('https://cp.test/tenants', { headers: authed })).json()) as {
+    const list = (await (await SELF.fetch('https://cp.test/api/tenants', { headers: authed })).json()) as {
       id: string;
     }[];
     expect(list.map((t) => t.id)).toContain(id);
@@ -57,7 +57,7 @@ describe('shared control-plane worker', () => {
   });
 
   it('fails closed without a platform actor', async () => {
-    const res = await SELF.fetch('https://cp.test/tenants');
+    const res = await SELF.fetch('https://cp.test/api/tenants');
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'unauthenticated' });
   });
