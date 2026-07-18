@@ -138,7 +138,7 @@ async function seedVenue(
   scope: ScopeId,
   spec: {
     name: string;
-    courts: { name: string; durations: string }[];
+    courts: { name: string; durations: string; cover?: 'indoor' | 'covered' | 'open' }[];
     peakAmount: string;
   },
 ): Promise<string[]> {
@@ -160,7 +160,9 @@ async function seedVenue(
     const court = await stub.invoke<{ id: string }>('booking/create-resource', {
       kind: 'court', name: c.name,
     });
-    await stub.invoke('rally/register-court', { resourceId: court.id, durations: c.durations });
+    await stub.invoke('rally/register-court', {
+      resourceId: court.id, durations: c.durations, cover: c.cover ?? 'indoor',
+    });
     ids.push(court.id);
   }
 
@@ -283,23 +285,26 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
     const solna = await seedVenue(host, world.astrid, world.t1, world.s1, {
       name: 'RallyPoint Solna',
       courts: [
-        { name: 'Bana 1', durations: '60,90,120' },
+        { name: 'Bana 1', durations: '60,90,120', cover: 'indoor' as const },
         // Bana 2 is 60/90 only — the "durations vary by court" case.
-        { name: 'Bana 2', durations: '60,90' },
+        { name: 'Bana 2', durations: '60,90', cover: 'indoor' as const },
+        // Roofed but open-sided: dry, not warm — the case a boolean could not say.
+        { name: 'Bana 3 (tak)', durations: '60,90,120', cover: 'covered' as const },
+        { name: 'Bana 4 (ute)', durations: '60,90,120', cover: 'open' as const },
       ],
       peakAmount: '340',
     });
     const nacka = await seedVenue(host, world.astrid, world.t1, world.s1b, {
       name: 'RallyPoint Nacka',
       courts: [
-        { name: 'Bana A', durations: '60,90,120' },
-        { name: 'Bana B', durations: '90,120' },
+        { name: 'Bana A', durations: '60,90,120', cover: 'indoor' as const },
+        { name: 'Bana B', durations: '90,120', cover: 'open' as const },
       ],
       peakAmount: '390', // a different venue prices differently
     });
     await seedVenue(host, world.rutger, world.t2, world.s2, {
       name: 'Padelcenter Göteborg',
-      courts: [{ name: 'Bana 1', durations: '60,90' }],
+      courts: [{ name: 'Bana 1', durations: '60,90', cover: 'indoor' as const }],
       peakAmount: '310',
     });
 

@@ -9,12 +9,16 @@ import {
   setVenue,
   type CastMember,
   type Venue,
-  type CourtListing,
+  COVER_SV,
+  type Club,
+  type Cover,
   type MatchLanding,
+  type PlayedWith,
+  type RosterEntry,
+  type VenueSlot,
   type Money,
   type OpenMatch,
   type Reservation,
-  type SlotFit,
 } from './api';
 
 type Tab = 'book' | 'matches' | 'mine' | 'me';
@@ -183,10 +187,9 @@ export default function App() {
 // ---------------------------------------------------------------------------
 
 function Book({ tz, memberId }: { tz: string; memberId: string }) {
-  const [courts, setCourts] = useState<CourtListing[]>([]);
-  const [courtId, setCourtId] = useState('');
   const [date, setDate] = useState(todayISO);
-  const [slots, setSlots] = useState<SlotFit[]>([]);
+  const [cover, setCover] = useState<Cover[]>([]);
+  const [slots, setSlots] = useState<VenueSlot[]>([]);
   const [start, setStart] = useState('');
   const [held, setHeld] = useState<{ r: Reservation; price: Money; label: string } | null>(null);
   const [taken, setTaken] = useState<string | null>(null);
@@ -198,26 +201,14 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
   const [band, setBand] = useState<[string, string]>(['3.0', '4.5']);
   const [made, setMade] = useState<{ id: string; share: Money } | null>(null);
 
-  useEffect(() => {
-    void api
-      .courts()
-      .then((c) => {
-        setCourts(c);
-        setCourtId((id) => id || (c[0]?.id ?? ''));
-      })
-      .catch((e) => setErr(e.message));
-  }, []);
-
   const loadSlots = useCallback(() => {
-    if (!courtId) return;
     void api
-      .availability(courtId, date)
+      .venueAvailability(date, cover)
       .then((s) => setSlots(s))
       .catch((e) => setErr(e.message));
-  }, [courtId, date]);
+  }, [date, cover]);
   useEffect(loadSlots, [loadSlots]);
 
-  const court = courts.find((c) => c.id === courtId);
   const chosen = slots.find((s) => hhmm(s.startsAt, tz) === start);
   const fits = chosen?.fits ?? [];
 
@@ -242,22 +233,21 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
    * take on a tap because it expires by itself and the next screen can cancel it.
    */
   const commit = async (time: string, minutes: number) => {
-    if (!courtId || !memberId) return;
+    if (!memberId) return;
     setBusy(true);
     setErr('');
     setTaken(null);
     try {
       if (mode === 'match') {
         const m = await api.createMatch({
-          resourceId: courtId, memberId, date, time, duration: minutes,
+          memberId, date, time, duration: minutes, cover,
           fillTarget, levelMin: band[0], levelMax: band[1],
         });
         setMade({ id: m.reservation.id, share: m.sharePerPlayer });
         loadSlots();
       } else {
-        const r = await api.book({
-          resourceId: courtId, memberId, date, time, duration: minutes,
-        });
+        // No court: the vertical assigns one from the filtered pool (spec §4.2).
+        const r = await api.book({ memberId, date, time, duration: minutes, cover });
         setHeld({ r: r.reservation, price: r.price, label: r.ruleLabel });
       }
     } catch (e) {
@@ -277,6 +267,7 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
   };
 
   const alternatives = slots.slice(0, 3);
+  void alternatives;
 
   return (
     <>
@@ -315,11 +306,17 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
 
       {mode === 'match' && (
         <div className="card">
-          <h2>Vilka söker du?</h2>
+          <h2>Hur många platser öppnar du?</h2>
+          {/* A padel match is four. The variable is how many places the host is
+              opening — 1, 2 or 3 — so fillTarget is derived, never picked. */}
           <div className="seg" style={{ marginTop: 8 }}>
-            {[2, 4].map((n) => (
-              <button key={n} className={fillTarget === n ? 'on' : ''} onClick={() => setFillTarget(n)}>
-                {n} spelare
+            {[1, 2, 3].map((spots) => (
+              <button
+                key={spots}
+                className={fillTarget === spots + 1 ? 'on' : ''}
+                onClick={() => setFillTarget(spots + 1)}
+              >
+                {spots} {spots === 1 ? 'plats' : 'platser'}
               </button>
             ))}
           </div>
@@ -371,19 +368,25 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
         </div>
       )}
 
+      {/* Filters narrow the pool BEFORE the time grid, never after. */}
       <div className="row" style={{ marginBottom: 10 }}>
-        {courts.map((c) => (
+        {(['indoor', 'covered', 'open'] as Cover[]).map((k) => (
           <button
-            key={c.id}
-            className={`pill ${c.id === courtId ? 'on' : ''}`}
+            key={k}
+            className={`pill ${cover.includes(k) ? 'on' : ''}`}
             onClick={() => {
-              setCourtId(c.id);
+              setCover((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
               setStart('');
             }}
           >
-            {c.name}
+            {COVER_SV[k]}
           </button>
         ))}
+        {cover.length > 0 && (
+          <button className="pill" onClick={() => { setCover([]); setStart(''); }}>
+            Rensa
+          </button>
+        )}
       </div>
 
       <div className="card">
@@ -425,6 +428,9 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
                       <i key={d} className={s.fits.includes(d) ? 'on' : ''} />
                     ))}
                   </span>
+                  <span className="legend" style={{ margin: 0, fontSize: 9 }}>
+                    {s.courts.length} {s.courts.length === 1 ? 'bana' : 'banor'}
+                  </span>
                 </button>
               );
             })}
@@ -446,7 +452,8 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
             ))}
           </div>
           <p className="legend">
-            {court?.name} erbjuder {court?.durations} min; bara de som ryms i luckan visas.
+            Vi väljer bana åt dig — {chosen?.courts.length ?? 0} lediga vid {start}. Byt i nästa
+            steg om du bryr dig.
           </p>
         </div>
       )}
@@ -645,13 +652,16 @@ function Matches({ tz, memberId }: { tz: string; memberId: string }) {
   const [rows, setRows] = useState<OpenMatch[] | null>(null);
   const [err, setErr] = useState('');
   const [ok, setOk] = useState('');
+  // Default to every club the player can reach: an open match is worth finding
+  // wherever it is, and the club is a filter rather than a precondition.
+  const [allClubs, setAllClubs] = useState(true);
 
   const load = useCallback(() => {
     api
-      .openMatches()
+      .openMatches(allClubs)
       .then(setRows)
       .catch((e) => setErr(e.message));
-  }, []);
+  }, [allClubs]);
   useEffect(load, [load]);
 
   const join = (m: OpenMatch) => {
@@ -679,6 +689,16 @@ function Matches({ tz, memberId }: { tz: string; memberId: string }) {
   return (
     <>
       <h1>Öppna matcher</h1>
+
+      <div className="seg" style={{ marginBottom: 12 }}>
+        <button className={allClubs ? 'on' : ''} onClick={() => setAllClubs(true)}>
+          Alla klubbar
+        </button>
+        <button className={!allClubs ? 'on' : ''} onClick={() => setAllClubs(false)}>
+          Den här klubben
+        </button>
+      </div>
+
       {err && <div className="banner bad">{err}</div>}
       {ok && <div className="banner">{ok}</div>}
       {rows === null && <div className="empty">Laddar…</div>}
@@ -700,9 +720,11 @@ function Matches({ tz, memberId }: { tz: string; memberId: string }) {
               </p>
             </div>
             <span className="pill">
-              {m.joined}/{m.fillTarget}
+              {m.fillTarget - m.joined}{' '}
+              {m.fillTarget - m.joined === 1 ? 'plats' : 'platser'} kvar
             </span>
           </div>
+          {m.venueLabel && <p className="meta">{m.venueLabel}</p>}
 
           {/* Fill meter — momentum, not identities. Who is already in is a
               player-tier fact; the club scope reports counts only. */}
@@ -719,6 +741,8 @@ function Matches({ tz, memberId }: { tz: string; memberId: string }) {
               />
             ))}
           </div>
+
+          <Roster players={m.players} fillTarget={m.fillTarget} />
 
           <div
             style={{
@@ -847,6 +871,7 @@ function JoinByLink({
             {m.joined}/{m.fillTarget}
           </span>
         </div>
+        <Roster players={m.players} fillTarget={m.fillTarget} />
         <div
           style={{
             display: 'flex',
@@ -925,17 +950,113 @@ function JoinByLink({
   );
 }
 
+/**
+ * Who is on a match, by name. The club's roster is shut to players — but a
+ * published match is the deliberate exception (spec §4.4): nobody commits 90
+ * minutes and a payment to three anonymous slots.
+ */
+function Roster({ players, fillTarget }: { players: RosterEntry[]; fillTarget: number }) {
+  const empty = Math.max(0, fillTarget - players.length);
+  return (
+    <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+      {players.map((p) => (
+        <div key={p.partyRef} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              width: 26, height: 26, borderRadius: 99, background: 'var(--lime)',
+              border: '1.5px solid var(--ink)', display: 'grid', placeItems: 'center',
+              fontSize: 11, fontWeight: 700, color: 'var(--ink)',
+            }}
+          >
+            {p.name.slice(0, 1)}
+          </span>
+          <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{p.name}</span>
+          {p.level && <span className="pill mono" style={{ marginLeft: 'auto' }}>{p.level}</span>}
+        </div>
+      ))}
+      {Array.from({ length: empty }, (_, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: 0.55 }}>
+          <span
+            style={{
+              width: 26, height: 26, borderRadius: 99,
+              border: '1.5px dashed var(--border-strong)',
+            }}
+          />
+          <span className="meta">Ledig plats</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Me({ who, memberId }: { who: CastMember; memberId: string }) {
+  const [people, setPeople] = useState<PlayedWith[]>([]);
+  const [clubs, setClubs] = useState<Club[]>([]);
+
+  useEffect(() => {
+    if (memberId) api.playedWith(memberId).then(setPeople).catch(() => setPeople([]));
+    api.clubs().then(setClubs).catch(() => setClubs([]));
+  }, [memberId]);
+
   return (
     <>
       <h1>Profil</h1>
       <div className="card">
         <h2>{who.name}</h2>
         <p className="meta">Roll i demot: {who.role}</p>
-        <p className="meta mono" style={{ marginTop: 8, wordBreak: 'break-all' }}>
-          {memberId || '— ingen medlemspost —'}
+      </div>
+
+      <div className="card">
+        <h2>Spelare du mött</h2>
+        {people.length === 0 && (
+          <p className="meta">
+            Ingen än. Personer dyker upp här automatiskt när ni spelat ihop — det finns ingen
+            spelarsökning.
+          </p>
+        )}
+        {people.map((p) => (
+          <div
+            key={p.name}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}
+          >
+            <span
+              style={{
+                width: 30, height: 30, borderRadius: 99, background: 'var(--lime)',
+                border: '1.5px solid var(--ink)', display: 'grid', placeItems: 'center',
+                fontWeight: 700, color: 'var(--ink)',
+              }}
+            >
+              {p.name.slice(0, 1)}
+            </span>
+            <div>
+              <div style={{ fontWeight: 700, color: 'var(--ink)' }}>{p.name}</div>
+              <div className="meta">spelat ihop ×{p.times}</div>
+            </div>
+            {p.level && <span className="pill mono" style={{ marginLeft: 'auto' }}>{p.level}</span>}
+          </div>
+        ))}
+        <p className="legend" style={{ marginTop: 10 }}>
+          Bara den här klubben. Listan över alla du spelat med, oavsett klubb, hör hemma i
+          spelarlagret — en klubbs databas kan inte svara på den frågan.
         </p>
       </div>
+
+      <div className="card">
+        <h2>Klubbar</h2>
+        {clubs.map((c) => (
+          <div
+            key={c.key}
+            style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}
+          >
+            <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{c.label}</span>
+            <span className="meta mono">{c.courts} banor</span>
+          </div>
+        ))}
+        <p className="legend" style={{ marginTop: 10 }}>
+          En karta kräver koordinater per klubb, som ingen ännu lagrar.
+        </p>
+      </div>
+
       <div className="card">
         <p className="meta">
           Den här spelaren har <strong>ingen roll</strong> i klubben. Att se lediga tider och ta en

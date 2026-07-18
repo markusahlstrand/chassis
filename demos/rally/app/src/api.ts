@@ -7,11 +7,40 @@ export interface Money {
   amount: string;
   currency: string;
 }
+export type Cover = 'indoor' | 'covered' | 'open';
+export const COVER_SV: Record<Cover, string> = {
+  indoor: 'Inomhus',
+  covered: 'Tak',
+  open: 'Utomhus',
+};
 export interface CourtListing {
   id: string;
   name: string;
   durations: string;
-  indoor: boolean;
+  cover: Cover;
+}
+/** A start time at the VENUE — offered if any court can take it (spec §4.2). */
+export interface VenueSlot {
+  startsAt: string;
+  fits: number[];
+  courts: { id: string; name: string; cover: Cover; fits: number[] }[];
+}
+export interface RosterEntry {
+  partyRef: string;
+  name: string;
+  level: string | null;
+  share: Money | null;
+}
+export interface Club {
+  key: string;
+  label: string;
+  courts: number;
+}
+export interface PlayedWith {
+  name: string;
+  level: string | null;
+  times: number;
+  lastPlayed: string;
 }
 export interface SlotFit {
   startsAt: string;
@@ -105,6 +134,10 @@ export interface OpenMatch {
   levelMin: string;
   levelMax: string;
   share: Money;
+  players: RosterEntry[];
+  /** Present only when searching across clubs. */
+  venue?: string;
+  venueLabel?: string;
 }
 
 export interface MatchLanding {
@@ -119,13 +152,23 @@ export interface MatchLanding {
   levelMin: string;
   levelMax: string;
   share: Money;
+  players: RosterEntry[];
+  venue?: string;
+  venueLabel?: string;
 }
 
 export const api = {
-  openMatches: (): Promise<OpenMatch[]> => call('/api/matches'),
+  openMatches: (allClubs = false): Promise<OpenMatch[]> =>
+    call(allClubs ? '/api/matches?all=1' : '/api/matches'),
+  clubs: (): Promise<Club[]> => call('/api/clubs'),
+  playedWith: (memberId: string): Promise<PlayedWith[]> =>
+    call(`/api/played-with?memberId=${memberId}`),
+  venueAvailability: (date: string, cover: Cover[] = []): Promise<VenueSlot[]> =>
+    call(`/api/venue-availability?date=${date}${cover.length ? `&cover=${cover.join(',')}` : ''}`),
   match: (id: string): Promise<MatchLanding | null> => call(`/api/matches/${id}`),
   createMatch: (i: {
-    resourceId: string;
+    resourceId?: string;
+    cover?: Cover[];
     memberId: string;
     date: string;
     time: string;
@@ -148,7 +191,8 @@ export const api = {
     call(`/api/availability?resourceId=${resourceId}&date=${date}`),
   myBookings: (): Promise<Reservation[]> => call('/api/portal/bookings'),
   book: (i: {
-    resourceId: string;
+    resourceId?: string;
+    cover?: Cover[];
     memberId: string;
     date: string;
     time: string;

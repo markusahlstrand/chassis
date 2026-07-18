@@ -8,6 +8,11 @@ import type { RallyWorld } from './seed.js';
 /**
  * The RallyPoint demo API, as a factory rather than a module with side effects.
  *
+ * Named routes.ts deliberately: that is a harness filename the boundary linter
+ * already exempts (fsm has one), because this is edge wiring rather than module
+ * code. Inventing a new name would have meant widening the platform's lint to
+ * fit one demo.
+ *
  * Split out of server.ts so tests can drive the REAL routes through
  * `app.request(...)` without a port or a listening socket. That matters: every
  * route here is a thin wrapper, and the bugs it has actually shipped were
@@ -210,7 +215,63 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
   );
 
   // -- open matches -----------------------------------------------------------
-  app.get('/api/matches', async (c) => c.json(await (await stub(c)).invoke('rally/open-matches')));
+  /**
+   * Every venue the caller can reach, tried in turn.
+   *
+   * This is the ONLY layer permitted to see across clubs. A scope cannot read
+   * another scope and must not be able to; the server holds a stub for each and
+   * merges the answers, which is the aggregation tier doing its job rather than
+   * a hole in the boundary. It is also the honest placeholder for the global
+   * index the design calls an adapter: O(venues) is fine for three and wrong
+   * for a thousand, at which point this loop becomes a real index fed by the
+   * outbox. A venue the caller cannot reach simply does not appear.
+   */
+  async function fanOut<T>(
+    c: Context,
+    op: string,
+    input?: unknown,
+  ): Promise<{ venue: string; label: string; rows: T }[]> {
+    const principal = principalOf(c);
+    const out: { venue: string; label: string; rows: T }[] = [];
+    for (const [key, v] of Object.entries(VENUES)) {
+      try {
+        const s = await host.getScope(principal, v.tenantId, v.scopeId);
+        out.push({ venue: key, label: v.label, rows: (await s.invoke(op, input)) as T });
+      } catch {
+        // Not reachable for this caller — a permission answer, not an error.
+      }
+    }
+    return out;
+  }
+
+  /** The club list. Cross-club by nature, so it fans out. */
+  app.get('/api/clubs', async (c) => {
+    const venues = await fanOut<{ id: string }[]>(c, 'rally/courts');
+    return c.json(
+      venues.map((v) => ({ key: v.venue, label: v.label, courts: v.rows.length })),
+    );
+  });
+
+  // `?all=1` searches every club the caller can reach; without it, this one.
+  app.get('/api/matches', async (c) => {
+    if (!c.req.query('all')) return c.json(await (await stub(c)).invoke('rally/open-matches'));
+    const all = await fanOut<Record<string, unknown>[]>(c, 'rally/open-matches');
+    return c.json(
+      all.flatMap((v) => v.rows.map((m) => ({ ...m, venue: v.venue, venueLabel: v.label }))),
+    );
+  });
+
+  app.get('/api/venue-availability', async (c) =>
+    c.json(
+      await (await stub(c)).invoke('rally/venue-availability', {
+        date: c.req.query('date'),
+        ...(c.req.query('cover') ? { cover: c.req.query('cover')!.split(',') } : {}),
+      }),
+    ),
+  );
+  app.get('/api/played-with', async (c) =>
+    c.json(await (await stub(c)).invoke('rally/played-with', { memberId: c.req.query('memberId') })),
+  );
   app.get('/api/matches/:id', async (c) =>
     c.json(await (await stub(c)).invoke('rally/match', { reservationId: c.req.param('id') })),
   );

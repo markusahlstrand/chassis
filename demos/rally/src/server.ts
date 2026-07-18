@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { buildRallyHost, seedRally, type RallyWorld } from './index.js';
-import { createRallyApp } from './app.js';
+import { createRallyApp } from './routes.js';
 
 /**
  * Dev API server for the RallyPoint demo — bootstrap only. The routes live in

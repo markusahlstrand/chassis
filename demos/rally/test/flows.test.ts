@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Hono } from 'hono';
 import type { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { buildRallyHost, seedRally, type RallyWorld } from '../src/index.js';
-import { createRallyApp } from '../src/app.js';
+import { createRallyApp } from '../src/routes.js';
 
 /**
  * The flows, walked end to end through the REAL HTTP routes.
@@ -232,6 +232,86 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
     expect((await ok('/api/matches', { as: johan })).some((m: any) => m.reservationId === id)).toBe(
       false,
     );
+  });
+
+  // -- booking a time rather than a court ------------------------------------
+
+  it('a player books a TIME; the court is assigned, or filtered, never asked for', async () => {
+    // Availability is the venue's, not one court's: a start is offered if ANY
+    // court can take it, and says which.
+    const slots = await ok(`/api/venue-availability?date=${DATE}`, { as: elin });
+    expect(slots.length).toBeGreaterThan(0);
+    expect(slots[0].courts.length).toBeGreaterThan(1);
+
+    // Filters narrow the pool BEFORE the grid, so a filtered slot never appears
+    // offering a court the player excluded.
+    const roofed = await ok(`/api/venue-availability?date=${DATE}&cover=indoor,covered`, {
+      as: elin,
+    });
+    for (const s of roofed) {
+      for (const c of s.courts) expect(['indoor', 'covered']).toContain(c.cover);
+    }
+    const openAir = await ok(`/api/venue-availability?date=${DATE}&cover=open`, { as: elin });
+    for (const s of openAir) for (const c of s.courts) expect(c.cover).toBe('open');
+
+    // Booking with no resourceId at all: the vertical picks one.
+    const booked = await ok('/api/bookings', {
+      as: elin,
+      method: 'POST',
+      body: { memberId: elinM, date: DATE, time: '16:00', duration: 60, cover: ['open'] },
+    });
+    expect(booked.reservation.resourceId).toBeTruthy();
+    const courts = await ok('/api/browse/courts', { as: elin });
+    const picked = courts.find((c: any) => c.id === booked.reservation.resourceId);
+    expect(picked.cover).toBe('open'); // honoured the filter
+  });
+
+  it('lists clubs and open matches across every club the caller can reach', async () => {
+    const clubs = await ok('/api/clubs', { as: elin });
+    expect(clubs.map((c: any) => c.key).sort()).toEqual(['nacka', 'solna']);
+    expect(clubs.every((c: any) => c.courts > 0)).toBe(true);
+
+    // Rutger's club is a different company; it is simply not in his neighbour's list.
+    expect((await ok('/api/clubs', { as: rutger })).map((c: any) => c.key)).toEqual(['goteborg']);
+
+    await ok('/api/matches', {
+      as: elin, method: 'POST',
+      body: {
+        memberId: elinM, date: DATE, time: '18:00', duration: 90,
+        fillTarget: 4, levelMin: '3.0', levelMax: '4.5',
+      },
+    });
+    const everywhere = await ok('/api/matches?all=1', { as: elin });
+    expect(everywhere.length).toBeGreaterThan(0);
+    expect(everywhere.every((m: any) => m.venue && m.venueLabel)).toBe(true);
+  });
+
+  it('a match shows WHO is playing; the club roster stays shut', async () => {
+    const made = await ok('/api/matches', {
+      as: elin, method: 'POST',
+      body: {
+        memberId: elinM, date: DATE, time: '17:00', duration: 90,
+        fillTarget: 4, levelMin: '3.0', levelMax: '4.5',
+      },
+    });
+    const landing = await ok(`/api/matches/${made.reservation.id}`, { as: johan });
+    // Publishing a match IS the consent: you cannot ask someone to commit to
+    // three anonymous slots.
+    expect(landing.players).toHaveLength(1);
+    expect(landing.players[0].name).toBe('Elin Kastberg');
+    expect(landing.players[0].level).toBe('3.4');
+
+    // …and it is still not a door to the customer list.
+    expect((await call('/api/members', { as: johan })).status).toBe(403);
+  });
+
+  it('people you have played with, at this club', async () => {
+    const played = await ok(`/api/played-with?memberId=${elinM}`, { as: elin });
+    expect(Array.isArray(played)).toBe(true);
+    // Elin's own record is never in her own list.
+    expect(played.every((p: any) => p.name !== 'Elin Kastberg')).toBe(true);
+    // And it is narrowed: she cannot read Johan's.
+    expect((await call(`/api/played-with?memberId=${johanM}`, { as: elin })).status).toBe(403);
   });
 
   // -- what reception does all day -----------------------------------------

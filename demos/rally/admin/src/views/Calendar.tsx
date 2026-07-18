@@ -11,6 +11,7 @@ import {
 } from '../api';
 
 const HOUR = 48; // px per hour — matches --hour in ui.css
+const COVER_SV: Record<string, string> = { indoor: 'inomhus', covered: 'tak', open: 'ute' };
 const PEAK = [17, 21];
 
 /** Render an instant in the club's zone. The API speaks instants; staff read wall clock. */
@@ -106,7 +107,7 @@ export default function Calendar({ date, openDrawer }: Props) {
                   {c.name} {!c.active && <span className="chip">⊘ inaktiv</span>}
                 </div>
                 <div className="court-meta mono">
-                  {cfg?.durations ?? '60,90,120'} min · {cfg?.indoor ? 'inomhus' : 'utomhus'}
+                  {cfg?.durations ?? '60,90,120'} min · {COVER_SV[cfg?.cover ?? 'indoor']}
                 </div>
               </div>
             );

@@ -10,6 +10,7 @@ import {
 } from '../api';
 
 const DAYS = ['Sön', 'Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör'];
+const COVER_SV: Record<string, string> = { indoor: 'inomhus', covered: 'tak', open: 'ute' };
 // Monday-first display over a Sunday-indexed store.
 const ORDER = [1, 2, 3, 4, 5, 6, 0];
 
@@ -65,7 +66,7 @@ export default function Admin({
               <tr>
                 <th>Bana</th>
                 <th>Längder</th>
-                <th>Typ</th>
+                <th>Tak</th>
                 <th>Status</th>
                 <th />
               </tr>
@@ -77,7 +78,7 @@ export default function Admin({
                   <tr key={c.id}>
                     <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{c.name}</td>
                     <td className="mono">{cfg?.durations ?? '—'}</td>
-                    <td>{cfg?.indoor ? 'inomhus' : 'utomhus'}</td>
+                    <td>{COVER_SV[cfg?.cover ?? 'indoor']}</td>
                     <td>
                       {c.active ? (
                         <span className="chip green">aktiv</span>

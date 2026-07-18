@@ -55,6 +55,11 @@ proof: the existing `CykelService` skin gains a drop-off booking, demonstrating
 | Club + court opening hours, closures | **Vertical** (§4.1) | v1 — weekly schedule + exceptions |
 | Open matches (join, fill-or-cancel) | **Engine** (conditional confirm) + **vertical** (level rules) | v1, **the showpiece** |
 | Slot durations (60/90/120) + start-time grid | **Vertical** | allowed durations per court + 30-min grid |
+| Book a time, court assigned last (§4.2) | **Vertical** | availability aggregated across the venue |
+| Court cover (indoor/covered/open) + filter (§4.3) | **Vertical** | `cover` on the court, filters narrow before the grid |
+| Match participants visible; roster not (§4.4) | **Vertical** policy | published match ≠ customer list |
+| All open matches across clubs; club list & map (§10.1) | **Server fan-out** → global index later | scopes never read each other |
+| People I've played with, at this club (§10.2) | **Vertical** | the single-club shadow of a player-tier feature |
 | Pricing rules by court / day / time / **duration** | **Vertical** | price-rule table + pricing hook at confirm |
 | Memberships (tiers, discounts) | **Vertical** | one tier + a discount rule |
 | Split payment ("pay your share") | **Engine `engine-invoicing`** | v1 — the star-topology showpiece |
@@ -112,6 +117,62 @@ holidays); calendar with blocks.
 **Permissions**: court CRUD is the engine's `booking:manage-resources`; venue hours and
 closures are vertical config needing their own key (`rally:manage-venue`). A new key means
 it lands in the **permission-diff human checkpoint**.
+
+### 4.2 Book a TIME, not a court
+
+Players do not care which court they get. Asking them to pick one first is asking a
+question they have no basis to answer, and it hides the thing they actually want to know —
+*is 19:00 free at all?*
+
+- **Availability is aggregated across the venue**, not per court: a start time is offered if
+  *any* court can take it, and the answer carries how many can.
+- **The court is chosen last, or not at all.** One court free → it is assigned silently.
+  Several → the player may pick, after the time is settled, and most never will.
+- **Filters narrow the pool before the time question**, never after (§4.3).
+- Staff are the exception: the console books a *specific* court, because reception is
+  looking at a grid and moving people between named courts all day.
+
+Consequence for the engine surface: `availability()` stays per-resource — the invariant is
+per-resource and must remain so. The **aggregation is the vertical's**, which is the same
+split as opening hours: the engine answers about one resource, the vertical answers about a
+club.
+
+### 4.3 Court attributes and filters
+
+A padel court is not a fungible box, and the difference that matters in Sweden is weather:
+
+| `cover` | Means |
+|---|---|
+| `indoor` | fully enclosed and heated |
+| `covered` | roofed but open at the sides — dry, not warm |
+| `open` | open air |
+
+`indoor` as a boolean was too coarse: "has a roof" is the question a player actually asks in
+November, and it is answered by `indoor` **or** `covered`. Filters (cover, duration) narrow
+the pool *before* the time grid is computed, so a player never sees a slot they filtered out.
+
+### 4.4 What a player may see about a match
+
+`rally:browse` is free/busy only, and the club's member roster is never readable by a
+player. **An open match is the deliberate exception**: its participants are visible — name
+and level — to anyone who can see the match.
+
+That is not a hole in the privacy model, it is the point of publishing. Joining strangers
+is the product; you cannot ask someone to commit 90 minutes and a payment to three
+anonymous slots. The people in an open match have opted into being seen *by opting into the
+match* — which is exactly the consent the club roster lacks.
+
+The line to hold: **participants of a match you can see, yes; the club's customer list, no.**
+A private booking's co-players are visible only to the people on it.
+
+### 4.5 Open matches are sized in OPEN SLOTS
+
+A padel match is four players. The variable is not "2 or 4" — it is how many places the
+host is opening: **1, 2 or 3**. (Singles exist; they are a court whose capacity model says
+2, not a choice the host makes in the match sheet.)
+
+So the create flow asks *"how many spots do you need?"*, the card reads *"2 platser
+lediga"*, and `fillTarget` is derived rather than picked.
 
 ## 5. `engine-booking`
 
@@ -227,7 +288,39 @@ only the **seam**:
   model — proving the event→projection loop without building the social network;
 - a **match join-link** (capacity-bounded, expiring) to show the privacy-clean add.
 
-Out of scope: global player search, feed fanout, contact matching, geo index.
+Out of scope: global player search, feed fanout, contact matching.
+
+### 10.1 Cross-club reads: the server fans out, the scope never does
+
+Three things a player wants are **cross-club by nature**: every open match near me, the list
+of clubs, and a map of them. A club's scope cannot answer any of them and must not be able
+to — that is the isolation boundary working.
+
+They are nonetheless answerable **at the server**, which is harness code holding stubs for
+every venue: it queries each scope in turn and merges. That is not a scope reading another
+scope; it is the aggregation tier doing its job, and it is the honest placeholder for the
+**global index** the design calls an adapter ([booking-social.md §7](../../../docs/design/booking-social.md)).
+
+Its limits should be stated rather than discovered:
+
+- **Fan-out is O(venues).** Fine for a demo with three, wrong at a thousand — at which point
+  it becomes a real index fed by the outbox, not a loop.
+- **It cannot filter by geography** without coordinates on a venue, so "clubs near me" is
+  currently "all clubs" plus a client-side filter.
+- **It respects permissions per scope**: a venue the caller cannot reach simply does not
+  appear, which is why the club list differs per principal rather than being a global
+  constant.
+
+### 10.2 "People I've played with" — the single-club shadow
+
+The real feature is cross-club and belongs to the player tier. But the *useful 80%* is
+answerable inside one club: **the people you have shared a reservation with here**, derived
+from participants of matches you were on.
+
+It is privacy-defensible on exactly the same ground as §4.4 — you played together — and it
+needs no new mechanism. It is explicitly **not** the cross-club connection graph, and
+building it must not be mistaken for having built that: the moment a second club is
+involved, only the player tier can answer.
 
 ## 11. Scenario (testrun outline)
 
@@ -247,6 +340,11 @@ Out of scope: global player search, feed fanout, contact matching, geo index.
     cross-club read model.
 
 ## 12. Open decisions
+
+0. **Venue coordinates.** A club list is answerable today; a *map* and "near me" are not,
+   because nothing stores where a venue is. Coordinates are venue config, not domain data —
+   but they are also the input to the geo index that eventually replaces the fan-out, so
+   where they live is worth deciding once rather than twice.
 
 1. **Capacity model** — first-class quantity-against-capacity (needed for 4-player matches
    and classes) vs boolean-exclusive. Leaning first-class; exclusive is capacity = 1.

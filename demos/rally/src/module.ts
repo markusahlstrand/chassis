@@ -22,6 +22,7 @@ import {
   joinReservation,
   listReservations,
   listResources,
+  SlotUnavailable,
   PERM as BK,
   type Reservation,
 } from '@substrat-run/engine-booking';
@@ -154,7 +155,11 @@ export const rallyMigrations = [
       CREATE TABLE rally_courts (
         resource_id TEXT PRIMARY KEY,
         durations   TEXT NOT NULL DEFAULT '60,90,120',
-        indoor      INTEGER NOT NULL DEFAULT 1
+        -- "Has it got a roof" is the question a player asks in November, and a
+        -- boolean could not answer it: covered-but-open-sided is dry without
+        -- being warm, and that is a different product.
+        cover       TEXT NOT NULL DEFAULT 'indoor'
+                    CHECK (cover IN ('indoor','covered','open'))
       );
       CREATE TABLE rally_venue_hours (
         weekday   INTEGER PRIMARY KEY,
@@ -349,10 +354,11 @@ export interface PriceRuleRow {
   currency: string;
   created_at: string;
 }
+export type Cover = 'indoor' | 'covered' | 'open';
 export interface CourtRow {
   resource_id: string;
   durations: string;
-  indoor: number;
+  cover: Cover;
 }
 
 /** What the slot picker needs: per start, the longest duration that actually fits. */
@@ -613,13 +619,13 @@ const setCourtHoursOp: OperationHandler<
 };
 
 const registerCourtOp: OperationHandler<
-  { resourceId: string; durations?: string; indoor?: boolean },
+  { resourceId: string; durations?: string; cover?: Cover },
   CourtRow
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(RALLY_PERM.manageVenue));
   ctx.sql.exec(
-    `INSERT OR REPLACE INTO rally_courts (resource_id, durations, indoor) VALUES (?, ?, ?)`,
-    [input.resourceId, input.durations ?? '60,90,120', input.indoor === false ? 0 : 1],
+    `INSERT OR REPLACE INTO rally_courts (resource_id, durations, cover) VALUES (?, ?, ?)`,
+    [input.resourceId, input.durations ?? '60,90,120', input.cover ?? 'indoor'],
   );
   return ctx.sql.query<CourtRow>('SELECT * FROM rally_courts WHERE resource_id = ?', [
     input.resourceId,
@@ -845,7 +851,7 @@ export interface CourtListing {
   id: string;
   name: string;
   durations: string;
-  indoor: boolean;
+  cover: Cover;
 }
 
 /**
@@ -868,7 +874,7 @@ const browseCourtsOp: OperationHandler<undefined, CourtListing[]> = async (ctx) 
       id: r.id,
       name: r.name,
       durations: config.get(r.id)?.durations ?? '60,90,120',
-      indoor: config.get(r.id)?.indoor !== 0,
+      cover: config.get(r.id)?.cover ?? 'indoor',
     }));
 };
 
@@ -953,8 +959,170 @@ const availabilityOp: OperationHandler<
   return out;
 };
 
+export interface RosterEntry {
+  partyRef: string;
+  name: string;
+  level: string | null;
+  share: Money | null;
+}
+
+/**
+ * Who is on a reservation, by name.
+ *
+ * The club's member roster is never readable by a player — but the participants
+ * of a match they can see are (spec §4.4). Publishing a match IS the consent:
+ * you cannot ask someone to commit 90 minutes and a payment to three anonymous
+ * slots, and the people in it opted in by joining. The line is "participants of
+ * a match you can see", never "the club's customer list".
+ */
+function rosterOf(ctx: OperationContext, reservationId: string): RosterEntry[] {
+  const members = new Map(
+    ctx.sql
+      .query<MemberRow>('SELECT * FROM rally_members')
+      .map((m) => [m.party_ref, m] as const),
+  );
+  return engineGetReservation(ctx, reservationId)
+    .participants.filter((p) => !p.leftAt)
+    .map((p) => ({
+      partyRef: p.partyRef,
+      name: members.get(p.partyRef)?.name ?? 'Spelare',
+      level: members.get(p.partyRef)?.level ?? null,
+      share: p.share,
+    }));
+}
+
+export interface VenueSlot {
+  startsAt: string;
+  /** Durations that fit on at least one court in the filtered pool. */
+  fits: number[];
+  courts: { id: string; name: string; cover: Cover; fits: number[] }[];
+}
+
+/** Courts in the pool, after the player's filters — applied BEFORE the time grid. */
+function courtPool(ctx: OperationContext, cover?: Cover[]): (CourtListing & { name: string })[] {
+  const config = new Map(
+    ctx.sql.query<CourtRow>('SELECT * FROM rally_courts').map((c) => [c.resource_id, c] as const),
+  );
+  return listResources(ctx, 'court')
+    .filter((r) => r.active)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      durations: config.get(r.id)?.durations ?? '60,90,120',
+      cover: config.get(r.id)?.cover ?? ('indoor' as Cover),
+    }))
+    .filter((c) => !cover || cover.length === 0 || cover.includes(c.cover));
+}
+
+/**
+ * Availability for the whole VENUE (spec §4.2): a start time is offered if any
+ * court can take it. Players book a time; the court is chosen last, or never.
+ *
+ * The engine's `availability()` stays per-resource because the invariant is
+ * per-resource. Aggregating is the vertical's job — the same split as opening
+ * hours: the engine answers about one court, the vertical answers about a club.
+ */
+const venueAvailabilityOp: OperationHandler<
+  { date: string; cover?: Cover[]; now?: string },
+  VenueSlot[]
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
+  const byStart = new Map<string, VenueSlot>();
+
+  for (const court of courtPool(ctx, input.cover)) {
+    const window = bookableWindow(ctx, court.id, input.date);
+    if (!window) continue;
+    const durations = court.durations
+      .split(',')
+      .map((d) => Number(d.trim()))
+      .filter((d) => d > 0)
+      .sort((a, b) => a - b);
+    const free = engineAvailability(ctx, {
+      resourceId: court.id,
+      from: window.startsAt,
+      to: window.endsAt,
+      ...(input.now !== undefined ? { now: input.now } : {}),
+    });
+
+    const total = minutesBetween(window.startsAt, window.endsAt);
+    for (let offset = 0; offset < total; offset += 30) {
+      const startsAt = addMinutes(window.startsAt, offset);
+      const fits = durations.filter((d) => {
+        const endsAt = addMinutes(startsAt, d);
+        if (endsAt > window.endsAt) return false;
+        return free.some((f) => f.startsAt <= startsAt && f.endsAt >= endsAt);
+      });
+      if (fits.length === 0) continue;
+      const slot = byStart.get(startsAt) ?? { startsAt, fits: [], courts: [] };
+      slot.courts.push({ id: court.id, name: court.name, cover: court.cover, fits });
+      slot.fits = [...new Set([...slot.fits, ...fits])].sort((a, b) => a - b);
+      byStart.set(startsAt, slot);
+    }
+  }
+  return [...byStart.values()].sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+};
+
+/** The people you have shared a court with HERE — see spec §10.2 for what this is not. */
+const playedWithOp: OperationHandler<
+  { memberId: string },
+  { name: string; level: string | null; times: number; lastPlayed: string }[]
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(BK.read, memberRef(input.memberId)));
+  const me = ctx.sql.query<MemberRow>('SELECT * FROM rally_members WHERE id = ?', [
+    input.memberId,
+  ])[0];
+  if (!me) throw new Error(`member not found: ${input.memberId}`);
+
+  const tally = new Map<string, { name: string; level: string | null; times: number; lastPlayed: string }>();
+  for (const r of listReservations(ctx, {})) {
+    if (r.effectiveState === 'cancelled' || r.effectiveState === 'expired') continue;
+    const roster = rosterOf(ctx, r.id);
+    if (!roster.some((p) => p.partyRef === me.party_ref)) continue;
+    for (const other of roster) {
+      if (other.partyRef === me.party_ref) continue;
+      const seen = tally.get(other.partyRef);
+      tally.set(other.partyRef, {
+        name: other.name,
+        level: other.level,
+        times: (seen?.times ?? 0) + 1,
+        lastPlayed: seen && seen.lastPlayed > r.startsAt ? seen.lastPlayed : r.startsAt,
+      });
+    }
+  }
+  return [...tally.values()].sort((a, b) => b.times - a.times);
+};
+
+/**
+ * Which court, when the player did not say. First that can take the interval,
+ * within the filtered pool. Throws the engine's own SlotUnavailable so the whole
+ * stack — including the 409 the UI acts on — behaves identically whether the
+ * court was chosen by a person or by us.
+ */
+function pickCourt(
+  ctx: OperationContext,
+  input: { cover?: Cover[]; date: string; time: string; duration: number; now?: string },
+): string {
+  const startsAt = zonedToInstant(input.date, input.time, venue(ctx).timezone);
+  const endsAt = addMinutes(startsAt, input.duration);
+  for (const c of courtPool(ctx, input.cover)) {
+    if (!c.durations.split(',').map((d) => Number(d.trim())).includes(input.duration)) continue;
+    const w = bookableWindow(ctx, c.id, input.date);
+    if (!w || startsAt < w.startsAt || endsAt > w.endsAt) continue;
+    const free = engineAvailability(ctx, {
+      resourceId: c.id,
+      from: startsAt,
+      to: endsAt,
+      ...(input.now !== undefined ? { now: input.now } : {}),
+    });
+    if (free.some((f) => f.startsAt <= startsAt && f.endsAt >= endsAt)) return c.id;
+  }
+  throw new SlotUnavailable('venue', startsAt, endsAt);
+}
+
 const bookInput = z.object({
-  resourceId: z.string().min(1),
+  /** Omitted = the vertical picks one (spec §4.2). Staff pass it; players rarely do. */
+  resourceId: z.string().min(1).optional(),
+  cover: z.array(z.enum(['indoor', 'covered', 'open'])).optional(),
   memberId: z.string().min(1),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   time: z.string().regex(/^\d{2}:\d{2}$/),
@@ -984,7 +1152,8 @@ const bookCourtOp: OperationHandler<
   ])[0];
   if (!member) throw new Error(`member not found: ${input.memberId}`);
 
-  const window = bookableWindow(ctx, input.resourceId, input.date);
+  const resourceId = input.resourceId ?? pickCourt(ctx, input);
+  const window = bookableWindow(ctx, resourceId, input.date);
   if (!window) throw new Error(`the club is closed on ${input.date}`);
 
   const startsAt = zonedToInstant(input.date, input.time, v.timezone);
@@ -994,7 +1163,7 @@ const bookCourtOp: OperationHandler<
   }
 
   const court = ctx.sql.query<CourtRow>('SELECT * FROM rally_courts WHERE resource_id = ?', [
-    input.resourceId,
+    resourceId,
   ])[0];
   const allowed = (court?.durations ?? '60,90,120').split(',').map((d) => Number(d.trim()));
   if (!allowed.includes(input.duration)) {
@@ -1002,7 +1171,7 @@ const bookCourtOp: OperationHandler<
   }
 
   const { price, label } = resolvePrice(ctx, {
-    resourceId: input.resourceId,
+    resourceId,
     date: input.date,
     time: input.time,
     duration: input.duration,
@@ -1010,7 +1179,7 @@ const bookCourtOp: OperationHandler<
 
   const now = input.now ?? new Date().toISOString();
   const reservation = holdReservation(ctx, {
-    resourceId: input.resourceId,
+    resourceId,
     startsAt,
     endsAt,
     expiresAt: addMinutes(now, v.hold_minutes),
@@ -1091,7 +1260,8 @@ const createOpenMatchOp: OperationHandler<
   ])[0];
   if (!member) throw new Error(`member not found: ${input.memberId}`);
 
-  const window = bookableWindow(ctx, input.resourceId, input.date);
+  const resourceId = input.resourceId ?? pickCourt(ctx, input);
+  const window = bookableWindow(ctx, resourceId, input.date);
   if (!window) throw new Error(`the club is closed on ${input.date}`);
   const startsAt = zonedToInstant(input.date, input.time, v.timezone);
   const endsAt = addMinutes(startsAt, input.duration);
@@ -1100,7 +1270,7 @@ const createOpenMatchOp: OperationHandler<
   }
 
   const { price, label } = resolvePrice(ctx, {
-    resourceId: input.resourceId,
+    resourceId,
     date: input.date,
     time: input.time,
     duration: input.duration,
@@ -1108,7 +1278,7 @@ const createOpenMatchOp: OperationHandler<
 
   const now = input.now ?? new Date().toISOString();
   const reservation = holdReservation(ctx, {
-    resourceId: input.resourceId,
+    resourceId,
     startsAt,
     endsAt,
     // An open match holds until it fills or the deadline passes — same field.
@@ -1230,6 +1400,7 @@ export interface OpenMatchListing {
   levelMin: string;
   levelMax: string;
   share: Money;
+  players: RosterEntry[];
 }
 
 /**
@@ -1280,6 +1451,7 @@ const openMatchesOp: OperationHandler<{ now?: string } | undefined, OpenMatchLis
         String(Math.round(Number(booking.price_amount) / r.fillTarget)),
         booking.currency,
       ),
+      players: rosterOf(ctx, r.id),
     });
   }
   return out.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
@@ -1297,6 +1469,7 @@ export interface MatchLanding {
   levelMin: string;
   levelMax: string;
   share: Money;
+  players: RosterEntry[];
 }
 
 /**
@@ -1356,6 +1529,7 @@ const matchLandingOp: OperationHandler<
       String(Math.round(Number(booking.price_amount) / r.fillTarget)),
       booking.currency,
     ),
+    players: rosterOf(ctx, r.id),
   };
 };
 
@@ -1550,6 +1724,8 @@ export const rallyModule: ModuleRegistration = {
     'rally/list-members': listMembersOp as never,
     'rally/get-venue': getVenueOp as never,
     'rally/courts': browseCourtsOp as never,
+    'rally/venue-availability': venueAvailabilityOp as never,
+    'rally/played-with': playedWithOp as never,
     'rally/availability': availabilityOp as never,
     'rally/book-court': bookCourtOp as never,
     'rally/confirm-booking': confirmBookingOp as never,

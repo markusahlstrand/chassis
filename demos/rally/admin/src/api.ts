@@ -55,10 +55,11 @@ export interface Hours {
   closes_at: string | null;
   closed: number;
 }
+export type Cover = 'indoor' | 'covered' | 'open';
 export interface CourtConfig {
   resource_id: string;
   durations: string;
-  indoor: number;
+  cover: Cover;
 }
 export interface CreditPack {
   key: string;
@@ -214,7 +215,7 @@ export const api = {
   }): Promise<Hours> => post('/api/hours', input),
   addClosure: (input: { onDate: string; reason: string; resourceId?: string }): Promise<Closure> =>
     post('/api/closures', input),
-  addCourt: (input: { name: string; durations?: string }): Promise<Court> =>
+  addCourt: (input: { name: string; durations?: string; cover?: Cover }): Promise<Court> =>
     post('/api/courts', input),
   setCourtActive: (id: string, active: boolean): Promise<Court> =>
     post(`/api/courts/${id}/active`, { active }),
