@@ -316,7 +316,35 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     ).rejects.toThrow(/permission denied/);
   });
 
-  it('16. portal isolation: a player sees their own booking and no one else’s', async () => {
+  it('16. a player browses free slots and books, without reading the club’s book', async () => {
+    const elin = await host.getScope(w.elin, w.t1, w.s1);
+
+    // Holds NO role. Browsing is a scope-wide grant: free/busy carries no identities.
+    const courts = await elin.invoke<{ id: string; name: string }[]>('rally/courts');
+    expect(courts.length).toBeGreaterThan(0);
+    const slots = await elin.invoke<SlotFit[]>('rally/availability', {
+      resourceId: w.court2,
+      date: DATE,
+      now: NOW,
+    });
+    expect(slots.length).toBeGreaterThan(0);
+
+    // Taking a free court is public capability; the booking becomes hers.
+    const booked = await elin.invoke<{ reservation: Reservation }>('rally/book-court', {
+      resourceId: w.court2, memberId: w.elinId, date: DATE,
+      time: '16:00', duration: 60, now: NOW,
+    });
+    const confirmed = await elin.invoke<{ reservation: Reservation }>('rally/confirm-booking', {
+      reservationId: booked.reservation.id, now: NOW,
+    });
+    expect(confirmed.reservation.state).toBe('confirmed');
+
+    // But she still cannot read the roster or the club's own surfaces.
+    await expect(elin.invoke('rally/list-members')).rejects.toThrow(/permission denied/);
+    await expect(elin.invoke('booking/list')).rejects.toThrow(/permission denied/);
+  });
+
+  it('17. portal isolation: a player sees their own booking and no one else’s', async () => {
     const elin = await host.getScope(w.elin, w.t1, w.s1);
     const johan = await host.getScope(w.johan, w.t1, w.s1);
 
@@ -340,7 +368,7 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     );
   });
 
-  it('17. the state machine cannot skip', async () => {
+  it('18. the state machine cannot skip', async () => {
     const booked = await ravi.invoke<{ reservation: Reservation }>('rally/book-court', {
       resourceId: w.court1, memberId: w.elinId, date: DATE,
       time: '08:00', duration: 60, now: NOW,
@@ -353,7 +381,7 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     ).rejects.toThrow(/invalid transition/);
   });
 
-  it('18. members are the vertical’s vocabulary, keyed to a global player ref', async () => {
+  it('19. members are the vertical’s vocabulary, keyed to a global player ref', async () => {
     const members = await astrid.invoke<MemberRow[]>('rally/list-members');
     expect(members.map((m) => m.name).sort()).toEqual(['Elin Kastberg', 'Johan Ek']);
     expect(members.find((m) => m.name === 'Elin Kastberg')!.party_ref).toBe(w.elinParty);

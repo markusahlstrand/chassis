@@ -7,7 +7,9 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "server": "tsx src/server.ts"
+    "server": "tsx src/server.ts",
+    "dev": "concurrently -n api,player,console -c blue,green,magenta \"tsx src/server.ts\" \"pnpm --dir app dev\" \"pnpm --dir admin dev\"",
+    "demo": "pnpm run dev"
   },
   "dependencies": {
     "@substrat-run/adapter-sqlite": "workspace:^",
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
+    "concurrently": "^9.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

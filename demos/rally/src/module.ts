@@ -20,6 +20,7 @@ import {
   holdReservation,
   joinReservation,
   listReservations,
+  listResources,
   PERM as BK,
   type Reservation,
 } from '@substrat-run/engine-booking';
@@ -39,6 +40,17 @@ import {
 // ============================================================================
 
 export const RALLY_PERM = {
+  /**
+   * Browse the club: courts, opening hours, and which slots are FREE.
+   *
+   * Deliberately distinct from `booking:read`. A player must see what is free in
+   * order to book at all, but must never read the club's book — who holds which
+   * court. `booking:read` for a player is narrowed to their own member record, so
+   * a scope-level check on it would (correctly) deny them, and widening that
+   * grant to the scope would hand every player the whole calendar. This key is
+   * the capability that actually matches the need: free/busy, no identities.
+   */
+  browse: permissionKey.parse('rally:browse'),
   manageVenue: permissionKey.parse('rally:manage-venue'),
   managePricing: permissionKey.parse('rally:manage-pricing'),
   manageMembers: permissionKey.parse('rally:manage-members'),
@@ -49,6 +61,10 @@ export const rallyManifest = moduleManifest.parse({
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [
+    {
+      key: 'rally:browse',
+      description: 'See courts, opening hours and free slots — free/busy only, never who booked',
+    },
     {
       key: 'rally:manage-venue',
       description: 'Set club and court opening hours, closures, and maintenance blocks',
@@ -555,6 +571,65 @@ const listMembersOp: OperationHandler<undefined, MemberRow[]> = async (ctx) => {
   return ctx.sql.query<MemberRow>('SELECT * FROM rally_members ORDER BY name');
 };
 
+export interface CourtListing {
+  id: string;
+  name: string;
+  durations: string;
+  indoor: boolean;
+}
+
+/**
+ * Courts as a player may see them. The engine's own `booking/list-resources`
+ * binding requires `booking:read`, which a player deliberately does not hold at
+ * scope level — so this reaches the engine through its exported in-scope
+ * function and joins the vertical's own side table in memory — never a SELECT
+ * against the engine's own tables, which are private to it (decision 28).
+ */
+const browseCourtsOp: OperationHandler<undefined, CourtListing[]> = async (ctx) => {
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
+  const config = new Map(
+    ctx.sql
+      .query<CourtRow>('SELECT * FROM rally_courts')
+      .map((c) => [c.resource_id, c] as const),
+  );
+  return listResources(ctx, 'court')
+    .filter((r) => r.active)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      durations: config.get(r.id)?.durations ?? '60,90,120',
+      indoor: config.get(r.id)?.indoor !== 0,
+    }));
+};
+
+export interface VenueSnapshot {
+  venue: VenueRow;
+  hours: HoursRow[];
+  courtHours: CourtHoursRow[];
+  courts: CourtRow[];
+  tiers: TierRow[];
+  priceRules: PriceRuleRow[];
+  closures: ClosureRow[];
+}
+
+/**
+ * Everything both surfaces need to render a calendar: the club's shape.
+ * Guarded by `booking:read` rather than `rally:manage-venue` — the player app
+ * must know when the club opens without being able to change it.
+ */
+const getVenueOp: OperationHandler<undefined, VenueSnapshot> = async (ctx) => {
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
+  return {
+    venue: venue(ctx),
+    hours: ctx.sql.query<HoursRow>('SELECT * FROM rally_venue_hours ORDER BY weekday'),
+    courtHours: ctx.sql.query<CourtHoursRow>('SELECT * FROM rally_court_hours'),
+    courts: ctx.sql.query<CourtRow>('SELECT * FROM rally_courts'),
+    tiers: ctx.sql.query<TierRow>('SELECT * FROM rally_tiers ORDER BY discount_pct'),
+    priceRules: ctx.sql.query<PriceRuleRow>('SELECT * FROM rally_price_rules ORDER BY created_at'),
+    closures: ctx.sql.query<ClosureRow>('SELECT * FROM rally_closures ORDER BY on_date'),
+  };
+};
+
 /**
  * THE SLOT PICKER FEED. For every start on the club's 30-minute grid, the
  * longest duration that actually fits — the "fit dots" the design handover
@@ -568,7 +643,7 @@ const availabilityOp: OperationHandler<
   { resourceId: string; date: string; now?: string },
   SlotFit[]
 > = async (ctx, input) => {
-  assertAllowed(await ctx.check(BK.read));
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
   const window = bookableWindow(ctx, input.resourceId, input.date);
   if (!window) return [];
 
@@ -882,6 +957,8 @@ export const rallyModule: ModuleRegistration = {
     'rally/upsert-tier': upsertTierOp as never,
     'rally/create-member': createMemberOp as never,
     'rally/list-members': listMembersOp as never,
+    'rally/get-venue': getVenueOp as never,
+    'rally/courts': browseCourtsOp as never,
     'rally/availability': availabilityOp as never,
     'rally/book-court': bookCourtOp as never,
     'rally/confirm-booking': confirmBookingOp as never,

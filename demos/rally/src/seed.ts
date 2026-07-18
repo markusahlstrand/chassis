@@ -45,7 +45,7 @@ export interface RallyWorld {
 export const MODULES = [bookingModule, invoicingModule, rallyModule];
 
 const adminPerms = [
-  RP.manageVenue, RP.managePricing, RP.manageMembers,
+  RP.browse, RP.manageVenue, RP.managePricing, RP.manageMembers,
   BK.create, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.complete, BK.manageResources,
   INV.read, INV.export,
 ];
@@ -62,7 +62,9 @@ export const ROLES: RoleDefinition[] = [
   { key: 'club-admin', permissions: adminPerms, source: 'vertical' },
   {
     key: 'receptionist',
-    permissions: [BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.create, RP.manageMembers],
+    permissions: [
+      RP.browse, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.create, RP.manageMembers,
+    ],
     source: 'vertical',
   },
   /**
@@ -77,19 +79,39 @@ export const ROLES: RoleDefinition[] = [
    * The line to re-open this on: a club running independent coaches who must not
    * see each other's business. This role is wrong for them.
    */
-  { key: 'coach', permissions: [BK.read], source: 'vertical' },
+  { key: 'coach', permissions: [RP.browse, BK.read], source: 'vertical' },
 ];
 
-/** What a player receives, narrowed to their own member record. */
-const portalPerms = [BK.read];
+/**
+ * A player holds NO ROLE — a consumer is not a principal with a role
+ * (kernel-design.md §4.3). They hold two kinds of grant instead, and the split
+ * is the whole point:
+ *
+ * SCOPE-WIDE — capabilities that are genuinely public at a club. Seeing which
+ * slots are free, and taking a free one, are things any player may do; there is
+ * no narrower entity to hang them on, because the court they want is by
+ * definition not yet theirs.
+ */
+const portalScopePerms = [RP.browse, BK.hold, BK.create];
 
 /**
- * Entity-narrowed grant SHAPES. The grants themselves are per-principal and
- * minted at runtime, so they can never be a build artifact; their shape can, and
- * it is what tells a reviewer which keys are reachable outside the role table.
+ * ENTITY-NARROWED to the player's own member record — everything that touches a
+ * booking that already exists. `booking:read` scope-wide would hand a player the
+ * club's entire book; narrowed, the walk reservation → member reaches only their
+ * own. Confirming and cancelling ride the same edge.
+ */
+const portalEntityPerms = [BK.read, BK.confirm, BK.cancel];
+
+/**
+ * Grant SHAPES. The grants themselves are per-principal and minted at runtime, so
+ * they can never be a build artifact; their shape can, and it is what tells a
+ * reviewer which keys are reachable outside the role table.
  */
 export const ENTITY_GRANTS: { entityType: string; permissions: PermissionKey[] }[] = [
-  { entityType: 'member', permissions: portalPerms },
+  { entityType: 'member', permissions: portalEntityPerms },
+  // Not entity-narrowed at all — recorded here so the artifact cannot imply that
+  // every non-role capability is entity-bounded. These are scope-wide.
+  { entityType: '(scope-wide, no entity)', permissions: portalScopePerms },
 ];
 
 export function buildRallyHost(dir: string): SqliteScopeHost {
@@ -217,12 +239,20 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
     [world.johan, world.johanId],
   ] as const) {
     if (!memberId) continue;
-    for (const permission of portalPerms) {
+    for (const permission of portalEntityPerms) {
       await host.admin.grant(staff, {
         principalId: principal,
         permission,
         node: { tenantId: world.t1, scopeId: world.s1 },
         entity: { entityType: 'member', entityId: memberId },
+        grantedBy: world.astrid,
+      });
+    }
+    for (const permission of portalScopePerms) {
+      await host.admin.grant(staff, {
+        principalId: principal,
+        permission,
+        node: { tenantId: world.t1, scopeId: world.s1 },
         grantedBy: world.astrid,
       });
     }
