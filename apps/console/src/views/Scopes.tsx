@@ -109,6 +109,11 @@ export function Scopes({ api, scopes, tenants, entitlements, onChanged, onToast 
             {eff === 'suspended-via-tenant' && (
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>via tenant</span>
             )}
+            {/* A scope whose migration failed is `active` in the lifecycle and
+                serving nothing. Shown BESIDE the status rather than replacing it:
+                the two are orthogonal, and collapsing them would hide which of the
+                two an operator has to act on. */}
+            {s.migrationFailure && <Badge status="danger">Migration failed</Badge>}
             <Badge status={statusTone(eff)}>{statusLabel(eff)}</Badge>
           </span>
         );
@@ -214,9 +219,32 @@ export function Scopes({ api, scopes, tenants, entitlements, onChanged, onToast 
               // Fixed at provisioning (K-7) — displayed, never editable.
               { label: 'Jurisdiction', value: selected.jurisdiction ? 'EU — fixed at provisioning' : 'Unrestricted' },
               { label: 'Schema', value: selected.schemaVersion, mono: true },
+              ...(selected.migrationFailure
+                ? [
+                    {
+                      label: 'Migration failed',
+                      value: selected.migrationFailure.version,
+                      mono: true,
+                    },
+                    {
+                      label: 'Attempts',
+                      value: String(selected.migrationFailure.attempts),
+                      mono: true,
+                    },
+                  ]
+                : []),
               { label: 'Created', value: selected.createdAt.slice(0, 10), mono: true },
             ]}
           />
+          {selected.migrationFailure && (
+            <p style={{ margin: '12px 0 0', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+              This scope failed closed and is serving nothing — the schema count above is
+              what landed before <code>{selected.migrationFailure.version}</code> rolled back.
+              Recovery is per-scope PITR plus a patched forward migration (kernel-design §5.3).
+              Last attempt {selected.migrationFailure.lastAttemptAt.slice(0, 19).replace('T', ' ')}:{' '}
+              {selected.migrationFailure.error}
+            </p>
+          )}
           {eff === 'suspended-via-tenant' && (
             <p style={{ margin: '12px 0 0', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
               Suspended by a tenant-wide cascade — unsuspend the tenant to release it; per-scope unsuspend is not offered.

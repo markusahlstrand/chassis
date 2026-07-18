@@ -62,6 +62,10 @@ export interface ScopeRow {
   jurisdiction: string | null;
   status: string;
   schema_version: string;
+  migration_failed_version: string | null;
+  migration_error: string | null;
+  migration_attempts: number;
+  migration_last_attempt_at: string | null;
   created_at: string;
 }
 
@@ -127,6 +131,14 @@ const DIRECTORY_DDL = `
     jurisdiction TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     schema_version TEXT NOT NULL DEFAULT '0',
+    -- Last FAILED migration attempt (§5.3). All null / 0 = healthy. Written on the
+    -- failure path so a scope that fails closed stops rendering as active, and
+    -- cleared on the next success. See ScopeDO.applyPendingMigrations.
+    -- (No semicolons in this comment — see the NOTE below.)
+    migration_failed_version TEXT,
+    migration_error TEXT,
+    migration_attempts INTEGER NOT NULL DEFAULT 0,
+    migration_last_attempt_at TEXT,
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _substrat_tenant_tuples (
@@ -189,6 +201,10 @@ const SCOPE_COLUMNS_ADDED = [
   'kind TEXT',
   'name TEXT',
   'vertical TEXT',
+  'migration_failed_version TEXT',
+  'migration_error TEXT',
+  'migration_attempts INTEGER NOT NULL DEFAULT 0',
+  'migration_last_attempt_at TEXT',
 ] as const;
 
 export class ControlPlaneDO extends DurableObject {
@@ -367,9 +383,38 @@ export class ControlPlaneDO extends DurableObject {
    * question ("which scopes are behind?") is answerable from the index alone —
    * §5.4's "fleet questions never fan out". Written by the coordinator after the
    * ScopeDO reports what it applied.
+   *
+   * Written on the FAILURE path too (#32): projecting only on success is what let
+   * a half-migrated scope keep a stale `schema_version` and render as healthy.
+   * `failure` null clears the columns, so `migration_attempts` counts *consecutive*
+   * failures — what the reconciliation sweep's backoff (#49) needs.
    */
-  setSchemaVersion(scopeId: string, schemaVersion: string): void {
-    this.sql.exec('UPDATE scopes SET schema_version = ? WHERE scope_id = ?', schemaVersion, scopeId);
+  setMigrationState(
+    scopeId: string,
+    schemaVersion: string,
+    failure: { version: string; error: string } | null,
+  ): void {
+    if (!failure) {
+      this.sql.exec(
+        `UPDATE scopes SET schema_version = ?, migration_failed_version = NULL,
+           migration_error = NULL, migration_attempts = 0, migration_last_attempt_at = NULL
+         WHERE scope_id = ?`,
+        schemaVersion,
+        scopeId,
+      );
+      return;
+    }
+    this.sql.exec(
+      `UPDATE scopes SET schema_version = ?, migration_failed_version = ?,
+         migration_error = ?, migration_attempts = migration_attempts + 1,
+         migration_last_attempt_at = ?
+       WHERE scope_id = ?`,
+      schemaVersion,
+      failure.version,
+      failure.error,
+      new Date().toISOString(),
+      scopeId,
+    );
   }
 
   listScopes(filter: {

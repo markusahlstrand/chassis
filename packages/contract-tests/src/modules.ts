@@ -465,3 +465,35 @@ export const contractTestModules: ModuleRegistration[] = [
   billedMod,
   permMod,
 ];
+
+export const brokenModManifest = moduleManifest.parse({
+  id: '@test/broken',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'broken:use', description: 'broken module permission' }],
+  events: { emits: [], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'broken',
+});
+
+/**
+ * A module whose migration cannot apply (§5.3 "failure is per-scope and fails
+ * closed"). Deliberately NOT in `contractTestModules` — every scope shares a
+ * module set, so a broken migration there would fail every scope in every suite.
+ * Adapters host it on a SEPARATE scope-host/DO to exercise the failure path.
+ *
+ * The second migration is the one that throws, so a partial apply is observable:
+ * `0001-ok` lands and is journaled, `0002-broken` rolls back. That is what makes
+ * the projected `schemaVersion` on the failure path meaningful rather than 0.
+ */
+export const brokenMod: ModuleRegistration = {
+  manifest: brokenModManifest,
+  migrations: [
+    { version: '0001-ok', sql: 'CREATE TABLE broken_ok (id TEXT PRIMARY KEY)' },
+    { version: '0002-broken', sql: 'CREATE TABLE broken_t (' },
+  ],
+  operations: {
+    'broken/act': (() => 'ran') as OperationHandler<never, unknown>,
+  },
+};

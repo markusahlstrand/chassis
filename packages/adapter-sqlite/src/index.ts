@@ -149,7 +149,34 @@ interface ScopeRow {
   jurisdiction: string | null;
   status: string;
   schema_version: string;
+  migration_failed_version: string | null;
+  migration_error: string | null;
+  migration_attempts: number;
+  migration_last_attempt_at: string | null;
   created_at: string;
+}
+
+/**
+ * The four migration-health columns → the contract's nullable `migrationFailure`.
+ * All-null is the healthy case (never attempted, or the last attempt succeeded and
+ * cleared them); a version present means the scope failed closed and did not serve.
+ *
+ * Returns the *unparsed* shape — `scopeSchema.parse` brands `lastAttemptAt` into an
+ * `Instant`, the same way every other row value in `mapScope` is branded on read.
+ */
+function mapMigrationFailure(r: {
+  migration_failed_version: string | null;
+  migration_error: string | null;
+  migration_attempts: number;
+  migration_last_attempt_at: string | null;
+}): { version: string; error: string; attempts: number; lastAttemptAt: string } | null {
+  if (!r.migration_failed_version || !r.migration_last_attempt_at) return null;
+  return {
+    version: r.migration_failed_version,
+    error: r.migration_error ?? '',
+    attempts: r.migration_attempts,
+    lastAttemptAt: r.migration_last_attempt_at,
+  };
 }
 
 interface AdminLogRow {
@@ -234,6 +261,13 @@ export class SqliteScopeHost implements ScopeHost {
         jurisdiction TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         schema_version TEXT NOT NULL DEFAULT '0',
+        -- Last FAILED migration attempt (§5.3). All null / 0 = healthy. Written on
+        -- the failure path so a scope that fails closed stops rendering as active;
+        -- cleared on the next success. See applyPendingMigrations.
+        migration_failed_version TEXT,
+        migration_error TEXT,
+        migration_attempts INTEGER NOT NULL DEFAULT 0,
+        migration_last_attempt_at TEXT,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS _substrat_tenant_tuples (
@@ -727,6 +761,7 @@ export class SqliteScopeHost implements ScopeHost {
         jurisdiction: r.jurisdiction,
         vertical: r.vertical,
         schemaVersion: r.schema_version,
+        migrationFailure: mapMigrationFailure(r),
         createdAt: r.created_at,
       });
 
@@ -1172,6 +1207,10 @@ export class SqliteScopeHost implements ScopeHost {
       ['kind', 'kind TEXT'],
       ['name', 'name TEXT'],
       ['vertical', 'vertical TEXT'],
+      ['migration_failed_version', 'migration_failed_version TEXT'],
+      ['migration_error', 'migration_error TEXT'],
+      ['migration_attempts', 'migration_attempts INTEGER NOT NULL DEFAULT 0'],
+      ['migration_last_attempt_at', 'migration_last_attempt_at TEXT'],
     ] as const) {
       if (!existing.has(column)) this.directory.exec(`ALTER TABLE scopes ADD COLUMN ${ddl}`);
     }
@@ -1294,40 +1333,80 @@ export class SqliteScopeHost implements ScopeHost {
     // Nothing pending → nothing to record. A scope provisioned before any module
     // registers legitimately sits at schema_version '0'.
     if (pending.length === 0) return;
-    await rt.actor.enqueue(() => {
-      for (const { moduleId, migration } of pending) {
-        const key = `${moduleId}@${migration.version}`;
-        if (rt.appliedMigrations.has(key)) continue;
-        rt.db.exec('BEGIN IMMEDIATE');
-        try {
-          const already = rt.db
-            .prepare('SELECT 1 FROM _substrat_migrations WHERE module_id = ? AND version = ?')
-            .get(moduleId, migration.version);
-          if (!already) {
-            rt.db.exec(migration.sql);
-            rt.db
-              .prepare(
-                'INSERT INTO _substrat_migrations (module_id, version, applied_at) VALUES (?, ?, ?)',
-              )
-              .run(moduleId, migration.version, new Date().toISOString());
+    // The failing `module@version` and its cause, captured structurally rather than
+    // re-parsed out of the thrown message — the directory record has to name both.
+    let failure: { version: string; error: string } | undefined;
+    try {
+      await rt.actor.enqueue(() => {
+        for (const { moduleId, migration } of pending) {
+          const key = `${moduleId}@${migration.version}`;
+          if (rt.appliedMigrations.has(key)) continue;
+          rt.db.exec('BEGIN IMMEDIATE');
+          try {
+            const already = rt.db
+              .prepare('SELECT 1 FROM _substrat_migrations WHERE module_id = ? AND version = ?')
+              .get(moduleId, migration.version);
+            if (!already) {
+              rt.db.exec(migration.sql);
+              rt.db
+                .prepare(
+                  'INSERT INTO _substrat_migrations (module_id, version, applied_at) VALUES (?, ?, ?)',
+                )
+                .run(moduleId, migration.version, new Date().toISOString());
+            }
+            rt.db.exec('COMMIT');
+          } catch (err) {
+            rt.db.exec('ROLLBACK');
+            failure = { version: key, error: (err as Error).message };
+            throw new Error(
+              `migration failed for ${key} — scope fails closed: ${(err as Error).message}`,
+            );
           }
-          rt.db.exec('COMMIT');
-        } catch (err) {
-          rt.db.exec('ROLLBACK');
-          throw new Error(
-            `migration failed for ${key} — scope fails closed: ${(err as Error).message}`,
-          );
+          rt.appliedMigrations.add(key);
         }
-        rt.appliedMigrations.add(key);
-      }
-    });
-    // The scope's migration state, projected into the directory so the fleet
-    // question ("which scopes are behind?") is answerable from the index alone —
-    // §5.4's "fleet questions never fan out". Written here, at the one place
-    // migrations are applied, so it cannot drift from the journal it summarises.
+      });
+    } finally {
+      // `finally`, not the success path: a scope that failed closed is exactly the
+      // one the fleet needs to see, and projecting only on success is what let a
+      // half-migrated scope keep a stale `schema_version` and render as healthy
+      // (#32). The throw still propagates — recording is not recovering.
+      this.recordMigrationState(rt, failure);
+    }
+  }
+
+  /**
+   * Project a scope's migration state into the directory — §5.4's "fleet questions
+   * never fan out", so the index answers "which scopes are behind" and "which
+   * failed" without waking anything.
+   *
+   * `appliedMigrations.size` is written on both paths: after a partial failure it
+   * is the count that actually landed, which is more truthful than the pre-attempt
+   * value. On success the failure columns are cleared, so `attempts` counts
+   * *consecutive* failures — what the sweep's backoff (#49) needs.
+   */
+  private recordMigrationState(
+    rt: ScopeRuntime,
+    failure: { version: string; error: string } | undefined,
+  ): void {
+    const version = String(rt.appliedMigrations.size);
+    if (!failure) {
+      this.directory
+        .prepare(
+          `UPDATE scopes SET schema_version = ?, migration_failed_version = NULL,
+             migration_error = NULL, migration_attempts = 0, migration_last_attempt_at = NULL
+           WHERE scope_id = ?`,
+        )
+        .run(version, rt.scopeId);
+      return;
+    }
     this.directory
-      .prepare('UPDATE scopes SET schema_version = ? WHERE scope_id = ?')
-      .run(String(rt.appliedMigrations.size), rt.scopeId);
+      .prepare(
+        `UPDATE scopes SET schema_version = ?, migration_failed_version = ?,
+           migration_error = ?, migration_attempts = migration_attempts + 1,
+           migration_last_attempt_at = ?
+         WHERE scope_id = ?`,
+      )
+      .run(version, failure.version, failure.error, new Date().toISOString(), rt.scopeId);
   }
 
   private runtime(tenantId: TenantId, scopeId: ScopeId): ScopeRuntime {
