@@ -15,6 +15,7 @@
 | `booking.no-show` | the party did not turn up |
 | `booking.participant-joined` | someone joined |
 | `booking.participant-left` | someone left |
+| `booking.opened` | places were put on offer on an existing reservation, or withdrawn |
 
 Consumes nothing.
 

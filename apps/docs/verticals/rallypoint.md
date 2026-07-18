@@ -75,6 +75,7 @@ exactly that, because it is the property the design claims.
 |---|---|---|
 | Timezones, opening hours, DST | vertical | the engine takes instants and does no calendar arithmetic |
 | Pricing, seasonal rules | vertical | the engine never learns what a slot costs |
+| Who owns an open game | vertical | the club, a player up front, or a player opening a booking they hold |
 | Level bands, cancellation windows | vertical | the engine knows only *fill target* and *deadline* |
 | Wallet, credit packs, subscriptions | vertical | [commerce-gaps §4.6](https://github.com/substrat-run/substrat/blob/main/docs/design/commerce-gaps.md) — a subscription engine designed off a demo wishlist is the exact failure mode D-27 prevents |
 
@@ -86,6 +87,12 @@ Two domain details worth stealing:
   December afternoon. Price rules carry a date range, and a season outranks a time of day.
 - **A subscription is a wallet topped up on a schedule.** One mechanism, not two. The
   recurrence is a Workflow's job; the credit and the cursor advance happen in one transaction.
+- **A price table is a matrix, and its failure mode is a hole in it.** Duration is an input
+  rather than a multiplier, so every (window × length) pair is priced explicitly — and the
+  specificity ladder is a *tie-breaker*, not a composition, so a length-only rule would
+  replace peak pricing rather than add to it. The console renders what the rules actually
+  *resolve* to, hour by hour, because a row where all three lengths cost the same is
+  invisible in the rule list and obvious in the grid.
 
 ## The cast & what's denied
 
@@ -115,12 +122,23 @@ layer further in.
 
 Two surfaces, one API. The split is chrome and audience, never a second source of truth.
 
-**Player app** (mobile, 402px) — the signature interaction is the **slot picker with fit
-dots**: each start time shows which durations actually fit the gap (● 60 · ●● 90 · ●●● 120),
-so no tap can dead-end. Choosing a duration *commits*; when only one fits, tapping the time
-commits outright. Then a hold countdown that turns urgent under a minute and states plainly
-that nothing was charged if it lapses. A lost race never shows a bare error — it offers the
-nearest alternatives.
+**Player app** (mobile, 402px) — booking is **two steps, split by what each one decides**:
+
+| | Decides | Also carries |
+|---|---|---|
+| **when** | a start time | *filters* only — date, roof, and optionally a length |
+| **what** | length (defaults to 90), court, payment | the price, quoted before committing |
+
+A player never picks a court to *find* a time: availability is aggregated across the venue,
+so a start is offered if **any** court can take it, and the court is assigned from the
+filtered pool or chosen last by the few who care. Each start shows which lengths actually
+fit the gap (● 60 · ●● 90 · ●●● 120), so no tap can dead-end. A lost race never shows a bare
+error — it offers the nearest alternatives. Screen state lives in the URL, so a refresh
+lands where you were.
+
+Putting length on step 1 as a *choice* was the mistake this replaced: it asked for a
+decision about the booking before the player had one to make, and mixed a filter with a
+commitment. Asking about it twice is fine — they are different questions.
 
 **Manager console** (desktop, 1440px+) — a resource-grid calendar, courts as columns and time
 as rows, with a peak band, a now-line, and cell states that are each border + fill + icon +

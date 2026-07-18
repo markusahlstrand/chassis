@@ -12,7 +12,7 @@ opening hours, or who is allowed to book — all of which are the vertical's.
 | **Package** | `@substrat-run/engine-booking` |
 | **Entitlement key** | `booking` |
 | **Owns** | the allocation invariant, the reservation state machine, holds and their expiry, append-only participants |
-| **Emits** | 11 events, `booking.held` → `booking.completed` ([events](./events)) |
+| **Emits** | 12 events, `booking.held` → `booking.completed` ([events](./events)) |
 | **Consumes** | nothing — it is a source, not a sink |
 | **Permissions** | 8 (`booking:create` · `read` · `hold` · `confirm` · `cancel` · `move` · `complete` · `manage-resources`) |
 | **Status** | product seed (0.x) — surfaces change until the first vertical ships |
@@ -55,7 +55,8 @@ database.
 - **Policy of any kind** — cancellation windows, who may book, skill bands, membership. It
   knows only *fill target* and *deadline*.
 - **Field patches.** Mutations are named transitions. There is no `updateReservation`;
-  rescheduling is [`move`](./surface), and participants change through join/leave.
+  rescheduling is [`move`](./surface), putting places on offer is [`open`](./surface),
+  and participants change through join/leave.
 
 ## Is this a good match?
 
