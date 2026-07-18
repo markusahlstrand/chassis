@@ -166,6 +166,7 @@ export const api = {
     venues: Venue[];
     members: Record<string, Record<string, string>>;
   }> => call('/api/cast'),
+  myVenues: (): Promise<Venue[]> => call('/api/my-venues'),
   venue: (): Promise<VenueSnapshot> => call('/api/venue'),
   courts: (): Promise<Court[]> => call('/api/courts'),
   members: (): Promise<Member[]> => call('/api/members'),

@@ -90,6 +90,30 @@ app.get('/api/cast', (c) =>
   }),
 );
 
+/**
+ * Which venues THIS caller can actually work in.
+ *
+ * Handover 2a: "reception roles are pinned to one venue and see no switcher."
+ * Reachability is not a UI preference — it is the permission model answering, so
+ * it is probed rather than assumed: `getScope` accepts any valid (tenant, scope)
+ * pair, and the role check is what actually decides. A principal with one venue
+ * gets no switcher; an owner with several gets the overview.
+ */
+app.get('/api/my-venues', async (c) => {
+  const principal = principalOf(c);
+  const reachable: { key: string; label: string }[] = [];
+  for (const [key, v] of Object.entries(VENUES)) {
+    try {
+      const s = await host.getScope(principal, v.tenantId, v.scopeId);
+      await s.invoke('rally/get-venue'); // requires rally:browse in that scope
+      reachable.push({ key, label: v.label });
+    } catch {
+      // Not reachable for this principal — deliberately silent, not an error.
+    }
+  }
+  return c.json(reachable);
+});
+
 // -- the club's shape -------------------------------------------------------
 app.get('/api/venue', async (c) => c.json(await (await stub(c)).invoke('rally/get-venue')));
 app.post('/api/venue', async (c) => c.json(await (await stub(c)).invoke('rally/set-venue', await body(c))));

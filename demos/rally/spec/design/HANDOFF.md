@@ -76,6 +76,25 @@ Viewport 402×874 (iPhone). Root layout: `flex column`; scrollable content; bott
 
 ---
 
+### Round 2 additions (turn 2 badges, top of the canvas)
+**Product rules (non-negotiable, encode in logic, not just UI):** connections accumulate ONLY from matches actually played together — no player search, no friend requests; a connection is a social edge, never data access (no visibility into the other person's bookings). Invites are accept-required. To the sender, a decline, a lapse, and a non-member are ONE identical closed state ("Didn't take it") — the UI must never reveal which (no enumeration). Share links/QRs are capacity-bounded (admit n) and expire at match start. Groups (4–8 players) belong to players, not clubs, and can book anywhere. Club membership is per club.
+
+- **2a Connections list** — "People", sections PLAY OFTEN / EVERYONE; rows: avatar, name, level chip, "played together ×9 · last Tue"; explainer line at top ("added automatically… no player search") + privacy footnote card at bottom. Empty state = round 1 `1r`.
+- **2b Just-played prompt** — post-match sheet "Good match. Keep the crew?": existing connections show "✓ Kept", new people get lime checkbox (24px, 2px ink border), CTA "Keep 2 players", skippable.
+- **2c Person detail** — shared record only ("9 matches together · you're 5–4 up"), level tile, CTAs "Invite to a match" (lime) + "Add to group"; MATCHES TOGETHER list (compact rows w/ side/opponent + result); privacy footnote "You see the matches you've shared — not Marta's other bookings, clubs or plans."
+- **2d Share sheet** — over match detail: 4 action tiles (Copy link / **Show QR** highlighted lime / WhatsApp / Messages), link row `rallyp.nt/m/8F3K` + mono "admits 2 · expires Sat 19:00", INVITE YOUR PEOPLE rows (connection + band-fit note + ink Invite button), "Invite by phone or email…" field, accept-required footnote.
+- **2e QR screen** — ink page, white QR card 264px (QR is a placeholder — generate real code), match summary inside card, chips "2 spots left" (lime) + "expires Sat 19:00", scanner-sees-match-first note, "Brightness up · Done".
+- **2f Sender states + dead links** — invite rows with state chips: `IN ✓` (green), `INVITED` (grey), `DIDN'T TAKE IT` (grey — the single closed state); phone-number invitees render as the number, spot auto-released. Receiver landings: "This match filled up" (4/4 badge + alternatives CTA) and "This link has expired" (links die at start time).
+- **2g Groups + create sheet** — group tiles (icon tile, players count, next session or "nothing booked · plays anywhere"); create sheet: name field, member picker **from your People only**, "4–8 players", members must accept.
+- **2h Group detail** — ink NEXT SESSION card ("4 confirmed", "I'm in" lime), primary CTA "Find a slot that fits everyone", players list (ADMIN tag, level chips, dashed "+ Add from your People · up to 8"), RECENT SESSIONS across different clubs.
+- **2i Find a slot for everyone** — filters (evenings/duration/price cap); result cards ranked: "WORKS FOR 4/4" (green badge, 2px ink border, per-member ✓ chips, Propose CTA) vs "3/4 · PAVEL BUSY" (gold). **No-common-slot state**: plain statement + closest partial + "Look at next week" / "Book for 3, open 1 spot"; footnote: availability derives from RallyPoint bookings + marked busy times only.
+- **2j Club switcher (mobile)** — sheet from the Discover location control: MY CLUBS rows with membership badges (`MEMBER −10%` lime/ink, `MEMBER` grey, `GUEST` outlined), current club lime-left-bar; "All clubs near me" row; membership-is-per-club footnote.
+- **2k Non-member club detail** — GUEST chip in header, guest-rates card explaining anyone can book, members of THIS club get perks; CTAs "Join this club · 249 kr/mo" vs "Keep booking as guest"; availability shown at guest prices.
+- **2l Co-player on a private booking** — "Players on this booking" (labelled "private — not an open match"): booker pays now, added co-player (connections only, no search) gets a pay-share request; rule card: co-player must accept, sees the booking in her Bookings, can pay her share, cannot change/cancel; if she declines the booker owes the full amount.
+- **2m Component additions** — connection row, invite state chips (INVITED / IN ✓ / DIDN'T TAKE IT / PENDING APPROVAL), group tile, membership badges, mini QR card spec.
+
+---
+
 ## Manager Console (`RallyPoint Console.dc.html`)
 1440px primary, degrade to 1024 (sidebar collapses to icon rail as in 1b). Light default (1a) + dark treatment (1b). Shell: 182px white sidebar (logo + MGR tag, nav with lime left-bar active state, club/user footer) + topbar (date pager ‹ Today ›, view switcher Day/Week/Court, customer search ⌘K, "+ New booking" N).
 
@@ -112,6 +131,9 @@ Legend row pinned under the grid repeats all states with swatches. Dark variant 
 - **1j Quiet-day calendar** — sparse grid stays honest; floating suggestion card ("Quiet Tuesday — 61 open court-hours" + Create off-peak rule / Host open match).
 - **1k Component sheet** — canonical cell states, rule row + overlap, court card, occupancy spark.
 
+### Round 2 addition — multi-venue (turn 2)
+- **2a Cross-venue overview + venue switcher** — **Recommendation: overview + switcher, never a merged calendar** (courts×venues explodes the grid and invites wrong-venue bookings). Sidebar gains a venue selector (2px ink border) opening a switcher popover: venue rows with courts/occupancy meta and `⌘1–3` shortcuts; footnote: settings/pricing/staff are per venue, reception roles are pinned to one venue and see no switcher. Owners land on a read-only **Overview**: one card per venue (occupancy %, bookings, holds count in amber, mini day-timeline bar with booked/free/hold/maintenance segments, one actionable line — expiring hold, quiet evening, or conflict alert with gold border) each with "Open calendar →"; bottom strip totals the day across venues (bookings, open matches, holds, maintenance, conflicts, revenue). Booking always happens inside a single venue's calendar.
+
 ## Interactions & Behavior
 - **Hold lifecycle**: booking creates a ~10-min hold; countdown visible player-side (1g/1k) and staff-side (calendar cell). <1 min flips banner to solid amber. Expiry releases slot, charges nothing, offers instant re-hold (1o).
 - **Race handling**: optimistic tap → server reject → alternatives sheet (player 1n) / inline banner preserving all typed input (console 1c). Never lose input; never a bare error.
@@ -135,6 +157,6 @@ WCAG AA. State never by colour alone (every state pairs icon/label/border-style)
 No binary assets. Striped blocks are placeholders for club photos and map tiles (swap for real imagery/map SDK). Icons are simple inline SVG strokes (pin, ball, calendar, person, clock, share, chevrons) — substitute your icon library at 22px/1.8–2px stroke. Fonts: Google Fonts Archivo + IBM Plex Mono. Logo: "RALLYPOINT" Archivo 800 italic + lime skewed square — placeholder wordmark, replace when brand exists.
 
 ## Files
-- `RallyPoint Player.dc.html` — all mobile screens & component sheet (badges 1a–1s)
-- `RallyPoint Console.dc.html` — all console screens & component sheet (badges 1a–1k)
+- `RallyPoint Player.dc.html` — all mobile screens & components (round 1 badges 1a–1s; round 2 badges 2a–2m at the top)
+- `RallyPoint Console.dc.html` — all console screens & components (round 1 badges 1a–1k; round 2 multi-venue badge 2a at the top)
 - `ios-frame.jsx`, `browser-window.jsx` — presentation chrome only, not part of the design

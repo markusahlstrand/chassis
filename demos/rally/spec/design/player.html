@@ -24,6 +24,411 @@
 .dv-next{margin:22px 0 0;font:12px/1.5 'Archivo',sans-serif;color:rgba(0,0,0,.5)}
 .grp{width:100%;margin:30px 0 2px;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#7A837C}</style>
 </helmet>
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Round 2 — connections, invite sending side, groups, multi-club, co-player</span></div>
+<div style="max-width:780px;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:10px;padding:16px 22px;font-size:12.5px;line-height:1.65;color:#3B423D;margin-bottom:8px">
+<strong style="color:#14171A">Product rules baked in.</strong> Connections accumulate only from matches actually played — no search, no requests, and a connection is a social edge, never calendar access (microcopy says so where it matters). Invites are accept-required; a decline and a non-member render <em>identically</em> to the sender ("didn't take the spot" — one state, no enumeration). Share links are capacity-bounded and expiring. Groups belong to players, not clubs. Membership is per club.
+</div>
+<div class="grp">CONNECTIONS — ACCUMULATED BY PLAYING, NOT BY SEARCHING</div>
+<div class="dv-opts">
+<div class="dv-opt" id="2a"><div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>People — the list (empty state: round 1 <a class="dv-oid" href="#1r">1r</a>)</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0">
+<div style="padding:66px 20px 6px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:22px;letter-spacing:-0.01em;color:#14171A">People</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A938C">12 players</span></div>
+<div style="padding:0 20px 12px;font-size:11.5px;color:#66706A;line-height:1.5">Everyone you've actually played with — added automatically after each match. There's no player search.</div>
+<div style="flex:1;padding:0 20px;display:flex;flex-direction:column;gap:9px;overflow:hidden">
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em">PLAY OFTEN</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:14px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px"><div style="width:40px;height:40px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">MK</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Marta Karlsson</div><div style="font-size:11px;color:#66706A">played together ×9 · last Tue</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">3.6</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-top:1px solid #F0F1EA"><div style="width:40px;height:40px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">JR</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Jonas Ricci</div><div style="font-size:11px;color:#66706A">played together ×6 · last Sat</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">3.1</span></div>
+</div>
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em;margin-top:3px">EVERYONE</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:14px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px"><div style="width:40px;height:40px;border-radius:99px;background:#E8DFD0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">AL</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Aline Duarte</div><div style="font-size:11px;color:#66706A">played together ×3 · last 6 Jul</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">4.1</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-top:1px solid #F0F1EA"><div style="width:40px;height:40px;border-radius:99px;background:#DCD3E8;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">PN</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Pavel Novák</div><div style="font-size:11px;color:#66706A">played together ×3 · last 2 Jul</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">2.9</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-top:1px solid #F0F1EA"><div style="width:40px;height:40px;border-radius:99px;background:#D3E8E0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">TS</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Tomas Sjöberg</div><div style="font-size:11px;color:#66706A">played together ×1 · last 28 Jun</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">3.8</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-top:1px solid #F0F1EA"><div style="width:40px;height:40px;border-radius:99px;background:#E5DCCE;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">EB</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Erik Blom</div><div style="font-size:11px;color:#66706A">played together ×1 · last 21 Jun</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">3.3</span></div>
+</div>
+<div style="background:#F7F8F3;border:1px solid #E2E3DC;border-radius:12px;padding:10px 14px;font-size:11px;color:#66706A;line-height:1.5">Being in each other's list is just a shortcut for inviting — it never shows anyone's bookings or calendar.</div>
+</div>
+<div style="background:#fff;border-top:1px solid #E2E3DC;display:flex;padding:10px 8px 30px">
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="9" r="5.5" stroke="#8A938C" stroke-width="1.8"></circle><path d="M11 14.5V19" stroke="#8A938C" stroke-width="1.8" stroke-linecap="round"></path></svg><span style="font-size:10.5px;font-weight:600;color:#8A938C">Discover</span></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="8" stroke="#8A938C" stroke-width="1.8"></circle><path d="M4.5 6.5c3 2.2 3 6.8 0 9M17.5 6.5c-3 2.2-3 6.8 0 9" stroke="#8A938C" stroke-width="1.8"></path></svg><span style="font-size:10.5px;font-weight:600;color:#8A938C">Matches</span></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="4.5" width="16" height="14" rx="3" stroke="#8A938C" stroke-width="1.8"></rect><path d="M3 9.5h16M7.5 3v3M14.5 3v3" stroke="#8A938C" stroke-width="1.8" stroke-linecap="round"></path></svg><span style="font-size:10.5px;font-weight:600;color:#8A938C">Bookings</span></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="7.5" r="3.5" stroke="#14171A" stroke-width="2"></circle><path d="M4.5 18.5c1-3.5 3.5-5 6.5-5s5.5 1.5 6.5 5" stroke="#14171A" stroke-width="2" stroke-linecap="round"></path></svg><span style="font-size:10.5px;font-weight:700;color:#14171A">Profile</span></div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2b"><div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>Just played — keep-your-match prompt</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0;position:relative">
+<div style="position:absolute;inset:0;background:rgba(20,23,26,.45);z-index:5"></div>
+<div style="padding:66px 20px 0;filter:blur(1px)">
+<div style="background:#14171A;border-radius:15px;padding:15px 17px"><div style="font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;color:#D7F34F">6–3 · 6–4</div><div style="font-size:12px;color:#B9BFB4;margin-top:2px">Won · Arena Padel Söderport · 90 min</div></div>
+</div>
+<div style="position:absolute;left:0;right:0;bottom:0;z-index:10;background:#fff;border-radius:24px 24px 0 0;padding:22px 22px 42px;display:flex;flex-direction:column;gap:12px;box-shadow:0 -12px 40px rgba(0,0,0,.3)">
+<div style="width:40px;height:4.5px;border-radius:3px;background:#D8DAD2;align-self:center"></div>
+<div style="text-align:center"><div style="font-weight:800;font-size:18px;color:#14171A">Good match. Keep the crew?</div><div style="font-size:12.5px;color:#66706A;margin-top:4px">They'll land in your People list so the next invite is one tap.</div></div>
+<div style="border:1px solid #E2E3DC;border-radius:14px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px"><div style="width:38px;height:38px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#14171A">MK</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Marta Karlsson</div><div style="font-size:11px;color:#66706A">already in your people · ×9</div></div><span style="font-size:11px;font-weight:700;color:#256B3E">✓ Kept</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-top:1px solid #F0F1EA"><div style="width:38px;height:38px;border-radius:99px;background:#D3E8E0;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#14171A">TS</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Tomas Sjöberg</div><div style="font-size:11px;color:#66706A">first match together</div></div><span style="width:24px;height:24px;border-radius:7px;background:#D7F34F;border:2px solid #14171A;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#14171A">✓</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-top:1px solid #F0F1EA"><div style="width:38px;height:38px;border-radius:99px;background:#E5DCCE;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#14171A">EB</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Erik Blom</div><div style="font-size:11px;color:#66706A">first match together</div></div><span style="width:24px;height:24px;border-radius:7px;border:2px solid #D8DAD2;background:#fff"></span></div>
+</div>
+<div style="background:#14171A;color:#fff;border-radius:12px;padding:14px;text-align:center;font-weight:700;font-size:14.5px">Keep 2 players</div>
+<div style="text-align:center;font-size:12px;font-weight:600;color:#66706A">Skip — you can always keep them later</div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2c"><div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a>Person — shared history only, never their calendar</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0">
+<div style="padding:66px 20px 8px;display:flex;align-items:center;gap:10px">
+<div style="width:32px;height:32px;border-radius:99px;background:#fff;border:1px solid #E2E3DC;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="#14171A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+<span style="font-weight:800;font-size:17px;color:#14171A">Marta Karlsson</span>
+</div>
+<div style="margin:4px 20px 0;background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:16px;display:flex;align-items:center;gap:14px">
+<div style="width:56px;height:56px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;color:#14171A">MK</div>
+<div style="flex:1"><div style="font-size:16px;font-weight:800;color:#14171A">Marta Karlsson</div><div style="font-size:11.5px;color:#66706A;margin-top:2px">9 matches together · you're 5–4 up</div></div>
+<div style="text-align:center;background:#F0F1EA;border-radius:11px;padding:7px 12px"><div style="font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:600;color:#14171A">3.6</div><div style="font-size:8.5px;font-weight:800;color:#66706A;letter-spacing:.06em">LEVEL</div></div>
+</div>
+<div style="margin:10px 20px 0;display:flex;gap:8px">
+<div style="flex:1;background:#D7F34F;border:2px solid #14171A;border-radius:12px;padding:12px;text-align:center;font-weight:800;font-size:13.5px;color:#14171A">Invite to a match</div>
+<div style="flex:1;border:1.5px solid #E2E3DC;background:#fff;border-radius:12px;padding:12px;text-align:center;font-weight:700;font-size:13.5px;color:#14171A">Add to group</div>
+</div>
+<div style="flex:1;padding:14px 20px 0;display:flex;flex-direction:column;gap:9px;overflow:hidden">
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em">MATCHES TOGETHER</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:13px;padding:11px 14px;display:flex;align-items:center;gap:12px">
+<div style="text-align:center;min-width:52px"><div style="font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:#14171A">19:00</div><div style="font-size:9.5px;color:#8A938C;font-weight:600">14 JUL</div></div>
+<div style="width:1px;align-self:stretch;background:#F0F1EA"></div>
+<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Won 6–3 6–4 · same side</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#66706A">Arena Padel Söderport</div></div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:13px;padding:11px 14px;display:flex;align-items:center;gap:12px">
+<div style="text-align:center;min-width:52px"><div style="font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:#14171A">10:00</div><div style="font-size:9.5px;color:#8A938C;font-weight:600">5 JUL</div></div>
+<div style="width:1px;align-self:stretch;background:#F0F1EA"></div>
+<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Lost 4–6 6–7 · opponents</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#66706A">Racketklubben Väst</div></div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:13px;padding:11px 14px;display:flex;align-items:center;gap:12px;opacity:.8">
+<div style="text-align:center;min-width:52px"><div style="font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:#14171A">18:30</div><div style="font-size:9.5px;color:#8A938C;font-weight:600">28 JUN</div></div>
+<div style="width:1px;align-self:stretch;background:#F0F1EA"></div>
+<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Won 7–5 6–2 · same side</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#66706A">Arena Padel Söderport</div></div>
+</div>
+<div style="background:#F7F8F3;border:1px solid #E2E3DC;border-radius:12px;padding:10px 14px;font-size:11px;color:#66706A;line-height:1.5">You see the matches you've shared — not Marta's other bookings, clubs or plans.</div>
+</div>
+<div style="padding:12px 20px 34px"></div>
+</div>
+</x-import></div>
+</div>
+<div class="grp">INVITE &amp; SHARE — THE SENDING SIDE (receiving side: <a class="dv-oid" href="#1m">1m</a>)</div>
+<div class="dv-opts">
+<div class="dv-opt" id="2d"><div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a>Share sheet — link, QR, hand-off, direct invite</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0;position:relative">
+<div style="position:absolute;inset:0;background:rgba(20,23,26,.45);z-index:5"></div>
+<div style="padding:66px 20px 0;filter:blur(1px)">
+<div style="background:#14171A;border-radius:15px;padding:15px 17px"><div style="font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;color:#D7F34F">Today 19:00</div><div style="font-size:12px;color:#B9BFB4;margin-top:2px">90 min · Court 2 · 2 spots left</div></div>
+</div>
+<div style="position:absolute;left:0;right:0;bottom:0;z-index:10;background:#fff;border-radius:24px 24px 0 0;padding:22px 22px 42px;display:flex;flex-direction:column;gap:12px;box-shadow:0 -12px 40px rgba(0,0,0,.3)">
+<div style="width:40px;height:4.5px;border-radius:3px;background:#D8DAD2;align-self:center"></div>
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:800;font-size:18px;color:#14171A">Fill 2 spots</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#66706A">85 kr/player</span></div>
+<div style="display:flex;gap:8px">
+<div style="flex:1;border:1.5px solid #E2E3DC;border-radius:12px;padding:12px 0;text-align:center"><div style="font-size:19px">🔗</div><div style="font-size:11px;font-weight:700;color:#14171A;margin-top:3px">Copy link</div></div>
+<div style="flex:1;background:#D7F34F;border:2px solid #14171A;border-radius:12px;padding:11px 0;text-align:center"><div style="font-size:19px">▦</div><div style="font-size:11px;font-weight:800;color:#14171A;margin-top:3px">Show QR</div></div>
+<div style="flex:1;border:1.5px solid #E2E3DC;border-radius:12px;padding:12px 0;text-align:center"><div style="font-size:19px">💬</div><div style="font-size:11px;font-weight:700;color:#14171A;margin-top:3px">WhatsApp</div></div>
+<div style="flex:1;border:1.5px solid #E2E3DC;border-radius:12px;padding:12px 0;text-align:center"><div style="font-size:19px">✉️</div><div style="font-size:11px;font-weight:700;color:#14171A;margin-top:3px">Messages</div></div>
+</div>
+<div style="background:#F7F8F3;border:1px solid #E2E3DC;border-radius:11px;padding:9px 13px;display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#3B423D">rallyp.nt/m/8F3K</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8A938C">admits 2 · expires Sat 19:00</span></div>
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em;margin-top:2px">INVITE YOUR PEOPLE</div>
+<div style="border:1px solid #E2E3DC;border-radius:13px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:11px;padding:10px 14px"><div style="width:34px;height:34px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">JR</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Jonas Ricci</div><div style="font-size:10.5px;color:#66706A">3.1 · in band ✓</div></div><span style="background:#14171A;color:#fff;border-radius:8px;padding:6px 13px;font-size:11.5px;font-weight:700">Invite</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:10px 14px;border-top:1px solid #F0F1EA"><div style="width:34px;height:34px;border-radius:99px;background:#DCD3E8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">PN</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Pavel Novák</div><div style="font-size:10.5px;color:#66706A">2.9 · in band ✓</div></div><span style="background:#14171A;color:#fff;border-radius:8px;padding:6px 13px;font-size:11.5px;font-weight:700">Invite</span></div>
+</div>
+<div style="display:flex;align-items:center;gap:8px;border:1.5px solid #E2E3DC;border-radius:12px;padding:11px 14px"><span style="font-size:13px;color:#8A938C">Invite by phone or email…</span></div>
+<div style="font-size:10.5px;color:#8A938C;line-height:1.5">Invites need an accept — a spot is theirs only once they say yes and pay their share.</div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2e"><div class="dv-olabel"><a class="dv-oid" href="#2e">2e</a>QR — for the person standing next to you</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#14171A">
+<div style="padding:70px 24px 0;display:flex;align-items:center;gap:10px">
+<div style="width:32px;height:32px;border-radius:99px;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+<span style="font-weight:800;font-size:17px;color:#fff">Scan to join</span>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:0 32px">
+<div style="width:264px;background:#fff;border-radius:20px;padding:20px;display:flex;flex-direction:column;gap:14px">
+<div style="position:relative;width:224px;height:224px;background:repeating-linear-gradient(0deg,#F0F1EA 0 8px,#fff 8px 16px),repeating-linear-gradient(90deg,rgba(20,23,26,.06) 0 8px,transparent 8px 16px);border-radius:10px">
+<div style="position:absolute;top:10px;left:10px;width:40px;height:40px;border:6px solid #14171A;border-radius:8px"><div style="position:absolute;inset:6px;background:#14171A;border-radius:3px"></div></div>
+<div style="position:absolute;top:10px;right:10px;width:40px;height:40px;border:6px solid #14171A;border-radius:8px"><div style="position:absolute;inset:6px;background:#14171A;border-radius:3px"></div></div>
+<div style="position:absolute;bottom:10px;left:10px;width:40px;height:40px;border:6px solid #14171A;border-radius:8px"><div style="position:absolute;inset:6px;background:#14171A;border-radius:3px"></div></div>
+<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;background:rgba(255,255,255,.9);padding:3px 8px;border-radius:6px">QR — rallyp.nt/m/8F3K</span></div>
+</div>
+<div style="text-align:center"><div style="font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:600;color:#14171A">Sat 19:00 · 90 min</div><div style="font-size:11.5px;color:#66706A;margin-top:2px">Arena Padel Söderport · 85 kr/player</div></div>
+</div>
+<div style="display:flex;gap:7px">
+<span style="background:#D7F34F;color:#14171A;border-radius:99px;padding:7px 14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">2 spots left</span>
+<span style="background:rgba(255,255,255,.1);color:#B9BFB4;border-radius:99px;padding:7px 14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">expires Sat 19:00</span>
+</div>
+<div style="font-size:12px;color:#8A938C;text-align:center;line-height:1.55;max-width:280px">The code stops working when the match fills or starts. Scanner sees the match first, signs in after.</div>
+</div>
+<div style="padding:0 24px 42px"><div style="border:1.5px solid rgba(255,255,255,.25);color:#fff;border-radius:12px;padding:13px;text-align:center;font-weight:700;font-size:13.5px">Brightness up · Done</div></div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2f"><div class="dv-olabel"><a class="dv-oid" href="#2f">2f</a>Sender states + dead links — decline ≡ non-member</div>
+<div class="dv-card" style="width:402px;background:#ECEBE5;border:none;box-shadow:none;display:flex;flex-direction:column;gap:14px;padding:6px 0">
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:14px 16px;display:flex;flex-direction:column;gap:2px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em;margin-bottom:8px">YOUR INVITES — WHAT THE SENDER SEES</div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 0"><div style="width:34px;height:34px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">JR</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Jonas Ricci</div><div style="font-size:10.5px;color:#66706A">accepted · paid 85 kr</div></div><span style="background:#EDF6D2;color:#256B3E;border-radius:6px;padding:3px 9px;font-size:10px;font-weight:800">IN ✓</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid #F0F1EA"><div style="width:34px;height:34px;border-radius:99px;background:#DCD3E8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">PN</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Pavel Novák</div><div style="font-size:10.5px;color:#66706A">invited 12 min ago</div></div><span style="background:#F0F1EA;color:#66706A;border-radius:6px;padding:3px 9px;font-size:10px;font-weight:800">INVITED</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid #F0F1EA"><div style="width:34px;height:34px;border-radius:99px;background:#F0F1EA;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#66706A">+46…</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">070-988 01 12</div><div style="font-size:10.5px;color:#66706A">spot released back to the match</div></div><span style="background:#F0F1EA;color:#66706A;border-radius:6px;padding:3px 9px;font-size:10px;font-weight:800">DIDN'T TAKE IT</span></div>
+<div style="margin-top:8px;background:#F7F8F3;border-radius:10px;padding:9px 12px;font-size:10.5px;color:#66706A;line-height:1.5">"Didn't take it" is the only closed state — it looks the same whether they declined, let it lapse, or aren't on RallyPoint. We never reveal which.</div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:16px;display:flex;flex-direction:column;gap:10px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em">LINK FULL — RECEIVER LANDING</div>
+<div style="display:flex;align-items:center;gap:12px"><div style="width:42px;height:42px;border-radius:99px;background:#EDF6D2;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#256B3E">4/4</div><div><div style="font-weight:800;font-size:15px;color:#14171A">This match filled up</div><div style="font-size:11.5px;color:#66706A;margin-top:1px">Sat 19:00 · all spots taken while the link was out</div></div></div>
+<div style="background:#D7F34F;border:1.5px solid #14171A;border-radius:10px;padding:11px;text-align:center;font-weight:800;font-size:12.5px;color:#14171A">Open matches near this one →</div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:16px;display:flex;flex-direction:column;gap:10px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em">LINK EXPIRED — RECEIVER LANDING</div>
+<div style="display:flex;align-items:center;gap:12px"><div style="width:42px;height:42px;border-radius:99px;background:#F0F1EA;display:flex;align-items:center;justify-content:center"><svg width="19" height="19" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="8.5" stroke="#8A938C" stroke-width="1.8"></circle><path d="M11 7v4.5l3 2" stroke="#8A938C" stroke-width="1.8" stroke-linecap="round"></path></svg></div><div><div style="font-weight:800;font-size:15px;color:#14171A">This link has expired</div><div style="font-size:11.5px;color:#66706A;margin-top:1px">The match already started — links die at start time</div></div></div>
+<div style="border:1.5px solid #E2E3DC;border-radius:10px;padding:11px;text-align:center;font-weight:700;font-size:12.5px;color:#3B423D">See what's on this week</div>
+</div>
+</div>
+</div>
+</div>
+<div class="grp">GROUPS — BELONG TO PLAYERS, BOOK ANYWHERE</div>
+<div class="dv-opts">
+<div class="dv-opt" id="2g"><div class="dv-olabel"><a class="dv-oid" href="#2g">2g</a>Groups + create sheet — members come from your People</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0;position:relative">
+<div style="padding:66px 20px 12px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:22px;letter-spacing:-0.01em;color:#14171A">Groups</span><span style="background:#D7F34F;border:1.5px solid #14171A;border-radius:99px;padding:6px 13px;font-size:12.5px;font-weight:700;color:#14171A">+ New</span></div>
+<div style="padding:0 20px;display:flex;flex-direction:column;gap:10px">
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:13px 15px;display:flex;align-items:center;gap:13px">
+<div style="width:44px;height:44px;border-radius:12px;background:#D7F34F;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:#14171A">TU</div>
+<div style="flex:1"><div style="font-size:14.5px;font-weight:700;color:#14171A">Tuesday Crew</div><div style="font-size:11px;color:#66706A;margin-top:1px">6 players · next Tue 19:00 · Arena Padel</div></div>
+<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="#8A938C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:13px 15px;display:flex;align-items:center;gap:13px">
+<div style="width:44px;height:44px;border-radius:12px;background:#E8EAE1;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:#3B423D">WK</div>
+<div style="flex:1"><div style="font-size:14.5px;font-weight:700;color:#14171A">Weekend Kickoff</div><div style="font-size:11px;color:#66706A;margin-top:1px">4 players · nothing booked · plays anywhere</div></div>
+<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="#8A938C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+<div style="position:absolute;inset:0;background:rgba(20,23,26,.45);z-index:5"></div>
+<div style="position:absolute;left:0;right:0;bottom:0;z-index:10;background:#fff;border-radius:24px 24px 0 0;padding:22px 22px 42px;display:flex;flex-direction:column;gap:12px;box-shadow:0 -12px 40px rgba(0,0,0,.3)">
+<div style="width:40px;height:4.5px;border-radius:3px;background:#D8DAD2;align-self:center"></div>
+<div style="font-weight:800;font-size:18px;color:#14171A">New group</div>
+<div style="border:2px solid #14171A;border-radius:12px;padding:12px 15px;font-size:14px;font-weight:600;color:#14171A">Morning Grinders<span style="opacity:.4">|</span></div>
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em">FROM YOUR PEOPLE · 4–8 PLAYERS</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#14171A;font-weight:600">3 selected</span></div>
+<div style="border:1px solid #E2E3DC;border-radius:13px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:11px;padding:10px 14px"><div style="width:34px;height:34px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">MK</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">Marta Karlsson <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:11px;color:#66706A">3.6</span></div><span style="width:24px;height:24px;border-radius:7px;background:#D7F34F;border:2px solid #14171A;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#14171A">✓</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:10px 14px;border-top:1px solid #F0F1EA"><div style="width:34px;height:34px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">JR</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">Jonas Ricci <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:11px;color:#66706A">3.1</span></div><span style="width:24px;height:24px;border-radius:7px;background:#D7F34F;border:2px solid #14171A;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#14171A">✓</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:10px 14px;border-top:1px solid #F0F1EA"><div style="width:34px;height:34px;border-radius:99px;background:#E8DFD0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">AL</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">Aline Duarte <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:11px;color:#66706A">4.1</span></div><span style="width:24px;height:24px;border-radius:7px;border:2px solid #D8DAD2;background:#fff"></span></div>
+</div>
+<div style="font-size:10.5px;color:#8A938C;line-height:1.5">Members get an invite to accept. The group belongs to its players — book it at any club.</div>
+<div style="background:#14171A;color:#fff;border-radius:12px;padding:14px;text-align:center;font-weight:700;font-size:14.5px">Create &amp; send invites</div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2h"><div class="dv-olabel"><a class="dv-oid" href="#2h">2h</a>Group detail — next session, people, history</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0">
+<div style="padding:66px 20px 8px;display:flex;align-items:center;gap:10px">
+<div style="width:32px;height:32px;border-radius:99px;background:#fff;border:1px solid #E2E3DC;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="#14171A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+<div style="width:38px;height:38px;border-radius:11px;background:#D7F34F;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#14171A">TU</div>
+<div style="flex:1"><div style="font-weight:800;font-size:17px;color:#14171A">Tuesday Crew</div><div style="font-size:11px;color:#66706A">6 players · plays at any club</div></div>
+</div>
+<div style="margin:6px 20px 0;background:#14171A;border-radius:15px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center">
+<div><div style="font-size:10px;font-weight:700;color:#8A938C;letter-spacing:.05em">NEXT SESSION</div><div style="font-family:'IBM Plex Mono',monospace;font-size:19px;font-weight:600;color:#D7F34F;margin-top:2px">Tue 19:00–20:30</div><div style="font-size:11px;color:#B9BFB4;margin-top:1px">Arena Padel · Court 2 · 4 confirmed</div></div>
+<span style="background:#D7F34F;color:#14171A;border-radius:9px;padding:8px 13px;font-size:12px;font-weight:800">I'm in</span>
+</div>
+<div style="margin:10px 20px 0"><div style="background:#D7F34F;border:2px solid #14171A;border-radius:12px;padding:13px;text-align:center;font-weight:800;font-size:14px;color:#14171A">Find a slot that fits everyone</div></div>
+<div style="flex:1;padding:12px 20px 0;display:flex;flex-direction:column;gap:9px;overflow:hidden">
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em">PLAYERS · 6</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:14px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:11px;padding:9px 14px"><div style="width:32px;height:32px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#14171A">AB</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">You</div><span style="font-size:10px;font-weight:800;color:#66706A;letter-spacing:.04em">ADMIN</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:2px 7px;color:#14171A">3.4</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 14px;border-top:1px solid #F0F1EA"><div style="width:32px;height:32px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#14171A">MK</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">Marta Karlsson</div><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:2px 7px;color:#14171A">3.6</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 14px;border-top:1px solid #F0F1EA"><div style="width:32px;height:32px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#14171A">JR</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">Jonas Ricci</div><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:2px 7px;color:#14171A">3.1</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 14px;border-top:1px solid #F0F1EA"><div style="width:32px;height:32px;border-radius:99px;background:#DCD3E8;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#14171A">PN</div><div style="flex:1;font-size:13px;font-weight:700;color:#14171A">Pavel Novák</div><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:2px 7px;color:#14171A">2.9</span></div>
+<div style="display:flex;align-items:center;gap:11px;padding:9px 14px;border-top:1px dashed #E2E3DC"><div style="width:32px;height:32px;border-radius:99px;border:2px dashed #C9CEC2;background:#F7F8F3;display:flex;align-items:center;justify-content:center;font-size:15px;color:#8A938C">+</div><div style="flex:1;font-size:12px;font-weight:600;color:#8A938C">Add from your People · up to 8</div></div>
+</div>
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em;margin-top:2px">RECENT SESSIONS</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:13px;padding:10px 14px;display:flex;align-items:center;gap:12px;opacity:.85">
+<div style="text-align:center;min-width:52px"><div style="font-family:'IBM Plex Mono',monospace;font-size:13.5px;font-weight:600;color:#14171A">19:00</div><div style="font-size:9.5px;color:#8A938C;font-weight:600">8 JUL</div></div>
+<div style="width:1px;align-self:stretch;background:#F0F1EA"></div>
+<div style="flex:1"><div style="font-size:12.5px;font-weight:700;color:#14171A">Arena Padel · Court 2</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#66706A">4 played · 85 kr each</div></div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:13px;padding:10px 14px;display:flex;align-items:center;gap:12px;opacity:.7">
+<div style="text-align:center;min-width:52px"><div style="font-family:'IBM Plex Mono',monospace;font-size:13.5px;font-weight:600;color:#14171A">19:00</div><div style="font-size:9.5px;color:#8A938C;font-weight:600">1 JUL</div></div>
+<div style="width:1px;align-self:stretch;background:#F0F1EA"></div>
+<div style="flex:1"><div style="font-size:12.5px;font-weight:700;color:#14171A">Racketklubben Väst · Court 1</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#66706A">4 played · 60 kr each</div></div>
+</div>
+</div>
+<div style="padding:12px 20px 34px"></div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2i"><div class="dv-olabel"><a class="dv-oid" href="#2i">2i</a>Find a slot for everyone — incl. no-common-slot</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0">
+<div style="padding:66px 20px 8px;display:flex;align-items:center;gap:10px">
+<div style="width:32px;height:32px;border-radius:99px;background:#fff;border:1px solid #E2E3DC;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="#14171A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+<div><div style="font-weight:800;font-size:17px;color:#14171A">Slot for Tuesday Crew</div><div style="font-size:12px;color:#66706A">4 needed · this week · any of your clubs</div></div>
+</div>
+<div style="padding:8px 20px 0;display:flex;gap:7px">
+<span style="padding:7px 13px;border-radius:99px;background:#14171A;color:#fff;font-size:12.5px;font-weight:600">Evenings</span>
+<span style="padding:7px 13px;border-radius:99px;background:#fff;border:1px solid #E2E3DC;color:#3B423D;font-size:12.5px;font-weight:600">90 min</span>
+<span style="padding:7px 13px;border-radius:99px;background:#fff;border:1px solid #E2E3DC;color:#3B423D;font-size:12.5px;font-weight:600">≤ 100 kr/pp</span>
+</div>
+<div style="flex:1;padding:12px 20px 0;display:flex;flex-direction:column;gap:10px;overflow:hidden">
+<div style="background:#fff;border:2px solid #14171A;border-radius:15px;padding:13px 15px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:#14171A">Thu 20:00 · 90</span><span style="background:#EDF6D2;color:#256B3E;border-radius:6px;padding:3px 8px;font-size:10.5px;font-weight:800">WORKS FOR 4/4</span></div>
+<div style="font-size:12px;color:#3B423D;font-weight:600">Arena Padel Söderport · Court 1 · 85 kr/pp</div>
+<div style="display:flex;gap:5px"><span style="background:#DCE5CE;border-radius:99px;padding:3px 9px;font-size:10px;font-weight:700;color:#14171A">MK ✓</span><span style="background:#D3DEE8;border-radius:99px;padding:3px 9px;font-size:10px;font-weight:700;color:#14171A">JR ✓</span><span style="background:#DCD3E8;border-radius:99px;padding:3px 9px;font-size:10px;font-weight:700;color:#14171A">PN ✓</span><span style="background:#D3DEE8;border-radius:99px;padding:3px 9px;font-size:10px;font-weight:700;color:#14171A">You ✓</span></div>
+<div style="background:#D7F34F;border:1.5px solid #14171A;border-radius:10px;padding:11px;text-align:center;font-weight:800;font-size:13px;color:#14171A">Propose Thu 20:00 to the group</div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:13px 15px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:#14171A">Fri 18:30 · 90</span><span style="background:#FBF4E6;color:#8A6A1B;border-radius:6px;padding:3px 8px;font-size:10.5px;font-weight:800">3/4 · PAVEL BUSY</span></div>
+<div style="font-size:12px;color:#3B423D;font-weight:600">Racketklubben Väst · Court 2 · 75 kr/pp</div>
+</div>
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em;margin-top:4px">STATE · NOTHING FITS ALL 4</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:16px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;gap:12px;align-items:flex-start">
+<div style="width:40px;height:40px;border-radius:99px;background:#F0F1EA;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 22 22" fill="none"><rect x="3" y="4.5" width="16" height="14" rx="3" stroke="#8A938C" stroke-width="1.8"></rect><path d="M3 9.5h16M7.5 3v3M14.5 3v3" stroke="#8A938C" stroke-width="1.8" stroke-linecap="round"></path></svg></div>
+<div><div style="font-weight:800;font-size:14.5px;color:#14171A">No slot fits all 4 this week</div><div style="font-size:11.5px;color:#66706A;line-height:1.5;margin-top:2px">Closest: <strong style="color:#14171A">Fri 18:30</strong> works for 3 — or everything fits <strong style="color:#14171A">next Tue</strong>.</div></div>
+</div>
+<div style="display:flex;gap:7px">
+<span style="flex:1;text-align:center;background:#14171A;color:#fff;border-radius:10px;padding:10px 0;font-size:12px;font-weight:700">Look at next week</span>
+<span style="flex:1;text-align:center;border:1.5px solid #E2E3DC;border-radius:10px;padding:10px 0;font-size:12px;font-weight:700;color:#3B423D">Book for 3, open 1 spot</span>
+</div>
+<div style="font-size:10.5px;color:#8A938C;line-height:1.5">Availability comes from each player's RallyPoint bookings and marked busy times — nothing else is shared.</div>
+</div>
+</div>
+<div style="padding:12px 20px 34px"></div>
+</div>
+</x-import></div>
+</div>
+<div class="grp">MULTI-CLUB (MOBILE) + CO-PLAYER ON A NORMAL BOOKING</div>
+<div class="dv-opts">
+<div class="dv-opt" id="2j"><div class="dv-olabel"><a class="dv-oid" href="#2j">2j</a>Club switcher — my clubs vs everywhere</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0;position:relative">
+<div style="padding:66px 20px 12px;display:flex;align-items:center;justify-content:space-between;filter:blur(1px)">
+<div style="display:flex;align-items:center;gap:7px"><div style="width:14px;height:14px;background:#D7F34F;transform:skewX(-12deg);border:1.5px solid #14171A"></div><span style="font-weight:800;font-style:italic;font-size:19px;letter-spacing:-0.02em;color:#14171A">RALLYPOINT</span></div>
+<span style="font-size:13px;font-weight:600;color:#14171A">Söderport ▾</span>
+</div>
+<div style="position:absolute;inset:0;background:rgba(20,23,26,.45);z-index:5"></div>
+<div style="position:absolute;left:0;right:0;bottom:0;z-index:10;background:#fff;border-radius:24px 24px 0 0;padding:22px 22px 42px;display:flex;flex-direction:column;gap:12px;box-shadow:0 -12px 40px rgba(0,0,0,.3)">
+<div style="width:40px;height:4.5px;border-radius:3px;background:#D8DAD2;align-self:center"></div>
+<div style="font-weight:800;font-size:18px;color:#14171A">Where are you playing?</div>
+<div style="font-size:11.5px;font-weight:700;color:#66706A;letter-spacing:.04em">MY CLUBS</div>
+<div style="border:1px solid #E2E3DC;border-radius:14px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:12px;padding:12px 15px;background:#F4F6EC;border-left:3px solid #D7F34F"><div style="width:38px;height:38px;border-radius:10px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#14171A">AP</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Arena Padel Söderport</div><div style="font-size:10.5px;color:#66706A">0.8 km · current</div></div><span style="background:#D7F34F;border:1px solid #14171A;border-radius:5px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:8.5px;font-weight:600;color:#14171A">MEMBER −10%</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:12px 15px;border-top:1px solid #F0F1EA"><div style="width:38px;height:38px;border-radius:10px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#14171A">RV</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Racketklubben Väst</div><div style="font-size:10.5px;color:#66706A">1.9 km</div></div><span style="background:#F0F1EA;border-radius:5px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:8.5px;font-weight:600;color:#66706A">MEMBER</span></div>
+<div style="display:flex;align-items:center;gap:12px;padding:12px 15px;border-top:1px solid #F0F1EA"><div style="width:38px;height:38px;border-radius:10px;background:#E8DFD0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#14171A">NH</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Padel Norra Hamnen</div><div style="font-size:10.5px;color:#66706A">3.4 km · you play here sometimes</div></div><span style="background:#fff;border:1px solid #E2E3DC;border-radius:5px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:8.5px;font-weight:600;color:#8A938C">GUEST</span></div>
+</div>
+<div style="border:1.5px solid #E2E3DC;border-radius:12px;padding:12px 15px;display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:700;color:#14171A">All clubs near me</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A938C">2 400+ clubs</span></div>
+<div style="font-size:10.5px;color:#8A938C;line-height:1.5">Membership is per club — each club sets its own tiers and prices. Guest booking is always open.</div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2k"><div class="dv-olabel"><a class="dv-oid" href="#2k">2k</a>Club you don't belong to — guest prices, join per club</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0">
+<div style="height:130px;background:repeating-linear-gradient(45deg,#E6E9DE 0 10px,#EEF0E8 10px 20px);position:relative">
+<div style="position:absolute;top:62px;left:16px;width:34px;height:34px;border-radius:99px;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="#14171A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+</div>
+<div style="padding:16px 20px 8px">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:21px;letter-spacing:-0.01em;color:#14171A">Padel Norra Hamnen</span><span style="background:#fff;border:1px solid #E2E3DC;border-radius:5px;padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:600;color:#8A938C">GUEST</span></div>
+<div style="font-size:13px;color:#66706A;margin-top:3px">Hamngatan 4 · 3.4 km · open 06–23</div>
+</div>
+<div style="margin:6px 20px 0;background:#fff;border:1px solid #E2E3DC;border-radius:14px;padding:13px 16px;display:flex;flex-direction:column;gap:9px">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:700;color:#14171A">You're booking as a guest</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#66706A">guest rates shown</span></div>
+<div style="font-size:11.5px;color:#66706A;line-height:1.55">Anyone can book here. Members of <strong style="color:#14171A">this club</strong> get −10% and a 7-day booking window — membership is per club, it doesn't carry over.</div>
+<div style="display:flex;gap:8px">
+<span style="flex:1;text-align:center;background:#14171A;color:#fff;border-radius:10px;padding:10px 0;font-size:12.5px;font-weight:700">Join this club · 249 kr/mo</span>
+<span style="flex:1;text-align:center;border:1.5px solid #E2E3DC;border-radius:10px;padding:10px 0;font-size:12.5px;font-weight:700;color:#3B423D">Keep booking as guest</span>
+</div>
+</div>
+<div style="flex:1;padding:14px 20px 0;display:flex;flex-direction:column;gap:9px;overflow:hidden">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;font-weight:700;color:#66706A;letter-spacing:.04em">TODAY · GUEST PRICES</span></div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:12px;padding:11px 14px;display:flex;flex-direction:column;gap:7px">
+<div style="display:flex;justify-content:space-between"><span style="font-size:13.5px;font-weight:700;color:#14171A">Court 5 · indoor</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#66706A">260–320 kr/h</span></div>
+<div style="position:relative;height:16px;border-radius:5px;background:#EFF1EA;overflow:hidden">
+<div style="position:absolute;top:0;bottom:0;left:0%;width:30%;background:#C9CEC2"></div>
+<div style="position:absolute;top:0;bottom:0;left:44%;width:23%;background:#C9CEC2"></div>
+</div>
+<div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C"><span>14</span><span>17</span><span>20</span><span>23</span></div>
+</div>
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:12px;padding:11px 14px;display:flex;flex-direction:column;gap:7px">
+<div style="display:flex;justify-content:space-between"><span style="font-size:13.5px;font-weight:700;color:#14171A">Court 6 · indoor</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#66706A">260–320 kr/h</span></div>
+<div style="position:relative;height:16px;border-radius:5px;background:#EFF1EA;overflow:hidden">
+<div style="position:absolute;top:0;bottom:0;left:11%;width:39%;background:#C9CEC2"></div>
+</div>
+<div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C"><span>14</span><span>17</span><span>20</span><span>23</span></div>
+</div>
+</div>
+<div style="padding:12px 20px 34px">
+<div style="background:#14171A;color:#fff;border-radius:13px;padding:15px;text-align:center;font-weight:700;font-size:15.5px">Pick a time <span style="color:#D7F34F">→</span></div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2l"><div class="dv-olabel"><a class="dv-oid" href="#2l">2l</a>Named co-player on a normal booking</div>
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="height:100%;display:flex;flex-direction:column;background:#F4F4F0">
+<div style="padding:66px 20px 8px;display:flex;align-items:center;gap:10px">
+<div style="width:32px;height:32px;border-radius:99px;background:#fff;border:1px solid #E2E3DC;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="#14171A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+<div style="font-weight:800;font-size:17px;color:#14171A">Confirm booking</div>
+</div>
+<div style="margin:6px 20px 0;background:#fff;border:1px solid #E2E3DC;border-radius:14px;padding:15px 16px;display:flex;justify-content:space-between">
+<span style="font-weight:700;font-size:14px;color:#14171A">Court 2 · Sat 19:00–20:30</span><span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#14171A">340 kr</span>
+</div>
+<div style="margin:10px 20px 0;background:#fff;border:1px solid #E2E3DC;border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:700;color:#14171A">Players on this booking</span><span style="font-size:10.5px;color:#8A938C">private — not an open match</span></div>
+<div style="display:flex;align-items:center;gap:11px"><div style="width:34px;height:34px;border-radius:99px;background:#D3DEE8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">AB</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">You</div><div style="font-size:10.5px;color:#66706A">booker · pays now</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:#14171A">170 kr</span></div>
+<div style="display:flex;align-items:center;gap:11px"><div style="width:34px;height:34px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#14171A">MK</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:#14171A">Marta Karlsson</div><div style="font-size:10.5px;color:#66706A">from your People · gets a pay-share request</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:#14171A">170 kr</span></div>
+<div style="display:flex;align-items:center;gap:11px;border-top:1px dashed #E2E3DC;padding-top:10px"><div style="width:34px;height:34px;border-radius:99px;border:2px dashed #C9CEC2;background:#F7F8F3;display:flex;align-items:center;justify-content:center;font-size:15px;color:#8A938C">+</div><div style="flex:1;font-size:12px;font-weight:600;color:#8A938C">Add co-player — your People only</div></div>
+<div style="background:#F7F8F3;border-radius:10px;padding:9px 12px;font-size:10.5px;color:#66706A;line-height:1.5">Marta must accept. She'll see this booking in her Bookings and can pay her 170 kr — she can't change or cancel it. If she declines, you simply owe the full 340 kr.</div>
+</div>
+<div style="flex:1"></div>
+<div style="padding:12px 20px 34px;display:flex;flex-direction:column;gap:8px">
+<div style="background:#14171A;color:#fff;border-radius:13px;padding:15px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;font-size:15.5px">Pay your 170 kr</span><span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#D7F34F">Marta invited for 170</span></div>
+</div>
+</div>
+</x-import></div>
+<div class="dv-opt" id="2m"><div class="dv-olabel"><a class="dv-oid" href="#2m">2m</a>Component additions</div>
+<div class="dv-card" style="width:402px;background:#ECEBE5;border:none;box-shadow:none;display:flex;flex-direction:column;gap:14px;padding:6px 0">
+<div style="background:#fff;border:1px solid #E2E3DC;border-radius:15px;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em">CONNECTION ROW</div>
+<div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;border-radius:99px;background:#DCE5CE;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#14171A">MK</div><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#14171A">Marta Karlsson</div><div style="font-size:11px;color:#66706A">played together ×9 · last Tue</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;background:#F0F1EA;border-radius:6px;padding:3px 8px;color:#14171A">3.6</span></div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em;margin-top:4px">INVITE STATE CHIPS — one closed state, always</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<span style="background:#F0F1EA;color:#66706A;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800">INVITED</span>
+<span style="background:#EDF6D2;color:#256B3E;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800">IN ✓</span>
+<span style="background:#F0F1EA;color:#66706A;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800">DIDN'T TAKE IT</span>
+<span style="background:#FBF4E6;color:#8A6A1B;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800">PENDING APPROVAL</span>
+</div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em;margin-top:4px">GROUP TILE</div>
+<div style="display:flex;align-items:center;gap:13px;background:#F7F8F3;border-radius:12px;padding:11px 13px"><div style="width:40px;height:40px;border-radius:11px;background:#D7F34F;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#14171A">TU</div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:#14171A">Tuesday Crew</div><div style="font-size:10.5px;color:#66706A">6 players · next Tue 19:00</div></div></div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em;margin-top:4px">CLUB SWITCHER ROW · membership badges</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<span style="background:#D7F34F;border:1px solid #14171A;border-radius:5px;padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:600;color:#14171A">MEMBER −10%</span>
+<span style="background:#F0F1EA;border-radius:5px;padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:600;color:#66706A">MEMBER</span>
+<span style="background:#fff;border:1px solid #E2E3DC;border-radius:5px;padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:600;color:#8A938C">GUEST</span>
+</div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#8A938C;letter-spacing:.08em;margin-top:4px">QR CARD (mini)</div>
+<div style="display:flex;gap:12px;align-items:center">
+<div style="position:relative;width:84px;height:84px;background:repeating-linear-gradient(0deg,#F0F1EA 0 5px,#fff 5px 10px),repeating-linear-gradient(90deg,rgba(20,23,26,.07) 0 5px,transparent 5px 10px);border:1px solid #E2E3DC;border-radius:8px">
+<div style="position:absolute;top:5px;left:5px;width:16px;height:16px;border:3px solid #14171A;border-radius:4px"></div>
+<div style="position:absolute;top:5px;right:5px;width:16px;height:16px;border:3px solid #14171A;border-radius:4px"></div>
+<div style="position:absolute;bottom:5px;left:5px;width:16px;height:16px;border:3px solid #14171A;border-radius:4px"></div>
+</div>
+<div style="flex:1"><div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:#14171A">rallyp.nt/m/8F3K</div><div style="font-size:10.5px;color:#66706A;margin-top:3px;line-height:1.5">capacity-bounded (admits n) · expires at start · dead link = full/expired landings in <a class="dv-oid" href="#2f">2f</a></div></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<p class="dv-next">Try next: "receiver flow for a direct invite (push → accept → pay)" · "group proposal voting states" · "dark pass on <a class="dv-oid" href="#2e">2e</a> style for the whole app"</p>
+</section>
 <section class="dv-turn" id="t1">
 <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">RallyPoint player app — full screen set, critical states, components</span></div>
 <div style="max-width:760px;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:10px;padding:18px 22px;font-size:12.5px;line-height:1.65;color:#3B423D;margin-bottom:8px">

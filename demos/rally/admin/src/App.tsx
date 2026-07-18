@@ -44,11 +44,25 @@ export default function App() {
       if (p) setPrincipal(p);
       setVenue(localStorage.getItem(`${STORE}-venue`) ?? 'solna');
       setCast(r.cast);
-      setVenues(r.venues);
       setAllMembers(r.members);
       setWho(start);
     });
   }, []);
+
+  // Reachable venues are per principal, so they are refetched whenever the
+  // principal changes — a receptionist pinned to one venue gets no switcher.
+  useEffect(() => {
+    if (!cast[who]) return;
+    void api
+      .myVenues()
+      .then((vs) => {
+        setVenues(vs);
+        // If the remembered venue is not one of theirs, fall back to the first.
+        if (vs.length > 0 && !vs.some((v) => v.key === venue)) pickVenue(vs[0]!.key);
+      })
+      .catch(() => setVenues([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cast, who]);
 
   // Same synchronous-before-render discipline as the principal picker.
   const pickVenue = useCallback((key: string) => {
@@ -113,18 +127,28 @@ export default function App() {
           ))}
         </nav>
         <div className="side-foot">
-          <label style={{ marginBottom: 4 }}>Klubb</label>
-          <select
-            value={venue}
-            onChange={(e) => pickVenue(e.target.value)}
-            style={{ width: '100%', fontSize: 11.5 }}
-          >
-            {venues.map((v) => (
-              <option key={v.key} value={v.key}>
-                {v.label}
-              </option>
-            ))}
-          </select>
+          {/* One venue = no switcher, per handover 2a. Staff pinned to a single
+              club should not be offered a control that can only fail. */}
+          {venues.length > 1 ? (
+            <>
+              <label style={{ marginBottom: 4 }}>Klubb</label>
+              <select
+                value={venue}
+                onChange={(e) => pickVenue(e.target.value)}
+                style={{ width: '100%', fontSize: 11.5, border: '2px solid var(--ink)' }}
+              >
+                {venues.map((v) => (
+                  <option key={v.key} value={v.key}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <span style={{ fontWeight: 700, color: 'var(--ink)' }}>
+              {venues[0]?.label ?? '—'}
+            </span>
+          )}
           <span className="mono" style={{ fontSize: 10, display: 'block', marginTop: 6 }}>
             {cast[who]?.role ?? '—'}
           </span>
