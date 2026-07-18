@@ -130,6 +130,23 @@ question they have no basis to answer, and it hides the thing they actually want
 - **The court is chosen last, or not at all.** One court free → it is assigned silently.
   Several → the player may pick, after the time is settled, and most never will.
 - **Filters narrow the pool before the time question**, never after (§4.3).
+
+**The flow is two steps, and the split is what each one is deciding:**
+
+| | Decides | Also carries |
+|---|---|---|
+| **Step 1 — when** | a start time | *filters* only: date, cover, and optionally a duration. A duration here narrows WHICH TIMES are offered; it is not yet a choice about the booking. |
+| **Step 2 — what** | duration (defaults to **90**), court, and payment | the resolved price, quoted before anything is committed |
+
+Putting duration on step 1 as a *choice* was wrong: it asked for a decision about
+the booking before the player had one to make, and mixed a filter with a
+commitment. Asking it twice — once as a filter, once as a decision — is fine,
+because they are different questions.
+
+Nothing is held between the steps. That is honest while payment is synchronous:
+a hold exists to protect a slot across an ASYNCHRONOUS payment, so the hold and
+the confirm happen together on the button, and the lost race is handled by the
+409 path. The countdown the design specifies returns with the payment rail.
 - Staff are the exception: the console books a *specific* court, because reception is
   looking at a grid and moving people between named courts all day.
 

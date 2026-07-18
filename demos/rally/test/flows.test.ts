@@ -254,6 +254,21 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
     const openAir = await ok(`/api/venue-availability?date=${DATE}&cover=open`, { as: elin });
     for (const s of openAir) for (const c of s.courts) expect(c.cover).toBe('open');
 
+    // Step 2 asks what it costs BEFORE committing, and which courts could take
+    // it — until this existed, the only way to learn a price was to take the slot.
+    const quote = await ok(
+      `/api/quote?date=${DATE}&time=13:00&duration=90`,
+      { as: elin },
+    );
+    expect(Number(quote.price.amount)).toBeGreaterThan(0);
+    expect(quote.courts.length).toBeGreaterThan(0);
+    // The quote is the same arithmetic book-court will do, so they cannot disagree.
+    const sample = await ok('/api/bookings', {
+      as: elin, method: 'POST',
+      body: { memberId: elinM, date: DATE, time: '13:00', duration: 90 },
+    });
+    expect(sample.price.amount).toBe(quote.price.amount);
+
     // Booking with no resourceId at all: the vertical picks one.
     const booked = await ok('/api/bookings', {
       as: elin,

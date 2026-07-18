@@ -1119,6 +1119,47 @@ function pickCourt(
   throw new SlotUnavailable('venue', startsAt, endsAt);
 }
 
+/**
+ * What would this cost? Needed because the booking screen shows a price before
+ * anything is committed, and until now the only way to learn a price was to take
+ * the slot — which is a poor way to answer a question.
+ *
+ * Browse-guarded: a price list is public, and this is the same arithmetic
+ * `book-court` will do, so the two cannot disagree.
+ */
+const quoteOp: OperationHandler<
+  { date: string; time: string; duration: number; resourceId?: string; cover?: Cover[] },
+  { price: Money; label: string; courts: { id: string; name: string; cover: Cover }[] }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
+  const startsAt = zonedToInstant(input.date, input.time, venue(ctx).timezone);
+  const endsAt = addMinutes(startsAt, input.duration);
+
+  // Which courts could actually take it — step 2's picker, and the reason the
+  // player never has to guess in step 1.
+  const courts = courtPool(ctx, input.cover).filter((c) => {
+    if (!c.durations.split(',').map((d) => Number(d.trim())).includes(input.duration)) return false;
+    const w = bookableWindow(ctx, c.id, input.date);
+    if (!w || startsAt < w.startsAt || endsAt > w.endsAt) return false;
+    return engineAvailability(ctx, { resourceId: c.id, from: startsAt, to: endsAt }).some(
+      (f) => f.startsAt <= startsAt && f.endsAt >= endsAt,
+    );
+  });
+  if (courts.length === 0) throw new SlotUnavailable('venue', startsAt, endsAt);
+
+  const { price, label } = resolvePrice(ctx, {
+    resourceId: input.resourceId ?? courts[0]!.id,
+    date: input.date,
+    time: input.time,
+    duration: input.duration,
+  });
+  return {
+    price,
+    label,
+    courts: courts.map((c) => ({ id: c.id, name: c.name, cover: c.cover })),
+  };
+};
+
 const bookInput = z.object({
   /** Omitted = the vertical picks one (spec §4.2). Staff pass it; players rarely do. */
   resourceId: z.string().min(1).optional(),
@@ -1725,6 +1766,7 @@ export const rallyModule: ModuleRegistration = {
     'rally/get-venue': getVenueOp as never,
     'rally/courts': browseCourtsOp as never,
     'rally/venue-availability': venueAvailabilityOp as never,
+    'rally/quote': quoteOp as never,
     'rally/played-with': playedWithOp as never,
     'rally/availability': availabilityOp as never,
     'rally/book-court': bookCourtOp as never,

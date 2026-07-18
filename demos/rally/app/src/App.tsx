@@ -189,85 +189,48 @@ export default function App() {
 function Book({ tz, memberId }: { tz: string; memberId: string }) {
   const [date, setDate] = useState(todayISO);
   const [cover, setCover] = useState<Cover[]>([]);
+  /** A duration filter on step 1 — it narrows WHICH TIMES show, nothing else. */
+  const [only, setOnly] = useState<number | null>(null);
   const [slots, setSlots] = useState<VenueSlot[]>([]);
-  const [start, setStart] = useState('');
-  const [held, setHeld] = useState<{ r: Reservation; price: Money; label: string } | null>(null);
-  const [taken, setTaken] = useState<string | null>(null);
+  const [picked, setPicked] = useState<VenueSlot | null>(null); // → step 2
   const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
-  // Booking for yourself, or opening the court up for others to join.
+  const [taken, setTaken] = useState<string | null>(null);
   const [mode, setMode] = useState<'solo' | 'match'>('solo');
-  const [fillTarget, setFillTarget] = useState(4);
-  const [band, setBand] = useState<[string, string]>(['3.0', '4.5']);
-  const [made, setMade] = useState<{ id: string; share: Money } | null>(null);
+  const [done, setDone] = useState<{ time: string; price: Money; match?: string } | null>(null);
 
   const loadSlots = useCallback(() => {
     void api
       .venueAvailability(date, cover)
-      .then((s) => setSlots(s))
+      .then(setSlots)
       .catch((e) => setErr(e.message));
   }, [date, cover]);
   useEffect(loadSlots, [loadSlots]);
 
-  const chosen = slots.find((s) => hhmm(s.startsAt, tz) === start);
-  const fits = chosen?.fits ?? [];
+  const shown = only ? slots.filter((s) => s.fits.includes(only)) : slots;
 
-  if (held) {
+  if (picked) {
     return (
-      <Pay
+      <Step2
         tz={tz}
-        held={held}
-        onDone={() => {
-          setHeld(null);
-          setStart('');
+        date={date}
+        slot={picked}
+        cover={cover}
+        memberId={memberId}
+        mode={mode}
+        onBack={() => setPicked(null)}
+        onTaken={(t) => {
+          setPicked(null);
+          setTaken(t);
+          loadSlots();
+        }}
+        onDone={(d) => {
+          setPicked(null);
+          setDone(d);
           loadSlots();
         }}
       />
     );
   }
-
-  /**
-   * One tap commits. Choosing a duration IS the decision — there is nothing left
-   * to confirm on this screen, so a separate "hold the time" button was only ever
-   * an extra tap between the player and the payment screen. The hold is safe to
-   * take on a tap because it expires by itself and the next screen can cancel it.
-   */
-  const commit = async (time: string, minutes: number) => {
-    if (!memberId) return;
-    setBusy(true);
-    setErr('');
-    setTaken(null);
-    try {
-      if (mode === 'match') {
-        const m = await api.createMatch({
-          memberId, date, time, duration: minutes, cover,
-          fillTarget, levelMin: band[0], levelMax: band[1],
-        });
-        setMade({ id: m.reservation.id, share: m.sharePerPlayer });
-        loadSlots();
-      } else {
-        // No court: the vertical assigns one from the filtered pool (spec §4.2).
-        const r = await api.book({ memberId, date, time, duration: minutes, cover });
-        setHeld({ r: r.reservation, price: r.price, label: r.ruleLabel });
-      }
-    } catch (e) {
-      if (e instanceof ApiError && e.isSlotTaken) {
-        setTaken(time);
-        loadSlots();
-      } else setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Tapping a time commits outright when only one duration can fit. */
-  const pickTime = (time: string, slotFits: number[]) => {
-    setStart(time);
-    if (slotFits.length === 1) void commit(time, slotFits[0]!);
-  };
-
-  const alternatives = slots.slice(0, 3);
-  void alternatives;
 
   return (
     <>
@@ -282,41 +245,237 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
         </button>
       </div>
 
-      {made && (
+      {done && (
         <div className="banner">
-          <strong>Matchen är öppen.</strong>
-          Din andel är {made.share.amount} kr. Dela länken så fyller den sig själv.
+          <strong>Klart — {done.time}, {done.price.amount} kr.</strong>
+          {done.match ? 'Matchen är öppen. Dela länken så fyller den sig själv.' : 'Bokningen är bekräftad.'}
           <div className="row" style={{ marginTop: 8 }}>
-            <button
-              className="pill on"
-              onClick={() => {
-                void navigator.clipboard
-                  ?.writeText(matchLink(getVenue(), made.id))
-                  .catch(() => {});
-              }}
-            >
-              Kopiera länk
-            </button>
-            <button className="pill" onClick={() => setMade(null)}>
-              Klart
-            </button>
+            {done.match && (
+              <button
+                className="pill on"
+                onClick={() =>
+                  void navigator.clipboard?.writeText(matchLink(getVenue(), done.match!)).catch(() => {})
+                }
+              >
+                Kopiera länk
+              </button>
+            )}
+            <button className="pill" onClick={() => setDone(null)}>Klart</button>
           </div>
         </div>
       )}
 
+      {taken && (
+        <div className="banner">
+          <strong>{taken} blev precis bokad.</strong>
+          Inget är debiterat — välj en annan tid.
+        </div>
+      )}
+      {err && <div className="banner bad">{err}</div>}
+
+      <div className="card">
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          style={{
+            width: '100%', minHeight: 44, border: '1px solid var(--border-strong)',
+            borderRadius: 12, padding: '0 10px', font: 'inherit',
+          }}
+        />
+        {/* Filters. Both narrow WHICH TIMES are offered — neither is a choice
+            about the booking itself, which is why they live on step 1. */}
+        <div className="row" style={{ marginTop: 10 }}>
+          {(['indoor', 'covered', 'open'] as Cover[]).map((k) => (
+            <button
+              key={k}
+              className={`pill ${cover.includes(k) ? 'on' : ''}`}
+              onClick={() =>
+                setCover((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]))
+              }
+            >
+              {COVER_SV[k]}
+            </button>
+          ))}
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className={`pill ${only === null ? 'on' : ''}`} onClick={() => setOnly(null)}>
+            Alla längder
+          </button>
+          {[60, 90, 120].map((d) => (
+            <button
+              key={d}
+              className={`pill ${only === d ? 'on' : ''}`}
+              onClick={() => setOnly(only === d ? null : d)}
+            >
+              {d} min
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {shown.length === 0 && (
+        <div className="empty">
+          Inga lediga tider{only ? ` för ${only} min` : ''} den här dagen.
+        </div>
+      )}
+
+      {shown.length > 0 && (
+        <>
+          <div className="slots">
+            {shown.map((s) => {
+              const t = hhmm(s.startsAt, tz);
+              return (
+                <button key={s.startsAt} className="slot" onClick={() => setPicked(s)}>
+                  <span className="t">{t}</span>
+                  <span className="dots">
+                    {[60, 90, 120].map((d) => (
+                      <i key={d} className={s.fits.includes(d) ? 'on' : ''} />
+                    ))}
+                  </span>
+                  <span className="legend" style={{ margin: 0, fontSize: 9 }}>
+                    {s.courts.length} {s.courts.length === 1 ? 'bana' : 'banor'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="legend">● 60 · ●● 90 · ●●● 120 min ryms · välj en tid för att fortsätta</p>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * Step 2 — everything that is a decision about THIS booking: how long, which
+ * court, what it costs, and paying. Step 1 only chose a time, and its filters
+ * only decided which times to show.
+ *
+ * Nothing is held while you are here. That is honest today: a hold exists to
+ * protect a slot across an ASYNCHRONOUS payment, and there is no payment rail
+ * yet — so the hold and the confirm happen together on the button. When Stripe
+ * lands, this screen gains the countdown the design already specifies.
+ */
+function Step2({
+  tz, date, slot, cover, memberId, mode, onBack, onTaken, onDone,
+}: {
+  tz: string;
+  date: string;
+  slot: VenueSlot;
+  cover: Cover[];
+  memberId: string;
+  mode: 'solo' | 'match';
+  onBack: () => void;
+  onTaken: (time: string) => void;
+  onDone: (d: { time: string; price: Money; match?: string }) => void;
+}) {
+  const time = hhmm(slot.startsAt, tz);
+  // 90 is the padel default; fall back only when the gap cannot take it.
+  const [duration, setDuration] = useState(
+    slot.fits.includes(90) ? 90 : slot.fits[slot.fits.length - 1]!,
+  );
+  const [courtId, setCourtId] = useState<string | null>(null);
+  const [quote, setQuote] = useState<{
+    price: Money; label: string; courts: { id: string; name: string; cover: Cover }[];
+  } | null>(null);
+  const [spots, setSpots] = useState(3);
+  const [band, setBand] = useState<[string, string]>(['3.0', '4.5']);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setQuote(null);
+    void api
+      .quote(date, time, duration, cover)
+      .then((q) => {
+        setQuote(q);
+        setCourtId((c) => (c && q.courts.some((x) => x.id === c) ? c : (q.courts[0]?.id ?? null)));
+      })
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, [date, time, duration, cover]);
+
+  const pay = async () => {
+    if (!memberId || !quote) return;
+    setBusy(true);
+    setErr('');
+    try {
+      if (mode === 'match') {
+        const m = await api.createMatch({
+          memberId, date, time, duration,
+          ...(courtId ? { resourceId: courtId } : {}),
+          fillTarget: spots + 1, levelMin: band[0], levelMax: band[1],
+        });
+        onDone({ time, price: m.sharePerPlayer, match: m.reservation.id });
+      } else {
+        const b = await api.book({
+          memberId, date, time, duration,
+          ...(courtId ? { resourceId: courtId } : {}),
+        });
+        await api.confirm(b.reservation.id);
+        onDone({ time, price: b.price });
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.isSlotTaken) onTaken(time);
+      else setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button className="pill" onClick={onBack} style={{ marginBottom: 12 }}>
+        ← Andra tider
+      </button>
+      <h1>
+        {dayLabel(slot.startsAt, tz)} {time}
+      </h1>
+
+      {err && <div className="banner bad">{err}</div>}
+
+      <div className="card">
+        <h2>Hur länge?</h2>
+        <div className="seg" style={{ marginTop: 8 }}>
+          {[60, 90, 120].map((d) => (
+            <button
+              key={d}
+              className={duration === d ? 'on' : ''}
+              disabled={!slot.fits.includes(d)}
+              onClick={() => setDuration(d)}
+            >
+              {d} min
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Bana</h2>
+        {!quote && <p className="meta">Söker lediga banor…</p>}
+        <div className="row" style={{ marginTop: 8 }}>
+          {quote?.courts.map((c) => (
+            <button
+              key={c.id}
+              className={`pill ${courtId === c.id ? 'on' : ''}`}
+              onClick={() => setCourtId(c.id)}
+            >
+              {c.name} · {COVER_SV[c.cover]}
+            </button>
+          ))}
+        </div>
+        {quote && quote.courts.length > 1 && (
+          <p className="legend">Vi valde åt dig — byt om du har en favorit.</p>
+        )}
+      </div>
+
       {mode === 'match' && (
         <div className="card">
           <h2>Hur många platser öppnar du?</h2>
-          {/* A padel match is four. The variable is how many places the host is
-              opening — 1, 2 or 3 — so fillTarget is derived, never picked. */}
           <div className="seg" style={{ marginTop: 8 }}>
-            {[1, 2, 3].map((spots) => (
-              <button
-                key={spots}
-                className={fillTarget === spots + 1 ? 'on' : ''}
-                onClick={() => setFillTarget(spots + 1)}
-              >
-                {spots} {spots === 1 ? 'plats' : 'platser'}
+            {[1, 2, 3].map((n) => (
+              <button key={n} className={spots === n ? 'on' : ''} onClick={() => setSpots(n)}>
+                {n} {n === 1 ? 'plats' : 'platser'}
               </button>
             ))}
           </div>
@@ -333,247 +492,34 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
                 className={`pill ${band[0] === lo ? 'on' : ''}`}
                 onClick={() => setBand([lo, hi])}
               >
-                {label} {lo}–{hi}
+                {label}
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="meta">{quote?.label ?? '—'}</span>
+          <span className="mono" style={{ fontSize: 20, color: 'var(--ink)', fontWeight: 600 }}>
+            {quote ? kr(quote.price) : '…'}
+          </span>
+        </div>
+        {mode === 'match' && quote && (
           <p className="legend">
-            Spelare utanför nivåspannet kan be om en plats. Din egen plats räknas när du öppnar
-            matchen.
+            Din andel blir {Math.round(Number(quote.price.amount) / (spots + 1))} kr när matchen är
+            full.
           </p>
-        </div>
-      )}
-
-      {err && <div className="banner bad">{err}</div>}
-
-      {taken && (
-        <div className="banner">
-          <strong>{taken} blev precis bokad.</strong>
-          Inget är debiterat. Närmaste lediga tider:
-          <div className="row" style={{ marginTop: 8 }}>
-            {alternatives.map((a, i) => (
-              <button
-                key={a.startsAt}
-                className={`pill ${i === 0 ? 'on' : ''}`}
-                onClick={() => {
-                  setStart(hhmm(a.startsAt, tz));
-                  setTaken(null);
-                }}
-              >
-                {hhmm(a.startsAt, tz)}
-              </button>
-            ))}
-            {alternatives.length === 0 && <span className="meta">Inga kvar idag.</span>}
-          </div>
-        </div>
-      )}
-
-      {/* Filters narrow the pool BEFORE the time grid, never after. */}
-      <div className="row" style={{ marginBottom: 10 }}>
-        {(['indoor', 'covered', 'open'] as Cover[]).map((k) => (
-          <button
-            key={k}
-            className={`pill ${cover.includes(k) ? 'on' : ''}`}
-            onClick={() => {
-              setCover((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
-              setStart('');
-            }}
-          >
-            {COVER_SV[k]}
-          </button>
-        ))}
-        {cover.length > 0 && (
-          <button className="pill" onClick={() => { setCover([]); setStart(''); }}>
-            Rensa
-          </button>
         )}
       </div>
 
-      <div className="card">
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => {
-            setDate(e.target.value);
-            setStart('');
-          }}
-          style={{
-            width: '100%',
-            minHeight: 44,
-            border: '1px solid var(--border-strong)',
-            borderRadius: 12,
-            padding: '0 10px',
-            font: 'inherit',
-          }}
-        />
-      </div>
-
-      {slots.length === 0 && <div className="empty">Stängt eller fullbokat den här dagen.</div>}
-
-      {slots.length > 0 && (
-        <>
-          <div className="slots">
-            {slots.map((s) => {
-              const t = hhmm(s.startsAt, tz);
-              return (
-                <button
-                  key={s.startsAt}
-                  className={`slot ${t === start ? 'on' : ''}`}
-                  disabled={busy}
-                  onClick={() => pickTime(t, s.fits)}
-                >
-                  <span className="t">{t}</span>
-                  <span className="dots">
-                    {[60, 90, 120].map((d) => (
-                      <i key={d} className={s.fits.includes(d) ? 'on' : ''} />
-                    ))}
-                  </span>
-                  <span className="legend" style={{ margin: 0, fontSize: 9 }}>
-                    {s.courts.length} {s.courts.length === 1 ? 'bana' : 'banor'}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="legend">● 60 · ●● 90 · ●●● 120 min ryms</p>
-        </>
-      )}
-
-      {/* Only asked when there is genuinely a choice — and answering it commits,
-          so there is no trailing confirm button to tap. */}
-      {start && fits.length > 1 && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <h2>Hur länge, {start}?</h2>
-          <div className="seg" style={{ marginTop: 8 }}>
-            {fits.map((d) => (
-              <button key={d} disabled={busy} onClick={() => void commit(start, d)}>
-                {d} min
-              </button>
-            ))}
-          </div>
-          <p className="legend">
-            Vi väljer bana åt dig — {chosen?.courts.length ?? 0} lediga vid {start}. Byt i nästa
-            steg om du bryr dig.
-          </p>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-function Pay({
-  tz,
-  held,
-  onDone,
-}: {
-  tz: string;
-  held: { r: Reservation; price: Money; label: string };
-  onDone: () => void;
-}) {
-  const [left, setLeft] = useState(() => secondsLeft(held.r));
-  const [err, setErr] = useState('');
-  const [paid, setPaid] = useState(false);
-
-  useEffect(() => {
-    const t = setInterval(() => setLeft(secondsLeft(held.r)), 1000);
-    return () => clearInterval(t);
-  }, [held.r]);
-
-  const total = held.r.expiresAt
-    ? Math.max(1, (Date.parse(held.r.expiresAt) - Date.parse(held.r.startsAt)) / 1000)
-    : 600;
-  const urgent = left > 0 && left < 60;
-
-  if (paid) {
-    return (
-      <>
-        <h1>Klart!</h1>
-        <div className="card">
-          <h2>Bokningen är bekräftad</h2>
-          <p className="meta">
-            {dayLabel(held.r.startsAt, tz)} · {hhmm(held.r.startsAt, tz)}–
-            {hhmm(held.r.endsAt, tz)}
-          </p>
-        </div>
-        <button className="cta" onClick={onDone}>
-          Tillbaka
-        </button>
-      </>
-    );
-  }
-
-  if (left <= 0) {
-    return (
-      <>
-        <h1>Hållningen gick ut</h1>
-        <div className="card">
-          <div className="clock" style={{ color: 'var(--muted-2)' }}>
-            0:00
-          </div>
-          <p className="meta" style={{ marginTop: 6 }}>
-            Ingenting har debiterats. Tiden kan fortfarande vara ledig — försök igen.
-          </p>
-        </div>
-        <button className="cta" onClick={onDone}>
-          Se andra tider
-        </button>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <h1>Bekräfta</h1>
-      <div className={`hold ${urgent ? 'urgent' : ''}`}>
-        <div className="lbl">Banan är reserverad åt dig</div>
-        <div className="clock">
-          {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}
-        </div>
-        <div className="bar">
-          <i style={{ width: `${Math.min(100, (left / total) * 100)}%` }} />
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>{dayLabel(held.r.startsAt, tz)}</h2>
-        <p className="meta mono" style={{ fontSize: 13 }}>
-          {hhmm(held.r.startsAt, tz)}–{hhmm(held.r.endsAt, tz)}
-        </p>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-          <span className="meta">{held.label}</span>
-          <span className="mono" style={{ fontSize: 16, color: 'var(--ink)', fontWeight: 600 }}>
-            {kr(held.price)}
-          </span>
-        </div>
-      </div>
-
-      {err && <div className="banner bad">{err}</div>}
-
-      <button
-        className="cta"
-        onClick={() => {
-          setErr('');
-          api
-            .confirm(held.r.id)
-            .then(() => setPaid(true))
-            .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-        }}
-      >
-        Betala {kr(held.price)}
-      </button>
-      <button className="cta ghost" style={{ marginTop: 8 }} onClick={onDone}>
-        Avbryt
+      <button className="cta" disabled={busy || !quote || !memberId} onClick={() => void pay()}>
+        {mode === 'match' ? 'Öppna matchen' : `Betala ${quote ? kr(quote.price) : ''}`}
       </button>
     </>
   );
 }
-
-const secondsLeft = (r: Reservation): number =>
-  r.expiresAt ? Math.max(0, Math.round((Date.parse(r.expiresAt) - Date.now()) / 1000)) : 0;
-
-// ---------------------------------------------------------------------------
 
 function Mine({ tz }: { tz: string }) {
   const [rows, setRows] = useState<Reservation[] | null>(null);

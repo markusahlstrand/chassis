@@ -163,6 +163,13 @@ export const api = {
   clubs: (): Promise<Club[]> => call('/api/clubs'),
   playedWith: (memberId: string): Promise<PlayedWith[]> =>
     call(`/api/played-with?memberId=${memberId}`),
+  quote: (
+    date: string, time: string, duration: number, cover: Cover[] = [],
+  ): Promise<{ price: Money; label: string; courts: { id: string; name: string; cover: Cover }[] }> =>
+    call(
+      `/api/quote?date=${date}&time=${time}&duration=${duration}` +
+        (cover.length ? `&cover=${cover.join(',')}` : ''),
+    ),
   venueAvailability: (date: string, cover: Cover[] = []): Promise<VenueSlot[]> =>
     call(`/api/venue-availability?date=${date}${cover.length ? `&cover=${cover.join(',')}` : ''}`),
   match: (id: string): Promise<MatchLanding | null> => call(`/api/matches/${id}`),

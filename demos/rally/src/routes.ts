@@ -295,6 +295,16 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
       }),
     ),
   );
+  app.get('/api/quote', async (c) =>
+    c.json(
+      await (await stub(c)).invoke('rally/quote', {
+        date: c.req.query('date'),
+        time: c.req.query('time'),
+        duration: Number(c.req.query('duration')),
+        ...(c.req.query('cover') ? { cover: c.req.query('cover')!.split(',') } : {}),
+      }),
+    ),
+  );
   app.get('/api/played-with', async (c) =>
     c.json(await (await stub(c)).invoke('rally/played-with', { memberId: c.req.query('memberId') })),
   );
