@@ -95,6 +95,7 @@ function guideSidebar() {
       items: [
         { text: 'What is an engine?', link: '/engines/' },
         engineSidebar('workorder', 'Work orders'),
+        engineSidebar('booking', 'Bookings'),
         engineSidebar('invoicing', 'Invoicing'),
         engineSidebar('protocol', 'Protocols'),
       ],
@@ -104,6 +105,7 @@ function guideSidebar() {
       items: [
         { text: 'What is a vertical?', link: '/verticals/' },
         { text: 'PeopleCo (HR)', link: '/verticals/peopleco' },
+        { text: 'RallyPoint (padel club)', link: '/verticals/rallypoint' },
       ],
     },
     {
