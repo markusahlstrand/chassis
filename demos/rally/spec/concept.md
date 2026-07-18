@@ -195,12 +195,24 @@ one charge per participant. No-show charges and refunds ride the same path.
 |---|---|
 | `club-admin` | all `booking:*`, pricing, memberships, reports |
 | `receptionist` | `booking:create|read|hold|confirm|cancel`, no `manage-resources` |
-| `coach` | `booking:read` narrowed to own lessons |
+| `coach` | `booking:read` — **the whole venue calendar**, not just their own lessons |
 | *player* | **no role** — an entity-narrowed `CapabilityGrant` over their own reservations |
 
 The player row is the important one: a consumer is **not** a principal with a role
 ([kernel-design.md §4.3](../../../docs/design/kernel-design.md)). This reuses the portal
 shape `fsm` already proves — no new mechanism.
+
+**The coach grant is deliberately broad — reviewed and accepted (2026-07-18).** A coach
+holds plain `booking:read`, which reads the venue's *entire* calendar: every court, every
+slot, and who booked it. It is **not** narrowed to their own lessons. Narrowing would need
+an entity grant minted per coach at runtime (a console concern), and for a club of this
+size the calendar is effectively public to staff anyway. Two consequences a future reader
+should not have to rediscover:
+
+- a coach can see **member names against bookings**, so the role is not free of personal
+  data even though it grants no writes;
+- if a club ever runs independent coaches who must not see each other's business, this
+  role is wrong for them and needs the entity-narrowed grant instead.
 
 ## 10. The player / social tier — explicitly out of the vertical
 

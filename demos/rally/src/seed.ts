@@ -65,8 +65,18 @@ export const ROLES: RoleDefinition[] = [
     permissions: [BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.create, RP.manageMembers],
     source: 'vertical',
   },
-  // A coach sees the calendar and nothing else; their own lessons are reached
-  // through the same read, narrowed by grant when the club chooses to.
+  /**
+   * DELIBERATELY BROAD — reviewed and accepted at the permission checkpoint
+   * (2026-07-18), see spec/concept.md §9.
+   *
+   * `booking:read` here is the WHOLE venue calendar: every court, every slot, and
+   * the member names against them. It is NOT narrowed to the coach's own lessons.
+   * Narrowing needs an entity grant minted per coach at runtime, which is a
+   * console concern; at this club's size the staff calendar is shared anyway.
+   *
+   * The line to re-open this on: a club running independent coaches who must not
+   * see each other's business. This role is wrong for them.
+   */
   { key: 'coach', permissions: [BK.read], source: 'vertical' },
 ];
 
