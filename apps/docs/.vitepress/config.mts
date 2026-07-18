@@ -105,6 +105,7 @@ function guideSidebar() {
       items: [
         { text: 'What is a vertical?', link: '/verticals/' },
         { text: 'PeopleCo (HR)', link: '/verticals/peopleco' },
+        { text: 'RallyPoint (padel club)', link: '/verticals/rallypoint' },
       ],
     },
     {
