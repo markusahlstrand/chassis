@@ -5,13 +5,19 @@
   "durable_objects": {
     "bindings": [
       { "name": "SCOPE", "class_name": "ScopeDO" },
-      { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
+      { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" },
+      // Scopes whose migration fails closed — see test/worker.ts.
+      { "name": "BROKEN_SCOPE", "class_name": "BrokenScopeDO" }
     ]
   },
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["BrokenScopeDO"]
     }
   ]
 }

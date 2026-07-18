@@ -146,6 +146,8 @@ export function defineScopeDO(
     private migrationPromise?: Promise<boolean>;
     /** Latch: the applied count is reported to the directory once per DO instance. */
     private schemaVersionReported = false;
+    /** The migration that failed on this instance, read back by `migrationFailure`. */
+    private lastFailure: { version: string; error: string } | null = null;
 
     constructor(ctx: DurableObjectState, env: ScopeDoEnv) {
       super(ctx, env);
@@ -226,6 +228,19 @@ export function defineScopeDO(
       if (!applied || this.schemaVersionReported) return null;
       this.schemaVersionReported = true;
       return this.applied.size;
+    }
+
+    /**
+     * The last failed migration attempt on this instance, with the count that did
+     * land before it. The coordinator reads this on `migrate()`'s rejection path to
+     * record what failed (#32) — an extra RPC only when a scope is already broken.
+     *
+     * Instance state, not storage: `ensureMigrations` memoises its promise, so a
+     * failed instance keeps returning the same rejection and this stays in step
+     * with it. A restarted DO re-attempts and repopulates.
+     */
+    migrationFailure(): { version: string; error: string; applied: number } | null {
+      return this.lastFailure ? { ...this.lastFailure, applied: this.applied.size } : null;
     }
 
     /** Admin scope-tuple write (role assignment / grant scoped to this scope). */
@@ -343,6 +358,11 @@ export function defineScopeDO(
               }
             });
           } catch (err) {
+            // Retained so the coordinator can project it into the directory without
+            // re-parsing the thrown message. The throw stays: `invoke` awaits
+            // `ensureMigrations` on every operation and relies on the rejection to
+            // fail closed, so resolving here would serve a half-migrated schema.
+            this.lastFailure = { version: key, error: (err as Error).message };
             throw new Error(
               `migration failed for ${key} — scope fails closed: ${(err as Error).message}`,
             );

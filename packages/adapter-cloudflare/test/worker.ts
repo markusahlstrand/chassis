@@ -5,10 +5,19 @@
  * handler so the Worker is valid. The contract tests drive everything through
  * the exported bindings via `CloudflareScopeHost` — see contract.test.ts.
  */
-import { contractTestModules, contractTestBareOps } from '@substrat-run/contract-tests';
+import { brokenMod, contractTestModules, contractTestBareOps } from '@substrat-run/contract-tests';
 import { defineScopeDO } from '../src/scope-do.js';
 
 export const ScopeDO = defineScopeDO(contractTestModules, contractTestBareOps);
+
+/**
+ * A second scope-DO class carrying ONLY the module whose migration cannot apply.
+ * It needs its own class because a DO closes over a code-time module set — putting
+ * `brokenMod` in `ScopeDO` would fail every scope in every suite. Bound as
+ * BROKEN_SCOPE so migration-failure.test.ts can point a host at it.
+ */
+export const BrokenScopeDO = defineScopeDO([brokenMod], {});
+
 export { ControlPlaneDO } from '../src/control-plane-do.js';
 
 export default {

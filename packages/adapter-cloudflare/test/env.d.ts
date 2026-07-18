@@ -3,5 +3,7 @@ declare module 'cloudflare:test' {
   interface ProvidedEnv {
     SCOPE: DurableObjectNamespace;
     CONTROL_PLANE: DurableObjectNamespace;
+    /** Scopes whose migration fails closed — migration-failure.test.ts. */
+    BROKEN_SCOPE: DurableObjectNamespace;
   }
 }

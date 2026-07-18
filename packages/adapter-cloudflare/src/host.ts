@@ -91,7 +91,11 @@ interface ControlPlaneStub {
     },
     createdAt: string,
   ): Promise<boolean>;
-  setSchemaVersion(scopeId: string, schemaVersion: string): Promise<void>;
+  setMigrationState(
+    scopeId: string,
+    schemaVersion: string,
+    failure: { version: string; error: string } | null,
+  ): Promise<void>;
   listScopes(filter: { tenantId?: string; status?: string[]; vertical?: string }): Promise<ScopeRow[]>;
   getScopeRecord(tenantId: string, scopeId: string): Promise<ScopeRow | undefined>;
   validateScopeAccess(tenantId: string, scopeId: string): Promise<void>;
@@ -146,6 +150,8 @@ interface AdminEntry {
 interface ScopeStubRpc {
   /** The applied-migration count if this call applied any, else null (nothing changed). */
   migrate(): Promise<number | null>;
+  /** The migration that failed on this instance, read on `migrate()`'s reject path. */
+  migrationFailure(): Promise<{ version: string; error: string; applied: number } | null>;
   invoke(
     operation: string,
     input: unknown,
@@ -286,10 +292,33 @@ export class CloudflareScopeHost implements ScopeHost {
    * (§5.4: fleet questions never fan out). The ScopeDO reports null when nothing
    * was pending, which skips the write — otherwise every stub mint would cost an
    * extra control-plane RPC to store a number that did not change.
+   *
+   * A failure is recorded and then RETHROWN (#32): the scope still fails closed,
+   * but the directory learns which `module@version` broke and how many attempts it
+   * has taken, instead of keeping a stale `schema_version` that renders as healthy.
    */
   private async migrateAndRecord(scopeId: ScopeId): Promise<void> {
-    const applied = await this.scopeStub(scopeId).migrate();
-    if (applied !== null) await this.cp.setSchemaVersion(scopeId, String(applied));
+    const stub = this.scopeStub(scopeId);
+    try {
+      const applied = await stub.migrate();
+      if (applied !== null) await this.cp.setMigrationState(scopeId, String(applied), null);
+    } catch (err) {
+      // Best-effort: a scope that failed to migrate may also fail to answer, and a
+      // broken recorder must not replace the migration error with its own — that
+      // trades a diagnosable failure for a confusing one.
+      try {
+        const failure = await stub.migrationFailure();
+        if (failure) {
+          await this.cp.setMigrationState(scopeId, String(failure.applied), {
+            version: failure.version,
+            error: failure.error,
+          });
+        }
+      } catch {
+        // deliberately swallowed — the rethrow below is the real signal
+      }
+      throw err;
+    }
   }
 
   async getScope(
@@ -350,6 +379,15 @@ export class CloudflareScopeHost implements ScopeHost {
         jurisdiction: r.jurisdiction,
         vertical: r.vertical,
         schemaVersion: r.schema_version,
+        migrationFailure:
+          r.migration_failed_version && r.migration_last_attempt_at
+            ? {
+                version: r.migration_failed_version,
+                error: r.migration_error ?? '',
+                attempts: r.migration_attempts,
+                lastAttemptAt: r.migration_last_attempt_at,
+              }
+            : null,
         createdAt: r.created_at,
       });
 

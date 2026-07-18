@@ -35,6 +35,35 @@ export type StorageShape = z.infer<typeof storageShape>;
 export const jurisdiction = z.enum(['eu']).nullable();
 export type Jurisdiction = z.infer<typeof jurisdiction>;
 
+/**
+ * A scope's last *failed* migration attempt (kernel-design §5.3), or null when the
+ * last attempt succeeded and when none has run.
+ *
+ * Migrations fail closed per scope: `applyPendingMigrations` rolls back and throws,
+ * so the scope serves nothing. Before this record existed the directory learned
+ * nothing from that — `schemaVersion` is projected only on the success path, so a
+ * half-migrated scope kept a stale value and rendered as healthy.
+ *
+ * Deliberately **not** a `scopeStatus` member: the scope already fails closed at the
+ * migration layer, so nothing about lifecycle gating changes, and the §3.3 machine
+ * (`provisioning → active → suspended ⇄ active → archiving → archived`) has no
+ * sensible transition for it. Structured rather than a flag because the
+ * reconciliation sweep (§5.3) retries with backoff and reports
+ * "487/500 migrated, 13 pending, 0 failed" — which needs the attempt count and the
+ * failing version, not a boolean.
+ *
+ * `attempts` counts *consecutive* failures and resets to 0 on a successful apply.
+ */
+export const migrationFailure = z
+  .object({
+    version: z.string().min(1), // the `module@version` that threw
+    error: z.string(),
+    attempts: z.number().int().positive(), // ≥1: the record only exists after a failure
+    lastAttemptAt: instant,
+  })
+  .nullable();
+export type MigrationFailure = z.infer<typeof migrationFailure>;
+
 export const scope = z.object({
   id: scopeId, // globally unique; APIs still take (tenantId, scopeId) and cross-check (K-3)
   tenantId,
@@ -56,6 +85,7 @@ export const scope = z.object({
   // '0' means "provisioned, nothing applied yet". Comparing it against the host's
   // registered migration total is what answers §5.4's "which scopes are behind".
   schemaVersion: z.string(),
+  migrationFailure,
   createdAt: instant,
 });
 export type Scope = z.infer<typeof scope>;
