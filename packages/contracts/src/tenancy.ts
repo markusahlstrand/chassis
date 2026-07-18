@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { instant, scopeId, slug, tenantId } from './ids.js';
+import { instant, orgId, scopeId, slug, tenantId } from './ids.js';
 
 export const tenantStatus = z.enum(['active', 'suspended', 'deleting']);
 export type TenantStatus = z.infer<typeof tenantStatus>;
@@ -17,6 +17,33 @@ export type Tenant = z.infer<typeof tenant>;
 // (active) and `createdAt` are stamped host-side, never caller-supplied.
 export const createTenantInput = tenant.pick({ id: true, slug: true, name: true });
 export type CreateTenantInput = z.infer<typeof createTenantInput>;
+
+/**
+ * An organization inside a tenant (K-22) — who membership tuples point at and what
+ * `grantToOrg` targets. Portal customers, staff groups, partner companies.
+ *
+ * `slug` and `name` are **attributes, not identity**: the id is a ULID, so renaming an
+ * org cannot silently orphan the tuples and grants that reference it. `tenantId` on the
+ * row is also kernel-design §4.3's required `orgId ↔ tenantId` join — *"an explicit,
+ * stable directory row, one per tenant, never reconstructed from names or slugs"* —
+ * which is why the identity adapter's org sync hangs off this record rather than a
+ * string convention.
+ *
+ * No lifecycle status yet, deliberately: nothing consumes one, and adding a nullable
+ * column later is additive. The branded id is the part that is brutal to retrofit.
+ */
+export const org = z.object({
+  id: orgId,
+  tenantId,
+  slug, // unique within the tenant
+  name: z.string().min(1),
+  createdAt: instant,
+});
+export type Org = z.infer<typeof org>;
+
+// `status`/`createdAt` are stamped host-side, never caller-supplied (as createTenantInput).
+export const createOrgInput = org.pick({ id: true, tenantId: true, slug: true, name: true });
+export type CreateOrgInput = z.infer<typeof createOrgInput>;
 
 export const scopeStatus = z.enum([
   'provisioning',

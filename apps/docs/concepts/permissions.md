@@ -58,6 +58,23 @@ Entity-narrowed grants are how portal users (a customer, a board member, a
 subcontractor) see only *their* facilities and orders inside a shared scope. Grants can
 also target an **organization**; members reach them via membership.
 
+Organizations are a real directory record, not a string you make up at the call site:
+
+```ts
+await host.admin.createOrg(actor, {
+  id: orgId,          // branded ULID — slug and name are attributes, not identity
+  tenantId,
+  slug: 'acme',       // unique within the tenant
+  name: 'Acme AB',
+});
+```
+
+`addMember`, `removeMember`, `listMembers` and `grantToOrg` all **fail closed on an org
+that does not exist in that tenant**. That refusal is the point of the record: a grant to
+an org nobody registered would otherwise look applied, resolve for nobody, and still show
+up in the permission diff as though access had been conferred. Because the id is a ULID
+rather than a name, renaming an org cannot orphan the tuples that reference it.
+
 ## Evaluation: relationship tuples with a fixed algebra
 
 Internally, the built-in checker compiles the authored surface into relationship tuples

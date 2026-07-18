@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { instant, platformActorId, principalId, scopeId, tenantId } from './ids.js';
+import { instant, orgId, platformActorId, principalId, scopeId, tenantId } from './ids.js';
 
 // The control plane — the shared layer across N per-vertical deployments (D-30,
 // control-plane.md). This file carries the audit contract that every effecting
@@ -15,6 +15,7 @@ export const adminAction = z.enum([
   'grantToOrg',
   'addMember',
   'removeMember', // K-21 — tombstones the membership tuple, never deletes it
+  'createOrg', // K-22 — orgs are a real record, not a free-form string
   'createTenant', // §4.1
   'setTenantStatus', // §4.1 — before/after carry the transitioned status
   'provisionScope', // §4.2 — the first scope-lifecycle transition (→ active)
@@ -64,7 +65,7 @@ export type ResolvedIdentity = z.infer<typeof resolvedIdentity>;
  */
 export const orgMembership = z.object({
   principal: principalId,
-  orgId: z.string().min(1),
+  orgId,
   revokedAt: instant.nullable(),
 });
 export type OrgMembership = z.infer<typeof orgMembership>;
