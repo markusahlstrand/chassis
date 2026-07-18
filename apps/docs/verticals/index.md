@@ -37,6 +37,7 @@ range, and no two demos teach the same lesson.
 | **ServiceCo** (field service) | `demos/fsm` | The **canonical composition** — two engines cooperating through events with zero imports between them (the star-topology showpiece), plus the *pricing moment* where vertical logic meets an engine transition | `workorder` · `invoicing` · `protocol` |
 | **CykelService** (bike workshop) | `demos/bike-shop` | **Engine reuse** — the same engines under new vocabulary; the second shape that *forced the protocol engine to be extracted* from ServiceCo | `workorder` · `invoicing` · `protocol` |
 | **Kallkälla** (coffee shop) | `demos/shop` | **Two audiences, one source of truth** — a customer storefront and a staff back-office as separate apps over one API; `invoicing` reused far outside field service | `invoicing` (+ its own commerce module) |
+| **RallyPoint** (padel club) | `demos/rally` | A **second invariant shape** — allocation over an interval rather than a state machine, with the lost race rejected and no locking code anywhere; **multi-venue tenancy** (one tenant-level admin across venues, reception pinned to one); a **consumer who holds no role at all**, reaching their own booking through entity-narrowed grants | `booking` · `invoicing` |
 
 The through-line: **structurally repetitive, operationally rich** — the foundation is the
 same, the vocabulary and shape are not. That is exactly the segment Substrat is for.

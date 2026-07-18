@@ -111,11 +111,17 @@ host.defineOperation('acme/create-order', async (ctx, input) => {
 | Engine | Package | What it owns |
 |---|---|---|
 | [Work orders](/engines/workorder/) | `@substrat-run/engine-workorder` | the order state machine, append-only time & material reporting |
+| [Bookings](/engines/booking/) | `@substrat-run/engine-booking` | allocation against capacity over an interval — no double-booking, holds and their expiry |
 | [Invoicing](/engines/invoicing/) | `@substrat-run/engine-invoicing` | invoice-basis accumulation from billable events, immutability on export |
 | [Protocols](/engines/protocol/) | `@substrat-run/engine-protocol` | protocols/checklists with the sign → immutable invariant, verifiable content hash |
 
-All three are **product seeds**, extracted from the demo verticals — small deliberately,
-hardened as real verticals consume them. The protocol engine is the extraction proof
+All four are **product seeds**, extracted from the demo verticals — small deliberately,
+hardened as real verticals consume them.
+
+The booking engine is the one **second invariant shape**: where a work order is a *state
+machine*, a reservation is *allocation against capacity over an interval*. It is also the
+clearest demonstration that the DO-per-scope choice buys something concrete — the engine
+contains no locking code at all, because a scope is a single writer. The protocol engine is the extraction proof
 itself: it was forced out of vertical code only when a *second* vertical (a bike shop's
 per-bike condition report) needed the same sign-immutability invariant in a different
 shape — and a *third*, [an HR vertical](/guide/what-is-substrat#current-status), reuses it

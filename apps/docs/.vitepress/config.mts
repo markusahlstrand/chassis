@@ -95,6 +95,7 @@ function guideSidebar() {
       items: [
         { text: 'What is an engine?', link: '/engines/' },
         engineSidebar('workorder', 'Work orders'),
+        engineSidebar('booking', 'Bookings'),
         engineSidebar('invoicing', 'Invoicing'),
         engineSidebar('protocol', 'Protocols'),
       ],
