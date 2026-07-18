@@ -46,3 +46,54 @@ export function UNSAFE_devPlatformActorAuth(): PlatformActorAuth {
     return parsed.success ? parsed.data : null;
   };
 }
+
+/**
+ * The authenticated staff identity a session reader returns. `email` is the
+ * stable key an actor resolver maps to a `PlatformActorId`; that is all the data
+ * model needs from the auth provider (D-16 — identity is a swappable adapter).
+ */
+export interface StaffIdentity {
+  email: string;
+}
+
+/** Reads the current staff identity from a request's headers/cookies, or null. */
+export type StaffSessionReader = (
+  headers: Headers,
+) => Promise<StaffIdentity | null> | StaffIdentity | null;
+
+/** Maps an authenticated staff identity to its audited `PlatformActorId`, or null to refuse. */
+export type StaffActorResolver = (identity: StaffIdentity) => PlatformActorId | null;
+
+/**
+ * The real `PlatformActorAuth`: an authenticated session → a platform actor. This
+ * is the seam §6 asks for, split so the AUTH PROVIDER and the STAFF ROSTER are
+ * independent. `readSession` wraps whatever proves identity (Better Auth today,
+ * AuthHero or an OIDC IdP later — swapping it is the whole migration);
+ * `resolveActor` decides who counts as staff and under which actor id.
+ *
+ * A session with no matching actor returns null — authenticated is not authorized.
+ * There is no ambient default: a subject the audit log cannot name does not act.
+ */
+export function sessionPlatformAuth(
+  readSession: StaffSessionReader,
+  resolveActor: StaffActorResolver,
+): PlatformActorAuth {
+  return async (request) => {
+    const identity = await readSession(request.headers);
+    if (!identity) return null;
+    return resolveActor(identity);
+  };
+}
+
+/**
+ * A `StaffActorResolver` over a fixed roster — the "small closed population" §6
+ * names. Email → actor, case-insensitive; anyone not listed is refused. Being an
+ * explicit list is the point: staff membership is a decision, not a default, and
+ * it is the same shape whichever provider authenticates the email.
+ */
+export function staffAllowlist(
+  entries: ReadonlyArray<{ email: string; actor: PlatformActorId }>,
+): StaffActorResolver {
+  const map = new Map(entries.map((e) => [e.email.toLowerCase(), e.actor]));
+  return (identity) => map.get(identity.email.toLowerCase()) ?? null;
+}

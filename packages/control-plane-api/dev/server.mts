@@ -13,10 +13,24 @@ import { serve } from '@hono/node-server';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Hono } from 'hono';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { ulid } from '@substrat-run/kernel';
 import { platformActorId, scopeId, tenantId } from '@substrat-run/contracts';
-import { createControlPlaneApi, DEV_ACTOR_HEADER, UNSAFE_devPlatformActorAuth } from '../src/index.js';
+import {
+  createControlPlaneApi,
+  DEV_ACTOR_HEADER,
+  sessionPlatformAuth,
+  staffAllowlist,
+  UNSAFE_devPlatformActorAuth,
+  type PlatformActorAuth,
+} from '../src/index.js';
+import {
+  buildStaffAuth,
+  migrateStaffAuth,
+  staffSessionReader,
+  type StaffAuth,
+} from './staff-auth.mjs';
 
 const dir = process.env.SUBSTRAT_DIR ?? mkdtempSync(join(tmpdir(), 'substrat-cp-'));
 const host = new SqliteScopeHost({ dir });
@@ -91,12 +105,59 @@ if (firstTenant) {
   });
 }
 
-const app = createControlPlaneApi({ host, authenticate: UNSAFE_devPlatformActorAuth() });
 const port = Number(process.env.PORT ?? 8788);
+const origin = `http://127.0.0.1:${port}`;
+// The console's Vite dev origins — Better Auth checks these on sign-in.
+const consoleOrigins = ['http://localhost:5272', 'http://127.0.0.1:5272'];
+
+// Real staff auth (§6): Better Auth, unless CP_UNSAFE_AUTH=1 flips back to the
+// header stub for quick header-based testing. The allowlist is who counts as
+// staff and under which actor id; Better Auth only proves the email. Both map the
+// operator onto the same `staff` actor that seeded the fleet, so the audit trail
+// is coherent in the dev world.
+const STAFF_EMAIL = 'markus@substrat.run';
+const STAFF_PASSWORD = 'substrat123';
+
+let authenticate: PlatformActorAuth = UNSAFE_devPlatformActorAuth();
+let staffAuth: StaffAuth | undefined;
+if (process.env.CP_UNSAFE_AUTH !== '1') {
+  staffAuth = buildStaffAuth(dir, origin, [...consoleOrigins, origin]);
+  await migrateStaffAuth(staffAuth);
+  try {
+    await staffAuth.api.signUpEmail({
+      body: { email: STAFF_EMAIL, password: STAFF_PASSWORD, name: 'Markus' },
+    });
+  } catch {
+    // Already seeded — signing up an existing email throws; fine.
+  }
+  const sessionAuth = sessionPlatformAuth(
+    staffSessionReader(staffAuth),
+    staffAllowlist([{ email: STAFF_EMAIL, actor: staff }]),
+  );
+  // The console authenticates as STAFF (a Better Auth session). A connected
+  // vertical authenticates as a SERVICE (registering its scopes), which is a
+  // different problem — open decision 2. Locally the dev-actor header stands in
+  // for that service credential; in production a vertical uses a real one and this
+  // header path is gone. Session first (the console sends no header), header
+  // fallback (the vertical sends no session); neither → 401.
+  const serviceAuth = UNSAFE_devPlatformActorAuth();
+  authenticate = async (req) => (await sessionAuth(req)) ?? serviceAuth(req);
+}
+
+// One outer app: Better Auth owns /auth/*, the control-plane router owns the rest
+// (behind `authenticate`). The console reaches /auth/* via its proxy's /api strip.
+const cpApp = createControlPlaneApi({ host, authenticate });
+const app = new Hono();
+if (staffAuth) app.on(['GET', 'POST'], '/auth/*', (c) => staffAuth!.handler(c.req.raw));
+app.route('/', cpApp);
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, (info) => {
   console.log(`control-plane API  http://127.0.0.1:${info.port}`);
   console.log(`directory          ${dir}`);
-  console.log(`dev actor          ${DEV_ACTOR_HEADER}: ${staff}`);
-  console.log(`\n  curl -s -H '${DEV_ACTOR_HEADER}: ${staff}' http://127.0.0.1:${info.port}/tenants\n`);
+  if (staffAuth) {
+    console.log(`staff auth         Better Auth — sign in as ${STAFF_EMAIL} / ${STAFF_PASSWORD}`);
+  } else {
+    console.log(`dev actor          ${DEV_ACTOR_HEADER}: ${staff}  (UNSAFE)`);
+    console.log(`\n  curl -s -H '${DEV_ACTOR_HEADER}: ${staff}' http://127.0.0.1:${info.port}/tenants\n`);
+  }
 });
