@@ -43,6 +43,34 @@ The corollary: **if two engines need chatty synchronous communication, they are 
 engine drawn wrong.** That's why "work orders + time + material" is one engine, not
 three — time entries have no meaning outside their work order.
 
+## What an engine is *not*
+
+"Engine" is a borrowed word, and every reader arrives with a different picture of it. Four
+contrasts to clear it up:
+
+- **Not an Odoo app** (or any "app on a platform"). An Odoo app bundles the whole vertical
+  slice — ORM models, logic, views, vocabulary — and extends its siblings by inheritance
+  (`_inherit`, cross-app foreign keys). An engine is the inverse: headless, no UI, no
+  vocabulary, owning only invariants, and forbidden from importing a sibling. What Odoo puts
+  in one app, Substrat splits across an engine (the invariants) and a vertical (everything
+  with a user's fingerprints on it). If you ever want to *subclass* an engine, it drew its
+  line wrong.
+- **Its real cousin is a [Medusa v2](https://docs.medusajs.com/learn/fundamentals/modules/isolation)
+  module** — and that's no coincidence. Strict isolation, cross-module links instead of
+  foreign keys, per-module migrations: Medusa converged on the same shape from e-commerce.
+  Know Medusa modules and you already know engines — Substrat wraps them in nested
+  multi-tenancy and runtime enforcement.
+- **Not a Rails engine or a plugin.** Those are code-organization conventions; nothing at
+  runtime stops a plugin from reaching into the host's tables. An engine's boundaries are
+  *enforced* — another module's tables are private, reachable only through its exported
+  functions and events, and the `boundary-lint` check fails the build when you cross the
+  line.
+- **Not a microservice.** No network hop, no separate deployment, no eventual consistency
+  between engine and vertical. An engine runs in-process inside the scope, and a vertical
+  composes its in-scope functions in the *same transaction* — `createWorkOrder(ctx, …)` and
+  your own table write commit together or not at all. The isolation is architectural, not
+  physical.
+
 ## Anatomy of an engine package
 
 Every engine exports the same shape:

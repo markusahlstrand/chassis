@@ -67,6 +67,7 @@ function guideSidebar() {
       items: [
         { text: 'What is Substrat?', link: '/guide/what-is-substrat' },
         { text: 'Why runtime enforcement?', link: '/guide/why-substrat' },
+        { text: 'How Substrat compares', link: '/guide/comparisons' },
         { text: 'Architecture', link: '/guide/architecture' },
         { text: 'Getting started', link: '/guide/getting-started' },
         { text: 'Running locally', link: '/guide/running-locally' },
