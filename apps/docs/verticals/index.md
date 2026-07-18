@@ -40,34 +40,3 @@ range, and no two demos teach the same lesson.
 
 The through-line: **structurally repetitive, operationally rich** — the foundation is the
 same, the vocabulary and shape are not. That is exactly the segment Substrat is for.
-
-## The quality bar
-
-A demo earns its place only if it is genuinely runnable and genuinely proven. Every vertical
-in this list:
-
-- **builds, typechecks, and passes `boundary-lint`** — no raw DB access, no cross-module
-  table reads, no forged events;
-- ships a **scenario test that asserts the invariants *and the denials*** — the wrong role,
-  portal isolation, and the cross-tenant attack failing at the boundary are not optional,
-  they are the demo;
-- runs **locally on the pure-SQLite adapter**, no cloud account needed;
-- keeps its **permission surface in a checked-in `PERMISSIONS.md`**, re-emitted by CI so a
-  widened role can't merge unseen.
-
-A demo that can't clear that bar isn't a reference — it's a liability, and it stays out.
-
-## How these pages are organized
-
-Every vertical documents itself the same way, in the same six sections — the composition
-analogue of the engine template. A section with nothing to say is a finding, not an
-omission.
-
-| Section | Answers |
-|---|---|
-| **Overview** | what the business is, and *why it's interesting* — what it proves the others don't |
-| **At a glance** | package, tenancy shape, engines composed, own tables, roles, status, links |
-| **Engines composed** | which engines, the functions it calls, the orchestration moment, what's vertical vs engine |
-| **The cast & what's denied** | personas, roles, entity-narrowed grants, and the denials that hold |
-| **The app** | the screens — structure, design system, the flows a user actually touches |
-| **Run it** | the one dev command, and the scenario test as the executable spec |
