@@ -19,6 +19,37 @@ export type PlatformActorAuth = (request: Request) => Promise<PlatformActorId | 
 /** Header the dev stub reads. Mirrors the demos' `x-principal` dev affordance. */
 export const DEV_ACTOR_HEADER = 'x-platform-actor';
 
+/** Header a SERVICE (a vertical registering itself) presents — not a staff subject. */
+export const SERVICE_TOKEN_HEADER = 'x-service-token';
+
+/**
+ * A service credential (open decision 2): a shared bearer token that resolves to
+ * a fixed service actor. This is how a *vertical* authenticates to the control
+ * plane to register its tenant/scope — distinct from staff, who sign in. An
+ * absent or empty token never matches; comparison is length-checked and
+ * constant-ish to avoid the trivial timing leak.
+ */
+export function serviceTokenAuth(token: string, actor: PlatformActorId): PlatformActorAuth {
+  return (request) => {
+    const presented = request.headers.get(SERVICE_TOKEN_HEADER);
+    if (!presented || !token || presented.length !== token.length) return null;
+    let diff = 0;
+    for (let i = 0; i < token.length; i++) diff |= presented.charCodeAt(i) ^ token.charCodeAt(i);
+    return diff === 0 ? actor : null;
+  };
+}
+
+/** Try each auth in order; first non-null actor wins, else null (fail closed). */
+export function firstPlatformActorAuth(...auths: PlatformActorAuth[]): PlatformActorAuth {
+  return async (request) => {
+    for (const auth of auths) {
+      const actor = await auth(request);
+      if (actor) return actor;
+    }
+    return null;
+  };
+}
+
 /**
  * A dev stub that trusts an `x-platform-actor` header verbatim.
  *

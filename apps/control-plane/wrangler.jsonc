@@ -2,13 +2,14 @@
 	"name": "substrat-control-plane",
 	"main": "src/worker.ts",
 	"compatibility_date": "2025-01-01",
+	// Better Auth (staff sign-in) needs Node built-ins on workerd.
+	"compatibility_flags": ["nodejs_compat"],
 	"durable_objects": {
 		"bindings": [
 			// The whole directory (control-plane.md §4): tenants, scopes, roles,
 			// entitlements, identities, and the admin audit log. One singleton DO.
 			{ "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" },
-			// A module-less placeholder scope DO — see src/worker.ts's header for
-			// why the coordinator needs it and why nothing domain-shaped runs here.
+			// A module-less placeholder scope DO — see src/worker.ts's header.
 			{ "name": "SCOPE", "class_name": "ScopeDO" }
 		]
 	},
@@ -17,8 +18,23 @@
 			"tag": "v1",
 			"new_sqlite_classes": ["ControlPlaneDO", "ScopeDO"]
 		}
-	]
-	// No `vars`: ALLOW_DEV_ACTOR is deliberately absent so a real `wrangler deploy`
-	// is fail-closed. `wrangler dev` sets it via the `dev` script; the workerd test
-	// sets it via miniflare bindings. Real staff auth is slice 3.
+	],
+	// Better Auth's staff store (identity, credentials, sessions), separate from
+	// the directory DO. Apply migrations/0001_better_auth.sql to it before deploy.
+	"d1_databases": [
+		{
+			"binding": "AUTH_DB",
+			"database_name": "substrat-control-plane-auth",
+			"database_id": "37b1c7ac-5855-43ba-81c4-8c0659ef995f"
+		}
+	],
+	// Serve the built console SPA (apps/console/dist) from the same origin as the
+	// API. run_worker_first sends every request to the Worker first (it owns
+	// /api/*); the catch-all delegates the rest to ASSETS with SPA fallback.
+	"assets": {
+		"directory": "../console/dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": true
+	}
 }

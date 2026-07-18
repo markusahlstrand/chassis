@@ -19,6 +19,7 @@ import {
   platformActorId,
 } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
+import { ControlPlaneClient, ControlPlaneError } from '@substrat-run/control-plane-api';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
 import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
@@ -64,6 +65,35 @@ interface Env {
   BASE_URL?: string;
   /** Local dev only: when 'true', trust the `x-principal` header. NEVER set in prod. */
   ALLOW_DEV_HEADER?: string;
+  /**
+   * Connected mode (first-flow.md slice 4): when set, this vertical registers its
+   * tenant/scope into a SEPARATELY-deployed shared control plane and gates every
+   * request on its lifecycle — so a suspend in that control plane's console fails
+   * this vertical's next request closed. `SERVICE_TOKEN` authenticates the vertical
+   * to the control plane as a service (not staff). Unset → the embedded control
+   * plane is the only authority (self-contained).
+   */
+  CONTROL_PLANE_URL?: string;
+  SERVICE_TOKEN?: string;
+  /**
+   * Service binding to the control-plane worker. Worker-to-worker calls MUST go
+   * through this, not a public same-zone URL (Cloudflare blocks that). Absent
+   * locally, where the client uses the URL over plain fetch.
+   */
+  CONTROL_PLANE_SVC?: Fetcher;
+}
+
+/** A client for the shared control plane, or undefined when self-contained. */
+function cpClientFor(env: Env): ControlPlaneClient | undefined {
+  if (!env.CONTROL_PLANE_URL) return undefined;
+  const svc = env.CONTROL_PLANE_SVC;
+  return new ControlPlaneClient({
+    baseUrl: env.CONTROL_PLANE_URL,
+    actor: STAFF, // sent, but the control plane authenticates via the service token
+    serviceToken: env.SERVICE_TOKEN,
+    // Route through the service binding when deployed; plain fetch locally.
+    fetch: svc ? svc.fetch.bind(svc) : undefined,
+  });
 }
 
 /** The coordinator is stateless — rebuilt per request; durable state is in the DOs. */
@@ -156,7 +186,26 @@ app.post('/api/seed', async (c) => {
       logins[p.email] = p.role;
     }
   }
-  return c.json({ seeded: true, tenant: T, scope: S, principal: ANNA, logins });
+
+  // Connected mode: mirror this tenant/scope into the shared control plane so the
+  // portal sees the live vertical. Idempotent; the gate below enforces lifecycle.
+  const cp = cpClientFor(c.env);
+  if (cp) {
+    await cp.createTenant({ id: T, slug: 'elmontage', name: 'ElMontage AB' });
+    for (const key of ['workorder', 'invoicing', 'protocol', 'serviceco']) {
+      await cp.grantEntitlement(T, key);
+    }
+    await cp.provisionScope({
+      tenantId: T,
+      scopeId: S,
+      slug: 'huvudkontor',
+      kind: 'branch',
+      name: 'ElMontage — Huvudkontor',
+      vertical: 'fsm',
+      jurisdiction: 'eu',
+    });
+  }
+  return c.json({ seeded: true, tenant: T, scope: S, principal: ANNA, logins, connected: !!cp });
 });
 
 // A protected data route resolves the caller across the mounted adapters, then
@@ -165,6 +214,16 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
   const { host, adapters } = authFor(c.env, originOf(c.req.raw));
   const result = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!result) throw new HTTPException(401, { message: 'unauthorized' });
+  // Connected mode: gate on the shared control plane's lifecycle. A suspend in the
+  // portal fails this request closed, across the deployment boundary.
+  const cp = cpClientFor(c.env);
+  if (cp) {
+    try {
+      await cp.assertScopeActive(result.tenantId, result.scopeId);
+    } catch (e) {
+      throw new HTTPException(403, { message: e instanceof ControlPlaneError ? e.message : String(e) });
+    }
+  }
   return host.getScope(result.principal, result.tenantId, result.scopeId);
 }
 
