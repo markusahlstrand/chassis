@@ -1,6 +1,6 @@
 {
   "name": "@substrat-run/demo-bike-shop",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "description": "CykelService demo vertical — the v2 bike-shop skin, see spec/concept.md",
   "type": "module",

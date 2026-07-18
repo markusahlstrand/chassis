@@ -1,6 +1,6 @@
 {
   "name": "@substrat-run/demo-fsm",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "private": true,
   "description": "FSM demo vertical (ServiceCo) — see spec/testrun.md",
   "type": "module",
