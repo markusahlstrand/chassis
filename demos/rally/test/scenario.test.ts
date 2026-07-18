@@ -399,14 +399,15 @@ describe('RallyPoint demo scenario (spec §11)', () => {
       resourceId: w.court1, memberId: w.elinId, date: DATE,
       time: '16:00', duration: 60, now: NOW,
     });
-    expect(july.price.amount).toBe('260');
-    expect(july.ruleLabel).toBe('Bas');
+    expect(july.price.amount).toBe('220'); // Bas, 60 min
+    expect(july.ruleLabel).toContain('Bas');
 
     const december = await ravi.invoke<{ price: Money; ruleLabel: string }>('rally/book-court', {
       resourceId: w.court1, memberId: w.elinId, date: '2026-12-15',
       time: '16:00', duration: 60, now: NOW,
     });
-    expect(december.price.amount).toBe('400'); // 340 + 60 lighting
+    // Winter dark at 16:00: the floodlight rule for 60 min, not the base rate.
+    expect(december.price.amount).toBe('340');
     expect(december.ruleLabel).toContain('Belysning');
   });
 
@@ -438,7 +439,7 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     });
     expect(paid.reservation.state).toBe('confirmed');
     expect(paid.paidFromWallet).toBe(true);
-    expect(paid.balance!.amount).toBe('1440'); // 1700 − 260 base
+    expect(paid.balance!.amount).toBe('1480'); // 1700 − 220 (Bas, 60 min)
   });
 
   it('22. ATOMICITY: an unaffordable booking leaves neither a charge nor a court', async () => {

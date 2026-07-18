@@ -150,6 +150,9 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
   );
 
   // -- pricing ----------------------------------------------------------------
+  app.get('/api/price-matrix', async (c) =>
+    c.json(await (await stub(c)).invoke('rally/price-matrix', { date: c.req.query('date') })),
+  );
   app.post('/api/price-rules', async (c) =>
     c.json(await (await stub(c)).invoke('rally/upsert-price-rule', await body(c))),
   );

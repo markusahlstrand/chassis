@@ -5,6 +5,7 @@ import {
   type Court,
   type Member,
   type Occupancy,
+  type PriceMatrixRow,
   type TenantRole,
   type VenueSnapshot,
 } from '../api';
@@ -149,6 +150,7 @@ export default function Admin({
               </tbody>
             </table>
           </div>
+          <PriceMatrix />
           <div className="card">
             <h3>Klippkort &amp; månadskort</h3>
             <table>
@@ -495,6 +497,76 @@ function Staff() {
         </p>
       </div>
     </>
+  );
+}
+
+/**
+ * What the rules RESOLVE to, hour by hour and length by length.
+ *
+ * A price table's failure mode is a hole in the matrix, not a wrong number: miss
+ * a (window × duration) combination and the specificity ladder quietly falls
+ * back to a broader rule. Reading the rule list will not show you that; reading
+ * the resolved grid will, because a row where all three lengths cost the same is
+ * visible instantly.
+ */
+function PriceMatrix() {
+  const [rows, setRows] = useState<PriceMatrixRow[]>([]);
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    api
+      .priceMatrix(date)
+      .then(setRows)
+      .catch((e) => setErr(e.message));
+  }, [date]);
+
+  return (
+    <div className="card">
+      <h3>Vad reglerna faktiskt ger</h3>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      </div>
+      {err && <div className="banner">{err}</div>}
+      <table>
+        <thead>
+          <tr>
+            <th>Tid</th>
+            <th style={{ textAlign: 'right' }}>60 min</th>
+            <th style={{ textAlign: 'right' }}>90 min</th>
+            <th style={{ textAlign: 'right' }}>120 min</th>
+            <th>Regel</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const flat = new Set(r.cells.map((c) => c.amount)).size === 1;
+            return (
+              <tr key={r.time}>
+                <td className="mono" style={{ fontWeight: 700, color: 'var(--ink)' }}>{r.time}</td>
+                {r.cells.map((c) => (
+                  <td
+                    key={c.duration}
+                    className="mono"
+                    style={{ textAlign: 'right', color: flat ? 'var(--gold-ink)' : undefined }}
+                  >
+                    {c.amount}
+                  </td>
+                ))}
+                <td className="hint">
+                  {r.cells[1]?.label}
+                  {flat && <span className="chip gold" style={{ marginLeft: 6 }}>samma pris</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="hint" style={{ marginTop: 8 }}>
+        Rader märkta <strong>samma pris</strong> kostar lika mycket oavsett speltid — nästan
+        alltid en lucka i prismatrisen, inte ett beslut.
+      </p>
+    </div>
   );
 }
 

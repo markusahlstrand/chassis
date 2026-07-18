@@ -232,6 +232,8 @@ export const api = {
   occupancy: (from: string, to: string): Promise<Occupancy> =>
     call(`/api/occupancy?from=${from}&to=${to}`),
   roles: (): Promise<TenantRole[]> => call('/api/roles'),
+  priceMatrix: (date: string): Promise<PriceMatrixRow[]> =>
+    call(`/api/price-matrix?date=${date}`),
 };
 
 export interface Occupancy {
@@ -244,6 +246,11 @@ export interface Occupancy {
   cancellations: number;
   noShows: number;
   heat: number[][];
+}
+
+export interface PriceMatrixRow {
+  time: string;
+  cells: { duration: number; amount: string; label: string }[];
 }
 
 export interface TenantRole {

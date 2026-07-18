@@ -1166,6 +1166,47 @@ const quoteOp: OperationHandler<
   };
 };
 
+/**
+ * The resolved price for a grid of times × durations, ignoring availability.
+ *
+ * A club's price table is a MATRIX, and its failure mode is a hole in that
+ * matrix rather than a wrong number: leave out a (window × duration)
+ * combination and the specificity ladder quietly falls back to a broader rule,
+ * so peak hours sell at the base rate — or, as happened here, every duration
+ * resolves to the same amount and nobody notices for weeks.
+ *
+ * Rendering what the rules ACTUALLY resolve to makes that visible at a glance,
+ * which no amount of reading the rule list does. Deliberately not the quote
+ * endpoint: this must price slots that are already booked.
+ */
+const priceMatrixOp: OperationHandler<
+  { date: string },
+  { time: string; cells: { duration: number; amount: string; label: string }[] }[]
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.managePricing));
+  const rows: { time: string; cells: { duration: number; amount: string; label: string }[] }[] = [];
+  const anyCourt = listResources(ctx, 'court')[0];
+  for (let h = 7; h <= 22; h += 1) {
+    const time = `${String(h).padStart(2, '0')}:00`;
+    const cells: { duration: number; amount: string; label: string }[] = [];
+    for (const duration of [60, 90, 120]) {
+      try {
+        const { price, label } = resolvePrice(ctx, {
+          resourceId: anyCourt?.id ?? '',
+          date: input.date,
+          time,
+          duration,
+        });
+        cells.push({ duration, amount: price.amount, label });
+      } catch {
+        cells.push({ duration, amount: '—', label: 'ingen regel' });
+      }
+    }
+    rows.push({ time, cells });
+  }
+  return rows;
+};
+
 const bookInput = z.object({
   /** Omitted = the vertical picks one (spec §4.2). Staff pass it; players rarely do. */
   resourceId: z.string().min(1).optional(),
@@ -1842,6 +1883,7 @@ export const rallyModule: ModuleRegistration = {
     'rally/courts': browseCourtsOp as never,
     'rally/venue-availability': venueAvailabilityOp as never,
     'rally/quote': quoteOp as never,
+    'rally/price-matrix': priceMatrixOp as never,
     'rally/played-with': playedWithOp as never,
     'rally/availability': availabilityOp as never,
     'rally/book-court': bookCourtOp as never,

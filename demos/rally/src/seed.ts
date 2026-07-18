@@ -184,28 +184,50 @@ async function seedVenue(
     monthlyOre: 99900, monthlyCreditOre: 120000,
   });
 
-  // Base first, then narrower rules — precedence is most-specific-wins.
-  await stub.invoke('rally/upsert-price-rule', { label: 'Bas', amount: '260' });
-  await stub.invoke('rally/upsert-price-rule', {
-    label: 'Högtrafik 17–21', fromTime: '17:00', toTime: '21:00', amount: spec.peakAmount,
-  });
-  // FLOODLIGHTS. Seasonal, because the dark is: Stockholm sunset moves from
-  // ~14:45 in December to ~22:00 in June, so a fixed clock window would bill for
-  // lights in June daylight and miss the December afternoon entirely. Two rules,
-  // one per half-year; they outrank the demand-based peak rule because a season
-  // is more specific than a time-of-day alone.
-  await stub.invoke('rally/upsert-price-rule', {
-    label: 'Belysning (vinter)',
-    fromDate: '2026-10-01', toDate: '2027-03-31',
-    fromTime: '15:00', toTime: '23:00',
-    amount: String(Number(spec.peakAmount) + 60),
-  });
-  await stub.invoke('rally/upsert-price-rule', {
-    label: 'Belysning (sommar)',
-    fromDate: '2026-04-01', toDate: '2026-09-30',
-    fromTime: '21:00', toTime: '23:00',
-    amount: String(Number(spec.peakAmount) + 60),
-  });
+  // PRICING IS A MATRIX, not a base with modifiers.
+  //
+  // Duration is an input, not a multiplier — a 90-minute peak slot is not
+  // reliably 1.5× the 60-minute one — so every (window × duration) pair is
+  // priced explicitly. The specificity ladder is a TIE-BREAKER, not a
+  // composition: a duration-only rule outranks a time-only rule, so leaving a
+  // combination out does not "fall back to peak", it silently sells peak hours
+  // at the base rate. The matrix is verbose on purpose.
+  const peak = Number(spec.peakAmount);
+  const table: { label: string; amount: number; duration: number; from?: string; to?: string;
+                 fromDate?: string; toDate?: string }[] = [];
+  const perDuration = (
+    label: string,
+    at: { from?: string; to?: string; fromDate?: string; toDate?: string },
+    prices: [number, number, number],
+  ) => {
+    ([60, 90, 120] as const).forEach((d, i) => {
+      table.push({ label: `${label} ${d} min`, amount: prices[i]!, duration: d, ...at });
+    });
+  };
+
+  perDuration('Bas', {}, [220, 280, 340]);
+  perDuration('Högtrafik', { from: '17:00', to: '21:00' }, [peak - 60, peak, peak + 80]);
+  // Floodlights, seasonal — see the comment on rally_price_rules.from_date.
+  perDuration(
+    'Belysning vinter',
+    { fromDate: '2026-10-01', toDate: '2027-03-31', from: '15:00', to: '23:00' },
+    [peak, peak + 60, peak + 140],
+  );
+  perDuration(
+    'Belysning sommar',
+    { fromDate: '2026-04-01', toDate: '2026-09-30', from: '21:00', to: '23:00' },
+    [peak, peak + 60, peak + 140],
+  );
+
+  for (const r of table) {
+    await stub.invoke('rally/upsert-price-rule', {
+      label: r.label,
+      amount: String(r.amount),
+      duration: r.duration,
+      ...(r.from ? { fromTime: r.from, toTime: r.to } : {}),
+      ...(r.fromDate ? { fromDate: r.fromDate, toDate: r.toDate } : {}),
+    });
+  }
 
   return ids;
 }

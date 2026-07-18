@@ -262,6 +262,22 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
     );
     expect(Number(quote.price.amount)).toBeGreaterThan(0);
     expect(quote.courts.length).toBeGreaterThan(0);
+
+    // PRICE MUST MOVE WITH DURATION. It did not, for a long time: every rule was
+    // a flat amount with no duration, so 60, 90 and 120 minutes all resolved to
+    // the same rule and the same number, and nothing noticed.
+    const [q60, q90, q120] = await Promise.all([
+      ok(`/api/quote?date=${DATE}&time=19:00&duration=60`, { as: elin }),
+      ok(`/api/quote?date=${DATE}&time=19:00&duration=90`, { as: elin }),
+      ok(`/api/quote?date=${DATE}&time=19:00&duration=120`, { as: elin }),
+    ]);
+    expect(Number(q60.price.amount)).toBeLessThan(Number(q90.price.amount));
+    expect(Number(q90.price.amount)).toBeLessThan(Number(q120.price.amount));
+
+    // …and peak still outranks base at the same duration, which is the thing a
+    // duration-only rule would silently break.
+    const offPeak90 = await ok(`/api/quote?date=${DATE}&time=12:00&duration=90`, { as: elin });
+    expect(Number(offPeak90.price.amount)).toBeLessThan(Number(q90.price.amount));
     // The quote is the same arithmetic book-court will do, so they cannot disagree.
     const sample = await ok('/api/bookings', {
       as: elin, method: 'POST',
@@ -466,6 +482,14 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
       as: astrid, method: 'POST',
       body: { partyRef: '01JTESTAAAAAAAAAAAAAAAAAAB', name: 'Ny Spelare' },
     });
+
+    // The resolved grid, not the rule list — a hole in the matrix is invisible
+    // in the rules and obvious here.
+    const matrix = await ok(`/api/price-matrix?date=${DATE}`, { as: astrid });
+    expect(matrix.length).toBeGreaterThan(0);
+    const evening = matrix.find((r: any) => r.time === '19:00');
+    const amounts = evening.cells.map((c: any) => Number(c.amount));
+    expect(new Set(amounts).size).toBe(3); // three lengths, three prices
 
     const occ = await ok(`/api/occupancy?from=${DATE}&to=${DATE}`, { as: astrid });
     expect(occ.openHours).toBeGreaterThan(0);
