@@ -18,6 +18,7 @@ export default withMermaid(defineConfig({
       { text: 'Guide', link: '/guide/what-is-substrat', activeMatch: '/guide/' },
       { text: 'Concepts', link: '/concepts/tenancy', activeMatch: '/concepts/' },
       { text: 'Engines', link: '/engines/', activeMatch: '/engines/' },
+      { text: 'Verticals', link: '/verticals/', activeMatch: '/verticals/' },
       { text: 'Reference', link: '/reference/contracts', activeMatch: '/reference/' },
     ],
 
@@ -25,6 +26,7 @@ export default withMermaid(defineConfig({
       '/guide/': guideSidebar(),
       '/concepts/': guideSidebar(),
       '/engines/': guideSidebar(),
+      '/verticals/': guideSidebar(),
       '/reference/': guideSidebar(),
     },
 
@@ -95,6 +97,13 @@ function guideSidebar() {
         engineSidebar('workorder', 'Work orders'),
         engineSidebar('invoicing', 'Invoicing'),
         engineSidebar('protocol', 'Protocols'),
+      ],
+    },
+    {
+      text: 'Verticals',
+      items: [
+        { text: 'What is a vertical?', link: '/verticals/' },
+        { text: 'PeopleCo (HR)', link: '/verticals/peopleco' },
       ],
     },
     {
