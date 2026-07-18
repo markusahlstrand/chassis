@@ -58,7 +58,8 @@ proof: the existing `CykelService` skin gains a drop-off booking, demonstrating
 | Book a time, court assigned last (§4.2) | **Vertical** | availability aggregated across the venue |
 | Court cover (indoor/covered/open) + filter (§4.3) | **Vertical** | `cover` on the court, filters narrow before the grid |
 | Match participants visible; roster not (§4.4) | **Vertical** policy | published match ≠ customer list |
-| All open matches across clubs; club list & map (§10.1) | **Server fan-out** → global index later | scopes never read each other |
+| Club list (all clubs, incl. unjoined) (§10.1) | **Directory** — `listScopes()` | a global query over ROOT entities, by design |
+| All open matches across clubs (§10.1.1) | **Server fan-out** → global index later | matches are domain data, so scopes are asked |
 | People I've played with, at this club (§10.2) | **Vertical** | the single-club shadow of a player-tier feature |
 | Pricing rules by court / day / time / **duration** | **Vertical** | price-rule table + pricing hook at confirm |
 | Memberships (tiers, discounts) | **Vertical** | one tier + a discount rule |
@@ -290,26 +291,54 @@ only the **seam**:
 
 Out of scope: global player search, feed fanout, contact matching.
 
-### 10.1 Cross-club reads: the server fans out, the scope never does
+### 10.1 Global queries are allowed — over the DIRECTORY, not over scopes
 
-Three things a player wants are **cross-club by nature**: every open match near me, the list
-of clubs, and a map of them. A club's scope cannot answer any of them and must not be able
-to — that is the isolation boundary working.
+The rule is **not** "no global queries". It is "a scope may not read another
+scope's data", and those are different things:
 
-They are nonetheless answerable **at the server**, which is harness code holding stubs for
-every venue: it queries each scope in turn and merges. That is not a scope reading another
-scope; it is the aggregation tier doing its job, and it is the honest placeholder for the
-**global index** the design calls an adapter ([booking-social.md §7](../../../docs/design/booking-social.md)).
+| Layer | Holds | Global query? |
+|---|---|---|
+| **Directory** | tenant + scope records: id, slug, name, kind, status, jurisdiction | **Yes — that is its job.** `listTenants()` / `listScopes()` exist precisely so callers can enumerate; §3.2 calls it "the ONLY complete inventory of tenants and scopes". |
+| **Scope DB** | domain data: courts, bookings, members, prices | **No.** Never, from anywhere. |
 
-Its limits should be stated rather than discovered:
+So *"list all clubs"* is a **directory** question, answered by one query. *"List
+all clubs with three indoor courts"* is a **domain** question, because the court
+count lives inside each scope, and no amount of it being a read makes it one.
+
+**Read-vs-write is not the distinction.** The isolation is not about contention;
+it is about three things a read breaks just as thoroughly:
+
+- **blast radius** — cross-scope read code is exactly where a tenancy leak lives;
+- **migration independence** — scopes migrate separately, so a query spanning
+  them must cope with N schema versions at once;
+- **jurisdiction** — a scope carries one, and pulling its rows into a global
+  index can move data across a residency boundary. That is a legal constraint,
+  not a performance one.
+
+**The consequence for a listing.** If a club listing wants attributes — location,
+amenities, court count, a photo — the answer is not to ask every club at query
+time. It is that those are **listing attributes**, and belong on the listing:
+promoted to the scope record, or to a marketplace projection fed by the outbox.
+That is the "global index = adapter" the design already names, and it is what
+makes *"clubs near me"* one indexed query instead of a fan-out.
+
+This also settles **decision 0**: venue coordinates belong on the **directory
+record**, not inside the scope's database. They describe the club as a *listing*,
+not as an operation.
+
+### 10.1.1 What still fans out, and why
+
+Open-match search remains a fan-out, because a match **is** domain data —
+per-scope, live, and not a listing attribute. Its limits stand:
 
 - **Fan-out is O(venues).** Fine for a demo with three, wrong at a thousand — at which point
   it becomes a real index fed by the outbox, not a loop.
-- **It cannot filter by geography** without coordinates on a venue, so "clubs near me" is
-  currently "all clubs" plus a client-side filter.
-- **It respects permissions per scope**: a venue the caller cannot reach simply does not
-  appear, which is why the club list differs per principal rather than being a global
-  constant.
+- **It respects permissions per scope**: a venue the caller cannot reach contributes
+  nothing. For *matches* that is correct — you cannot join what you cannot reach. For the
+  **club list it was a bug**, and the reason that list now comes from the directory:
+  filtering discovery by access means a player can never find a club they have not joined,
+  which is precisely backwards for a marketplace. **Discovery and access are separate
+  questions**, and `/api/my-venues` answers the second one.
 
 ### 10.2 "People I've played with" — the single-club shadow
 
@@ -341,10 +370,9 @@ involved, only the player tier can answer.
 
 ## 12. Open decisions
 
-0. **Venue coordinates.** A club list is answerable today; a *map* and "near me" are not,
-   because nothing stores where a venue is. Coordinates are venue config, not domain data —
-   but they are also the input to the geo index that eventually replaces the fan-out, so
-   where they live is worth deciding once rather than twice.
+0. ~~**Venue coordinates.**~~ **Settled (§10.1):** they belong on the **directory record**,
+   because they describe the club as a listing rather than as an operation. Still to build:
+   the field itself, and a map on top of it.
 
 1. **Capacity model** — first-class quantity-against-capacity (needed for 4-player matches
    and classes) vs boolean-exclusive. Leaning first-class; exclusive is capacity = 1.

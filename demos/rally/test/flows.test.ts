@@ -267,12 +267,19 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
   });
 
   it('lists clubs and open matches across every club the caller can reach', async () => {
+    // Discovery is not access. The club list comes from the DIRECTORY, so every
+    // club exists to everyone — a player must be able to find a club they have
+    // not joined, which is the whole point of a club list.
     const clubs = await ok('/api/clubs', { as: elin });
-    expect(clubs.map((c: any) => c.key).sort()).toEqual(['nacka', 'solna']);
-    expect(clubs.every((c: any) => c.courts > 0)).toBe(true);
+    expect(clubs.map((c: any) => c.key).sort()).toEqual(['goteborg', 'nacka', 'solna']);
+    expect((await ok('/api/clubs', { as: rutger })).map((c: any) => c.key).sort()).toEqual([
+      'goteborg', 'nacka', 'solna',
+    ]);
 
-    // Rutger's club is a different company; it is simply not in his neighbour's list.
-    expect((await ok('/api/clubs', { as: rutger })).map((c: any) => c.key)).toEqual(['goteborg']);
+    // Which of them she can ACT in is the separate question, and still narrow.
+    expect((await ok('/api/my-venues', { as: elin })).map((v: any) => v.key).sort()).toEqual([
+      'nacka', 'solna',
+    ]);
 
     await ok('/api/matches', {
       as: elin, method: 'POST',

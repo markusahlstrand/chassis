@@ -1049,11 +1049,12 @@ function Me({ who, memberId }: { who: CastMember; memberId: string }) {
             style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}
           >
             <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{c.label}</span>
-            <span className="meta mono">{c.courts} banor</span>
+            <span className="meta mono">{c.slug}</span>
           </div>
         ))}
         <p className="legend" style={{ marginTop: 10 }}>
-          En karta kräver koordinater per klubb, som ingen ännu lagrar.
+          Alla klubbar, från katalogen — även de du inte gått med i. Vad du får göra i dem är en
+          annan fråga. En karta kräver koordinater, som hör hemma på katalogposten.
         </p>
       </div>
 

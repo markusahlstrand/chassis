@@ -34,7 +34,7 @@ export interface RosterEntry {
 export interface Club {
   key: string;
   label: string;
-  courts: number;
+  slug: string;
 }
 export interface PlayedWith {
   name: string;

@@ -244,11 +244,37 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
     return out;
   }
 
-  /** The club list. Cross-club by nature, so it fans out. */
+  /**
+   * The club list, read from the DIRECTORY — not by fanning out.
+   *
+   * The rule is not "no global queries", it is "a scope may not read another
+   * scope's data". Those are different things. A club's *existence*, name, slug
+   * and status are directory records, and the directory is by its own contract
+   * "the ONLY complete inventory of tenants and scopes" whose read side exists
+   * precisely so callers can ENUMERATE. Fanning out to learn a scope's name was
+   * asking every club a question the directory had already answered.
+   *
+   * It also fixes a real bug: fan-out only returned clubs the caller could
+   * already reach, so a player could never DISCOVER a club they had not joined
+   * — exactly backwards for a marketplace, where the point of a club list is to
+   * show you somewhere new.
+   *
+   * The limit is where the data lives, not how many clubs there are: anything
+   * inside a scope (court counts, amenities, prices) is not answerable here. If
+   * a listing needs those, they belong on the listing — promoted to the
+   * directory or a marketplace projection fed by the outbox — not fetched by
+   * asking every club in turn.
+   */
   app.get('/api/clubs', async (c) => {
-    const venues = await fanOut<{ id: string }[]>(c, 'rally/courts');
+    principalOf(c); // authenticated, but the directory is not per-principal
+    const scopes = await host.admin.listScopes({ status: 'active' });
+    const byScope = new Map(Object.entries(VENUES).map(([k, v]) => [v.scopeId as string, k]));
+    // Deliberately NOT filtered by principal. Discovery and access are different
+    // questions: every club exists to everyone, and `/api/my-venues` answers
+    // which of them this caller can actually act in. Merging the two here is
+    // what made the old fan-out hide the clubs a player most needed to find.
     return c.json(
-      venues.map((v) => ({ key: v.venue, label: v.label, courts: v.rows.length })),
+      scopes.map((s) => ({ key: byScope.get(s.id) ?? s.id, label: s.name, slug: s.slug })),
     );
   });
 
