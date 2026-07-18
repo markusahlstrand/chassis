@@ -7,8 +7,10 @@ able to produce, unaltered, years later.
 
 The engine owns only the invariants. Template **content** — which protocols exist, what
 sections and items they contain, which are mandatory when — is 100% vertical-owned. An
-instance binds to any `EntityRef` (a work order today, a bike or an apartment tomorrow); the
-engine never knows the vertical's vocabulary.
+instance binds to any `EntityRef` — a work order, a bike's condition report, or an
+employee's **onboarding checklist**, all three shipping in the demo verticals — and the
+engine never knows the vertical's vocabulary. (The HR vertical even signs onboarding as the
+*employee*, not a supervisor: same engine, the vertical's grant decides who signs.)
 
 ## At a glance
 

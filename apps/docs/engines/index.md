@@ -118,8 +118,18 @@ All three are **product seeds**, extracted from the demo verticals — small del
 hardened as real verticals consume them. The protocol engine is the extraction proof
 itself: it was forced out of vertical code only when a *second* vertical (a bike shop's
 per-bike condition report) needed the same sign-immutability invariant in a different
-shape. Planned next, in the order verticals force them: scheduling/dispatch and
-ticketing (ärende).
+shape — and a *third*, [an HR vertical](/guide/what-is-substrat#current-status), reuses it
+again for employee **onboarding checklists**, bound to an `employee` ref instead of a work
+order. Same engine, three shapes; that is the reuse thesis holding.
+
+Planned next, in the order verticals force them: **scheduling/dispatch**, **ticketing**
+(ärende), and an **absence / entry-ledger engine**. The last is the sharpest current
+candidate: the *append-only, a-correction-is-a-new-entry, current-value-is-a-fold* shape
+shows up three times already — work-order time & material, HR leave balances, and HR
+project time — which is exactly the "second consumer, different shape" signal that an
+invariant is ready to extract (its generic core may even belong in the kernel as a
+ledger-entries attachment contract; the domain semantics — accrual, approval, floors —
+stay in the engine).
 
 ## How these pages are organized
 
