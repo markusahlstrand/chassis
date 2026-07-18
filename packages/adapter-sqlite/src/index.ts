@@ -11,6 +11,7 @@ import {
   instant,
   moduleManifest,
   objectRef,
+  orgMembership,
   principalId,
   resolvedIdentity,
   roleDefinition,
@@ -118,6 +119,10 @@ const KERNEL_DDL = `
     relation TEXT NOT NULL,
     object TEXT NOT NULL,
     expires_at TEXT,
+    -- K-21: revocation TOMBSTONES. The row stays and the walk skips it, because a
+    -- tuple that once granted access is evidence of why an access was allowed
+    -- (K-4) and D-32's compliance product has to produce that evidence.
+    revoked_at TEXT,
     PRIMARY KEY (subject, relation, object)
   );
   CREATE TABLE IF NOT EXISTS _substrat_deliveries (
@@ -276,6 +281,9 @@ export class SqliteScopeHost implements ScopeHost {
         relation TEXT NOT NULL,
         object TEXT NOT NULL,
         expires_at TEXT,
+        -- K-21: see the note on _substrat_tuples. Membership lives here, so this
+        -- is the column removeMember writes.
+        revoked_at TEXT,
         PRIMARY KEY (tenant_id, subject, relation, object)
       );
       CREATE TABLE IF NOT EXISTS _substrat_roles (
@@ -961,8 +969,47 @@ export class SqliteScopeHost implements ScopeHost {
         );
       },
       addMember: async (actor, tenantId, principal, orgId) => {
+        // INSERT OR REPLACE, so re-adding a revoked member clears the tombstone —
+        // they are a member again. The add/revoke history is not lost: it lives in
+        // the append-only admin log, which is where "what happened" belongs. The
+        // tuple carries "what is true now" plus enough to explain a live proof.
         writeTenantTuple(tenantId, `principal:${principal}`, 'member', `org:${orgId}`);
         this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
+      },
+      removeMember: async (actor, tenantId, principal, orgId) => {
+        // Tombstone (K-21), never DELETE. Guarded on `revoked_at IS NULL` so a
+        // repeat revoke neither moves the timestamp nor writes a second audit row.
+        const info = this.directory
+          .prepare(
+            `UPDATE _substrat_tenant_tuples SET revoked_at = ?
+             WHERE tenant_id = ? AND subject = ? AND relation = 'member' AND object = ?
+               AND revoked_at IS NULL`,
+          )
+          .run(
+            new Date().toISOString(),
+            tenantId,
+            `principal:${principal}`,
+            `org:${orgId}`,
+          );
+        if (info.changes === 0) return; // never a member, or already revoked
+        this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
+      },
+      listMembers: async (tenantId, orgId, options) => {
+        const rows = this.directory
+          .prepare(
+            `SELECT subject, revoked_at FROM _substrat_tenant_tuples
+             WHERE tenant_id = ? AND relation = 'member' AND object = ?
+             ${options?.includeRevoked ? '' : 'AND revoked_at IS NULL'}
+             ORDER BY subject`,
+          )
+          .all(tenantId, `org:${orgId}`) as { subject: string; revoked_at: string | null }[];
+        return rows.map((r) =>
+          orgMembership.parse({
+            principal: r.subject.slice('principal:'.length),
+            orgId,
+            revokedAt: r.revoked_at,
+          }),
+        );
       },
       createTenant: async (actor: PlatformActorId, input: CreateTenantInput) => {
         const parsed = createTenantInput.parse(input);
@@ -1195,7 +1242,21 @@ export class SqliteScopeHost implements ScopeHost {
    * within tenant"). Idempotent: on a fresh directory every column already
    * exists and every UPDATE matches nothing.
    */
+  /**
+   * Additive column migration for a table that already exists in someone's data
+   * directory. `PRAGMA table_info` is available in the pure adapter (the DO adapter
+   * has to attempt-and-tolerate instead — see its `ensureDirectoryColumns`).
+   */
+  private ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+    const existing = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
+      (c) => c.name === column,
+    );
+    if (!existing) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+
   private ensureDirectoryColumns(): void {
+    // K-21's tombstone on tenant-level tuples (membership lives here).
+    this.ensureColumn(this.directory, '_substrat_tenant_tuples', 'revoked_at', 'revoked_at TEXT');
     const existing = new Set(
       (this.directory.prepare('PRAGMA table_info(scopes)').all() as { name: string }[]).map(
         (c) => c.name,
@@ -1416,6 +1477,9 @@ export class SqliteScopeHost implements ScopeHost {
     const db = new Database(join(this.dir, `${tenantId}__${scopeId}.sqlite`));
     db.pragma('journal_mode = WAL');
     db.exec(KERNEL_DDL);
+    // KERNEL_DDL is all IF NOT EXISTS, so a scope DB created before K-21 keeps the
+    // old shape — ALTER the tombstone in.
+    this.ensureColumn(db, '_substrat_tuples', 'revoked_at', 'revoked_at TEXT');
     const appliedMigrations = new Set<string>(
       (
         db.prepare('SELECT module_id, version FROM _substrat_migrations').all() as {

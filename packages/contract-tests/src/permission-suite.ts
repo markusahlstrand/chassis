@@ -145,6 +145,76 @@ export function permissionContractSuite(
       expect(JSON.stringify(d.proof)).toContain('org:acme');
     });
 
+    // -- revocation tombstones (K-21) ----------------------------------------
+    // Its own org/principal rather than reusing acme/erin: the suites carry state
+    // across `it` blocks, and revoking a fixture others assert on would couple them.
+
+    it('revoking a membership stops it granting, but keeps it readable as evidence', async () => {
+      const frank: PrincipalId = principalId.parse(ulid());
+      await host.admin.grantToOrg(staff, 'beta', PERM_READ, { tenantId: t1, scopeId: s1 });
+      await host.admin.addMember(staff, t1, frank, 'beta');
+      await expect(probe(frank, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
+
+      await host.admin.removeMember(staff, t1, frank, 'beta');
+
+      // The walk skips it — access is gone.
+      await expect(probe(frank, s1, PERM_READ)).resolves.toMatchObject({ allowed: false });
+
+      // And the row is still here. This is the entire reason K-21 chose a
+      // tombstone over a DELETE: a tuple that once granted access is the evidence
+      // of why an access was allowed (K-4), which a deleted row cannot provide.
+      expect(await host.admin.listMembers(t1, 'beta')).toEqual([]);
+      const withRevoked = await host.admin.listMembers(t1, 'beta', { includeRevoked: true });
+      expect(withRevoked).toHaveLength(1);
+      expect(withRevoked[0]!.principal).toBe(frank);
+      expect(typeof withRevoked[0]!.revokedAt).toBe('string');
+    });
+
+    it('enumerates live members of an org', async () => {
+      const gina: PrincipalId = principalId.parse(ulid());
+      const hank: PrincipalId = principalId.parse(ulid());
+      await host.admin.addMember(staff, t1, gina, 'gamma');
+      await host.admin.addMember(staff, t1, hank, 'gamma');
+      await host.admin.removeMember(staff, t1, hank, 'gamma');
+
+      const live = await host.admin.listMembers(t1, 'gamma');
+      expect(live.map((m) => m.principal)).toEqual([gina]);
+      expect(live[0]!.revokedAt).toBeNull();
+      expect(await host.admin.listMembers(t1, 'gamma', { includeRevoked: true })).toHaveLength(2);
+    });
+
+    it('re-adding a revoked member clears the tombstone', async () => {
+      const iris: PrincipalId = principalId.parse(ulid());
+      await host.admin.grantToOrg(staff, 'delta', PERM_READ, { tenantId: t1, scopeId: s1 });
+      await host.admin.addMember(staff, t1, iris, 'delta');
+      await host.admin.removeMember(staff, t1, iris, 'delta');
+      await expect(probe(iris, s1, PERM_READ)).resolves.toMatchObject({ allowed: false });
+
+      await host.admin.addMember(staff, t1, iris, 'delta');
+      await expect(probe(iris, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
+      const rows = await host.admin.listMembers(t1, 'delta', { includeRevoked: true });
+      expect(rows.find((m) => m.principal === iris)?.revokedAt).toBeNull();
+    });
+
+    it('revoking is idempotent — no timestamp drift, no second audit row', async () => {
+      const jack: PrincipalId = principalId.parse(ulid());
+      await host.admin.addMember(staff, t1, jack, 'epsilon');
+      await host.admin.removeMember(staff, t1, jack, 'epsilon');
+      const first = (await host.admin.listMembers(t1, 'epsilon', { includeRevoked: true }))[0]!
+        .revokedAt;
+
+      await host.admin.removeMember(staff, t1, jack, 'epsilon');
+      await host.admin.removeMember(staff, t1, jack, 'never-a-member');
+
+      const after = (await host.admin.listMembers(t1, 'epsilon', { includeRevoked: true }))[0]!
+        .revokedAt;
+      expect(after).toBe(first);
+      const removals = (await host.admin.auditLog({ tenantId: t1 })).filter(
+        (r) => r.action === 'removeMember',
+      );
+      expect(removals.filter((r) => JSON.stringify(r.before).includes(jack))).toHaveLength(1);
+    });
+
     // -- control-plane audit trail (control-plane.md §4.4) --------------------
 
     it('records every admin mutation with actor and target, append-only (K-20)', async () => {

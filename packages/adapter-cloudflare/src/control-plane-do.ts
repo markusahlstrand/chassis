@@ -147,6 +147,11 @@ const DIRECTORY_DDL = `
     relation TEXT NOT NULL,
     object TEXT NOT NULL,
     expires_at TEXT,
+    -- K-21: revocation TOMBSTONES. The row stays and the walk skips it, because a
+    -- tuple that once granted access is evidence of why an access was allowed
+    -- (K-4) and D-32's compliance product must produce that evidence.
+    -- (No semicolons in this comment — see the NOTE below.)
+    revoked_at TEXT,
     PRIMARY KEY (tenant_id, subject, relation, object)
   );
   CREATE TABLE IF NOT EXISTS _substrat_roles (
@@ -233,14 +238,21 @@ export class ControlPlaneDO extends DurableObject {
    * expected steady state on every cold start after the first — anything else
    * rethrows.
    */
+  /** Attempt-and-tolerate ALTER — DO SQLite restricts PRAGMA, so no column probe. */
+  private addColumn(table: string, ddl: string): void {
+    try {
+      this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    } catch (err) {
+      if (!/duplicate column name/i.test((err as Error).message)) throw err;
+    }
+  }
+
   private ensureDirectoryColumns(): void {
     for (const ddl of SCOPE_COLUMNS_ADDED) {
-      try {
-        this.sql.exec(`ALTER TABLE scopes ADD COLUMN ${ddl}`);
-      } catch (err) {
-        if (!/duplicate column name/i.test((err as Error).message)) throw err;
-      }
+      this.addColumn('scopes', ddl);
     }
+    // K-21's tombstone on tenant-level tuples (membership lives here).
+    this.addColumn('_substrat_tenant_tuples', 'revoked_at TEXT');
     this.sql.exec("UPDATE scopes SET slug = lower(scope_id) WHERE slug IS NULL");
     this.sql.exec("UPDATE scopes SET kind = 'scope' WHERE kind IS NULL");
     this.sql.exec('UPDATE scopes SET name = slug WHERE name IS NULL');
@@ -581,10 +593,57 @@ export class ControlPlaneDO extends DurableObject {
     );
   }
 
+  /**
+   * Tombstone a membership (K-21), never DELETE. Guarded on `revoked_at IS NULL`
+   * so a repeat revoke neither moves the timestamp nor produces a second audit
+   * row. Returns whether it changed, so the coordinator can skip the audit write.
+   */
+  revokeMember(tenantId: string, subject: string, object: string, at: string): boolean {
+    const before = this.sql
+      .exec(
+        `SELECT 1 FROM _substrat_tenant_tuples
+         WHERE tenant_id = ? AND subject = ? AND relation = 'member' AND object = ?
+           AND revoked_at IS NULL`,
+        tenantId,
+        subject,
+        object,
+      )
+      .toArray();
+    if (before.length === 0) return false;
+    this.sql.exec(
+      `UPDATE _substrat_tenant_tuples SET revoked_at = ?
+       WHERE tenant_id = ? AND subject = ? AND relation = 'member' AND object = ?
+         AND revoked_at IS NULL`,
+      at,
+      tenantId,
+      subject,
+      object,
+    );
+    return true;
+  }
+
+  /** Members of an org. Live only unless `includeRevoked` — revoked rows are evidence. */
+  listMembers(
+    tenantId: string,
+    object: string,
+    includeRevoked: boolean,
+  ): { subject: string; revoked_at: string | null }[] {
+    return this.sql
+      .exec(
+        `SELECT subject, revoked_at FROM _substrat_tenant_tuples
+         WHERE tenant_id = ? AND relation = 'member' AND object = ?
+         ${includeRevoked ? '' : 'AND revoked_at IS NULL'}
+         ORDER BY subject`,
+        tenantId,
+        object,
+      )
+      .toArray() as unknown as { subject: string; revoked_at: string | null }[];
+  }
+
   tenantTuples(tenantId: string, subject: string, relationPrefix: string): TupleRow[] {
     return this.sql
       .exec(
-        `SELECT subject, relation, object, expires_at FROM _substrat_tenant_tuples
+        `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tenant_tuples
          WHERE tenant_id = ? AND subject = ? AND relation LIKE ?`,
         tenantId,
         subject,

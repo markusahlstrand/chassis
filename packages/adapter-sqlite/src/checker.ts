@@ -38,6 +38,7 @@ interface TupleRow {
   relation: string;
   object: string;
   expires_at: string | null;
+  revoked_at: string | null;
 }
 
 const t = (subject: string, relation: string, object: string): RelationTuple => ({
@@ -50,7 +51,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
   const tenantTuples = (tenantId: string, subject: string, relationPrefix: string): TupleRow[] =>
     deps.directory
       .prepare(
-        `SELECT subject, relation, object, expires_at FROM _substrat_tenant_tuples
+        `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tenant_tuples
          WHERE tenant_id = ? AND subject = ? AND relation LIKE ?`,
       )
       .all(tenantId, subject, `${relationPrefix}%`) as TupleRow[];
@@ -62,13 +63,17 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
   ): TupleRow[] =>
     db
       .prepare(
-        `SELECT subject, relation, object, expires_at FROM _substrat_tuples
+        `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tuples
          WHERE subject = ? AND relation LIKE ?`,
       )
       .all(subject, `${relationPrefix}%`) as TupleRow[];
 
+  // A tuple grants only while it is unexpired AND unrevoked. K-21: revocation
+  // tombstones rather than deletes, so a revoked row is still here and still
+  // readable as evidence — it just stops granting. Same predicate, same sites as
+  // `expires_at`, so there is one definition of "live" rather than two.
   const live = (row: TupleRow, now: string): boolean =>
-    row.expires_at === null || row.expires_at > now;
+    (row.expires_at === null || row.expires_at > now) && row.revoked_at === null;
 
   return {
     async check(
@@ -152,7 +157,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
             for (const subject of subjects) {
               const grant = scopeDb
                 .prepare(
-                  `SELECT subject, relation, object, expires_at FROM _substrat_tuples
+                  `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tuples
                    WHERE subject = ? AND relation = ? AND object = ?`,
                 )
                 .get(subject.ref, `granted:${permission}`, candidate.ref) as
@@ -175,11 +180,16 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
           for (const candidate of frontier) {
             const parents = scopeDb
               .prepare(
-                `SELECT subject, relation, object, expires_at FROM _substrat_tuples
+                `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tuples
                  WHERE subject = ? AND relation = 'parent'`,
               )
               .all(candidate.ref) as TupleRow[];
             for (const p of parents) {
+              // A revoked parent edge stops expanding. Without this the tombstone
+              // would work for grants and membership but silently NOT for entity
+              // edges — which is the case open question 15 is actually about
+              // (a facility moving management company must stop being reachable).
+              if (!live(p, now)) continue;
               next.push({
                 ref: p.object,
                 chain: [...candidate.chain, t(p.subject, 'parent', p.object)],

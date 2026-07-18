@@ -32,6 +32,7 @@ interface TupleRow {
   relation: string;
   object: string;
   expires_at: string | null;
+  revoked_at: string | null;
 }
 
 /** The slice of the ControlPlaneDO the checker consults for tenant-level data. */
@@ -57,15 +58,18 @@ export function createDoTupleChecker(deps: DoCheckerDeps): PermissionChecker {
   const scopeTuples = (subject: string, relationPrefix: string): TupleRow[] =>
     deps.scopeSql
       .exec(
-        `SELECT subject, relation, object, expires_at FROM _substrat_tuples
+        `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tuples
          WHERE subject = ? AND relation LIKE ?`,
         subject,
         `${relationPrefix}%`,
       )
       .toArray() as unknown as TupleRow[];
 
+  // A tuple grants only while it is unexpired AND unrevoked. K-21: revocation
+  // tombstones rather than deletes, so a revoked row is still here and still
+  // readable as evidence — it just stops granting.
   const live = (row: TupleRow, now: string): boolean =>
-    row.expires_at === null || row.expires_at > now;
+    (row.expires_at === null || row.expires_at > now) && row.revoked_at === null;
 
   return {
     async check(
@@ -149,7 +153,7 @@ export function createDoTupleChecker(deps: DoCheckerDeps): PermissionChecker {
             for (const subject of subjects) {
               const grant = deps.scopeSql
                 .exec(
-                  `SELECT subject, relation, object, expires_at FROM _substrat_tuples
+                  `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tuples
                    WHERE subject = ? AND relation = ? AND object = ?`,
                   subject.ref,
                   `granted:${permission}`,
@@ -173,12 +177,16 @@ export function createDoTupleChecker(deps: DoCheckerDeps): PermissionChecker {
           for (const candidate of frontier) {
             const parents = deps.scopeSql
               .exec(
-                `SELECT subject, relation, object, expires_at FROM _substrat_tuples
+                `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tuples
                  WHERE subject = ? AND relation = 'parent'`,
                 candidate.ref,
               )
               .toArray() as unknown as TupleRow[];
             for (const p of parents) {
+              // A revoked parent edge stops expanding — without this the tombstone
+              // would work for grants and membership but silently NOT for entity
+              // edges, which is the case open question 15 is actually about.
+              if (!live(p, now)) continue;
               next.push({
                 ref: p.object,
                 chain: [...candidate.chain, t(p.subject, 'parent', p.object)],
