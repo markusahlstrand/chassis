@@ -22,6 +22,7 @@ import {
   joinReservation,
   listReservations,
   listResources,
+  openReservation,
   SlotUnavailable,
   PERM as BK,
   type Reservation,
@@ -205,7 +206,9 @@ export const rallyMigrations = [
       );
       CREATE TABLE rally_bookings (
         reservation_id TEXT PRIMARY KEY,
-        member_id      TEXT NOT NULL REFERENCES rally_members(id),
+        -- NULL when the CLUB opened the game rather than a player: there is no
+        -- customer to bill or to hang a portal grant on until someone signs up.
+        member_id      TEXT REFERENCES rally_members(id),
         price_amount   TEXT NOT NULL,
         currency       TEXT NOT NULL,
         rule_label     TEXT NOT NULL,
@@ -214,7 +217,10 @@ export const rallyMigrations = [
       CREATE TABLE rally_matches (
         reservation_id TEXT PRIMARY KEY,
         level_min      TEXT NOT NULL,
-        level_max      TEXT NOT NULL
+        level_max      TEXT NOT NULL,
+        -- Who OWNS the game. NULL = the club opened it and every place is on
+        -- offer; a member id = that player owns it, is on it, and pays a share.
+        host_member_id TEXT REFERENCES rally_members(id)
       );
     `,
   },
@@ -1236,6 +1242,16 @@ const bookCourtOp: OperationHandler<
   );
   ctx.link(reservationRef(reservation.id), memberRef(member.id));
 
+  // The booker is ON the court. Without this a booking has an empty roster, so
+  // "open my game for three more" cannot tell that a place is already taken —
+  // and "who is playing" is blank for the one person who certainly is.
+  joinReservation(ctx, {
+    reservationId: reservation.id,
+    partyRef: dataSubjectId.parse(member.party_ref),
+    share: price,
+    now,
+  });
+
   return { reservation, price, ruleLabel: label };
 };
 
@@ -1279,6 +1295,8 @@ const confirmBookingOp: OperationHandler<
 };
 
 const openMatchInput = bookInput.extend({
+  /** Omitted = the CLUB opens the game: no host, every place on offer. */
+  memberId: z.string().min(1).optional(),
   fillTarget: z.number().int().min(2).max(4).default(4),
   levelMin: z.string(),
   levelMax: z.string(),
@@ -1296,10 +1314,17 @@ const createOpenMatchOp: OperationHandler<
   assertAllowed(await ctx.check(BK.hold));
   const input = openMatchInput.parse(rawInput);
   const v = venue(ctx);
-  const member = ctx.sql.query<MemberRow>('SELECT * FROM rally_members WHERE id = ?', [
-    input.memberId,
-  ])[0];
-  if (!member) throw new Error(`member not found: ${input.memberId}`);
+
+  // Two kinds of open game, and the difference is OWNERSHIP.
+  //   host present — a player opened their own reservation to others: they are
+  //                  on it, they pay a share, and the rest is on offer.
+  //   host absent   — the CLUB opened a court: nobody owns it, every place is on
+  //                  offer, and there is no customer to bill until someone signs
+  //                  up. This is the common case in a real club.
+  const host = input.memberId
+    ? ctx.sql.query<MemberRow>('SELECT * FROM rally_members WHERE id = ?', [input.memberId])[0]
+    : undefined;
+  if (input.memberId && !host) throw new Error(`member not found: ${input.memberId}`);
 
   const resourceId = input.resourceId ?? pickCourt(ctx, input);
   const window = bookableWindow(ctx, resourceId, input.date);
@@ -1331,22 +1356,27 @@ const createOpenMatchOp: OperationHandler<
   ctx.sql.exec(
     `INSERT INTO rally_bookings (reservation_id, member_id, price_amount, currency, rule_label, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [reservation.id, member.id, price.amount, price.currency, label, now],
+    [reservation.id, host?.id ?? null, price.amount, price.currency, label, now],
   );
   ctx.sql.exec(
-    `INSERT INTO rally_matches (reservation_id, level_min, level_max) VALUES (?, ?, ?)`,
-    [reservation.id, input.levelMin, input.levelMax],
+    `INSERT INTO rally_matches (reservation_id, level_min, level_max, host_member_id)
+     VALUES (?, ?, ?, ?)`,
+    [reservation.id, input.levelMin, input.levelMax, host?.id ?? null],
   );
-  ctx.link(reservationRef(reservation.id), memberRef(member.id));
 
   const share = moneyOf(String(Math.round(Number(price.amount) / input.fillTarget)), price.currency);
+  if (!host) {
+    // Club-opened: no owner, no portal link, and all places on offer.
+    return { reservation, price, sharePerPlayer: share };
+  }
 
-  // The host is IN their own match. Opening a court and then not being on it is
+  ctx.link(reservationRef(reservation.id), memberRef(host.id));
+  // A host is IN their own match. Opening a court and then not being on it is
   // never what anyone meant, and without this a 4-player match starts at 0/4 —
-  // so the fill meter, the share split and the auto-confirm all count wrong.
+  // the fill meter, the share split and the auto-confirm would all count short.
   const joined = joinReservation(ctx, {
     reservationId: reservation.id,
-    partyRef: dataSubjectId.parse(member.party_ref),
+    partyRef: dataSubjectId.parse(host.party_ref),
     share,
     now,
   });
@@ -1715,6 +1745,51 @@ const canAdminOp: OperationHandler<undefined, { ok: true }> = async (ctx) => {
   return { ok: true };
 };
 
+/**
+ * Open a booking you already hold, so others can join it.
+ *
+ * The third shape of open game, and the one a player reaches for most: you have
+ * a court, you are short two, you put the spare places on offer. Composes the
+ * engine's `openReservation` (fillTarget is engine state, because it drives the
+ * auto-confirm) with this vertical's own level band.
+ *
+ * `spots` is what the player means — places to open — so the engine's target is
+ * derived from it rather than asked for.
+ */
+const openUpOp: OperationHandler<
+  { reservationId: string; spots: number; levelMin: string; levelMax: string; now?: string },
+  { reservation: Reservation; share: Money }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(BK.confirm, reservationRef(input.reservationId)));
+  const booking = ctx.sql.query<{ member_id: string | null; price_amount: string; currency: string }>(
+    'SELECT member_id, price_amount, currency FROM rally_bookings WHERE reservation_id = ?',
+    [input.reservationId],
+  )[0];
+  if (!booking) throw new Error(`no RallyPoint booking for ${input.reservationId}`);
+
+  const onIt = joinedCount(ctx, input.reservationId);
+  const fillTarget = onIt + input.spots;
+
+  const reservation = openReservation(ctx, {
+    reservationId: input.reservationId,
+    fillTarget,
+    ...(input.now !== undefined ? { now: input.now } : {}),
+  });
+
+  ctx.sql.exec(
+    `INSERT OR REPLACE INTO rally_matches (reservation_id, level_min, level_max, host_member_id)
+     VALUES (?, ?, ?, ?)`,
+    [input.reservationId, input.levelMin, input.levelMax, booking.member_id],
+  );
+  return {
+    reservation,
+    share: moneyOf(
+      String(Math.round(Number(booking.price_amount) / Math.max(1, fillTarget))),
+      booking.currency,
+    ),
+  };
+};
+
 /** Portal listing: a proof walk per reservation, never a WHERE clause on the caller. */
 const portalBookingsOp: OperationHandler<{ now?: string } | undefined, Reservation[]> = async (
   ctx,
@@ -1774,6 +1849,7 @@ export const rallyModule: ModuleRegistration = {
     'rally/create-open-match': createOpenMatchOp as never,
     'rally/join-match': joinMatchOp as never,
     'rally/open-matches': openMatchesOp as never,
+    'rally/open-up': openUpOp as never,
     'rally/match': matchLandingOp as never,
     'rally/occupancy': occupancyOp as never,
     'rally/can-admin': canAdminOp as never,

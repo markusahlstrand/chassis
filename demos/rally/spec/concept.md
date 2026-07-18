@@ -53,7 +53,8 @@ proof: the existing `CykelService` skin gains a drop-off booking, demonstrating
 | Court calendar, reservations, no double-booking | **Engine `engine-booking`** | v1, core |
 | Court management (create / edit / deactivate) | **Engine** `manage-resources` + **vertical** screens | v1, admin portal |
 | Club + court opening hours, closures | **Vertical** (§4.1) | v1 — weekly schedule + exceptions |
-| Open matches (join, fill-or-cancel) | **Engine** (conditional confirm) + **vertical** (level rules) | v1, **the showpiece** |
+| Open matches: club-opened, player-opened, or opened later (§4.5) | **Engine** (`fillTarget`, `booking/open`) + **vertical** (ownership, level bands) | v1, **the showpiece** |
+| Screen state in the URL (§4.6) | **App** | refresh and links both work |
 | Slot durations (60/90/120) + start-time grid | **Vertical** | allowed durations per court + 30-min grid |
 | Book a time, court assigned last (§4.2) | **Vertical** | availability aggregated across the venue |
 | Court cover (indoor/covered/open) + filter (§4.3) | **Vertical** | `cover` on the court, filters narrow before the grid |
@@ -183,7 +184,39 @@ match* — which is exactly the consent the club roster lacks.
 The line to hold: **participants of a match you can see, yes; the club's customer list, no.**
 A private booking's co-players are visible only to the people on it.
 
-### 4.5 Open matches are sized in OPEN SLOTS
+### 4.5 Three kinds of open game, distinguished by OWNERSHIP
+
+"Open game" is not one thing, and the difference is who owns the court:
+
+| Opened by | Owner | Who is on it at the start | Who pays |
+|---|---|---|---|
+| **The club** (the common case) | nobody | **nobody** — every place is on offer | whoever signs up |
+| **A player, up front** | that player | the host, automatically | host + joiners, split |
+| **A player, afterwards** — opening a booking they already hold | that player | whoever is already on it | as above |
+
+The club case is the one a real venue uses most: staff put a court on offer to
+fill an off-peak hour. It has **no host participant** — a club is not a player —
+and therefore no portal owner and nobody to bill until someone signs up, which is
+why `rally_bookings.member_id` and `rally_matches.host_member_id` are nullable.
+
+The third case needs the engine to allow a target to be set on a reservation that
+already exists (`booking/open`). `fillTarget` drives the auto-confirm, so it is
+engine state: a vertical cannot open a booking up by keeping its own counter
+beside the engine's and hoping they agree.
+
+**A booking's owner is a participant.** A plain booking joins its booker to the
+court — without that a booking has an empty roster, so "open my game for three
+more" cannot tell that a place is already taken, and "who is playing" is blank
+for the one person who certainly is.
+
+### 4.6 Screen state belongs in the URL
+
+Which club, which tab, which date, which slot — a refresh must land where you
+were, and a link must point at something. Written with `replaceState` for
+filters and `pushState` for the booking step, because that step is the one thing
+here a back button should walk out of.
+
+### 4.7 Open matches are sized in OPEN SLOTS
 
 A padel match is four players. The variable is not "2 or 4" — it is how many places the
 host is opening: **1, 2 or 3**. (Singles exist; they are a court whose capacity model says

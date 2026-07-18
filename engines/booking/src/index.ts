@@ -62,6 +62,7 @@ export const bookingManifest = moduleManifest.parse({
       { type: 'booking.no-show', schemaVersion: 1 },
       { type: 'booking.participant-joined', schemaVersion: 1 },
       { type: 'booking.participant-left', schemaVersion: 1 },
+      { type: 'booking.opened', schemaVersion: 1 },
       { type: 'booking.resource-created', schemaVersion: 1 },
     ],
     consumes: [],
@@ -684,6 +685,50 @@ export function joinReservation(
 }
 
 /** Soft-leave: the row is never deleted, so the record of who was in stays intact. */
+/**
+ * Open an existing reservation to others, or change how many places are on offer.
+ *
+ * `fillTarget` is engine state — it drives the auto-confirm in `joinReservation`
+ * — so a booking cannot be opened up by a vertical keeping its own counter
+ * beside it and hoping the two agree. Additive: reservations made without a
+ * target are unaffected, and a target below the people already on it is refused
+ * rather than silently stranding someone.
+ *
+ * Passing `null` closes it again — a private booking with no places on offer.
+ */
+export function openReservation(
+  ctx: OperationContext,
+  input: { reservationId: string; fillTarget: number | null; now?: string },
+): Reservation {
+  const row = getRow(ctx, input.reservationId);
+  requireState(row, 'held', 'confirmed');
+  const joined = activeParticipants(ctx, row.id).length;
+  if (input.fillTarget !== null && input.fillTarget < joined) {
+    throw new Error(
+      `cannot open ${input.fillTarget} places: ${joined} are already on this reservation`,
+    );
+  }
+  ctx.sql.exec('UPDATE booking_reservations SET fill_target = ? WHERE id = ?', [
+    input.fillTarget,
+    row.id,
+  ]);
+  ctx.emit({
+    type: 'booking.opened',
+    schemaVersion: 1,
+    entity: reservationRef(row.id),
+    piiClass: 'none',
+    payload: {
+      reservationId: row.id,
+      resourceId: row.resource_id,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      fillTarget: input.fillTarget,
+      participantCount: joined,
+    },
+  });
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
+}
+
 export function leaveReservation(
   ctx: OperationContext,
   input: { reservationId: string; participantId: string; now?: string },
@@ -1046,6 +1091,15 @@ const moveOp: OperationHandler<MoveReservationInput, Reservation> = async (ctx, 
   return moveReservation(ctx, input);
 };
 
+const openOp: OperationHandler<
+  { reservationId: string; fillTarget: number | null; now?: string },
+  Reservation
+> = async (ctx, input) => {
+  // Whoever may confirm a reservation may decide whether it is on offer.
+  assertAllowed(await ctx.check(PERM.confirm, reservationRef(input.reservationId)));
+  return openReservation(ctx, input);
+};
+
 const startOp: OperationHandler<{ reservationId: string }, Reservation> = async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.complete));
   return startReservation(ctx, input);
@@ -1099,6 +1153,7 @@ export const bookingModule: ModuleRegistration = {
     'booking/leave': leaveOp as OperationHandler<never, unknown>,
     'booking/cancel': cancelOp as OperationHandler<never, unknown>,
     'booking/move': moveOp as OperationHandler<never, unknown>,
+    'booking/open': openOp as OperationHandler<never, unknown>,
     'booking/start': startOp as OperationHandler<never, unknown>,
     'booking/complete': completeOp as OperationHandler<never, unknown>,
     'booking/no-show': noShowOp as OperationHandler<never, unknown>,

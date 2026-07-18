@@ -17,6 +17,7 @@ import {
   leaveReservation,
   listReservations,
   moveReservation,
+  openReservation,
   type FreeInterval,
   type Reservation,
   type Resource,
@@ -397,6 +398,56 @@ describe('engine-booking', () => {
       availability(ctx, { resourceId: r.id, from: T17, to: T1830, now: AFTER_EXPIRY }),
     );
     expect(free).toEqual<FreeInterval[]>([{ startsAt: T17, endsAt: T1830, available: 1 }]);
+  });
+
+  // -- opening an existing reservation to others ----------------------------
+
+  it('opens a private booking to others, and closes it again', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    expect(held.fillTarget).toBeNull(); // private
+
+    const opened = await h.run((ctx) =>
+      openReservation(ctx, { reservationId: held.id, fillTarget: 4, now: NOW }),
+    );
+    expect(opened.fillTarget).toBe(4);
+    expect(h.eventsOfType('booking.opened')).toHaveLength(1);
+
+    const closed = await h.run((ctx) =>
+      openReservation(ctx, { reservationId: held.id, fillTarget: null, now: NOW }),
+    );
+    expect(closed.fillTarget).toBeNull();
+  });
+
+  it('refuses to open fewer places than are already taken', async () => {
+    const r = await court();
+    const held = await hold(r.id, T17, T1830, { fillTarget: 4 });
+    for (const n of [1, 2, 3]) {
+      await h.run((ctx) =>
+        joinReservation(ctx, { reservationId: held.id, partyRef: player(n), now: NOW }),
+      );
+    }
+    await expect(
+      h.run((ctx) => openReservation(ctx, { reservationId: held.id, fillTarget: 2, now: NOW })),
+    ).rejects.toThrow(/already on this reservation/);
+  });
+
+  it('an opened booking then auto-confirms when it fills', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    await h.run((ctx) => confirmReservation(ctx, { reservationId: held.id, now: NOW }));
+    await h.run((ctx) =>
+      joinReservation(ctx, { reservationId: held.id, partyRef: player(1), now: NOW }),
+    );
+    // Opening a CONFIRMED booking is the "invite others to my game" case.
+    const opened = await h.run((ctx) =>
+      openReservation(ctx, { reservationId: held.id, fillTarget: 2, now: NOW }),
+    );
+    expect(opened.fillTarget).toBe(2);
+    const { reservation } = await h.run((ctx) =>
+      joinReservation(ctx, { reservationId: held.id, partyRef: player(2), now: NOW }),
+    );
+    expect(reservation.state).toBe('confirmed'); // already was, and stays
   });
 
   // -- move (reschedule) ---------------------------------------------------

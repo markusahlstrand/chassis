@@ -308,6 +308,53 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
     expect(everywhere.every((m: any) => m.venue && m.venueLabel)).toBe(true);
   });
 
+  it('the CLUB can open a game nobody owns, with every place on offer', async () => {
+    // The common case in a real club: staff open a court, no host, 4 places free.
+    const clubGame = await ok('/api/matches', {
+      as: astrid, method: 'POST',
+      body: {
+        date: DATE, time: '09:00', duration: 90,
+        fillTarget: 4, levelMin: '2.0', levelMax: '5.0',
+      },
+    });
+    const landing = await ok(`/api/matches/${clubGame.reservation.id}`, { as: elin });
+    expect(landing.joined).toBe(0); // nobody is on it — the club is not a player
+    expect(landing.players).toHaveLength(0);
+
+    // …and a player can still sign up to it.
+    await ok(`/api/matches/${clubGame.reservation.id}/join`, {
+      as: elin, method: 'POST', body: { memberId: elinM },
+    });
+    expect((await ok(`/api/matches/${clubGame.reservation.id}`, { as: elin })).joined).toBe(1);
+  });
+
+  it('a player opens a booking they already hold, to find players', async () => {
+    const b = await ok('/api/bookings', {
+      as: elin, method: 'POST',
+      body: { memberId: elinM, date: DATE, time: '07:00', duration: 90 },
+    });
+    await ok(`/api/bookings/${b.reservation.id}/confirm`, { as: elin, method: 'POST', body: {} });
+
+    // It is private until she says otherwise: not on offer anywhere.
+    expect(
+      (await ok('/api/matches', { as: johan })).some(
+        (m: any) => m.reservationId === b.reservation.id,
+      ),
+    ).toBe(false);
+
+    const opened = await ok(`/api/bookings/${b.reservation.id}/open`, {
+      as: elin, method: 'POST',
+      body: { spots: 3, levelMin: '3.0', levelMax: '4.5' },
+    });
+    expect(opened.reservation.fillTarget).toBe(4); // she is on it + 3 places
+
+    const offered = (await ok('/api/matches', { as: johan })).find(
+      (m: any) => m.reservationId === b.reservation.id,
+    );
+    expect(offered.joined).toBe(1);
+    expect(offered.players[0].name).toBe('Elin Kastberg');
+  });
+
   it('a match shows WHO is playing; the club roster stays shut', async () => {
     const made = await ok('/api/matches', {
       as: elin, method: 'POST',
@@ -342,7 +389,7 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
     const b = await ok('/api/bookings', {
       as: ravi,
       method: 'POST',
-      body: { resourceId: court, memberId: johanM, date: DATE, time: '08:00', duration: 60 },
+      body: { resourceId: court, memberId: johanM, date: DATE, time: '11:30', duration: 60 },
     });
     const id = b.reservation.id;
     await ok(`/api/bookings/${id}/confirm`, { as: ravi, method: 'POST', body: {} });
@@ -367,7 +414,7 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
     const c = await ok('/api/bookings', {
       as: ravi,
       method: 'POST',
-      body: { resourceId: court, memberId: johanM, date: DATE, time: '07:00', duration: 60 },
+      body: { resourceId: court, memberId: johanM, date: DATE, time: '15:00', duration: 60 },
     });
     await ok(`/api/bookings/${c.reservation.id}/cancel`, {
       as: ravi, method: 'POST', body: { reason: 'kund' },

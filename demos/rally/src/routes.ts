@@ -322,6 +322,14 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
   app.post('/api/matches', async (c) =>
     c.json(await (await stub(c)).invoke('rally/create-open-match', await body(c))),
   );
+  app.post('/api/bookings/:id/open', async (c) =>
+    c.json(
+      await (await stub(c)).invoke('rally/open-up', {
+        reservationId: c.req.param('id'),
+        ...(await body(c)),
+      }),
+    ),
+  );
   app.post('/api/matches/:id/join', async (c) =>
     c.json(
       await (await stub(c)).invoke('rally/join-match', {

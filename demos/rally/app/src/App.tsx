@@ -40,6 +40,25 @@ const linkParams = (): { match: string | null; venue: string | null } => {
 export const matchLink = (venue: string, id: string): string =>
   `${location.origin}/?venue=${venue}&match=${id}`;
 
+/**
+ * Screen state lives in the URL, so a refresh lands you where you were and a
+ * link points at something specific. It is written with replaceState rather
+ * than pushState: these are not navigation steps a back button should walk
+ * through one at a time — except the booking step, which genuinely is.
+ */
+const urlParam = (key: string): string | null => new URLSearchParams(location.search).get(key);
+
+function setUrl(patch: Record<string, string | null>, push = false): void {
+  const q = new URLSearchParams(location.search);
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) q.delete(k);
+    else q.set(k, v);
+  }
+  const url = `${location.pathname}${q.toString() ? `?${q}` : ''}`;
+  if (push) history.pushState({}, '', url);
+  else history.replaceState({}, '', url);
+}
+
 export default function App() {
   const [cast, setCast] = useState<Record<string, CastMember>>({});
   const [venues, setVenues] = useState<Venue[]>([]);
@@ -48,7 +67,7 @@ export default function App() {
     () => localStorage.getItem(`${STORE}-venue`) ?? 'solna',
   );
   const [who, setWho] = useState(() => localStorage.getItem(STORE) ?? 'elin');
-  const [tab, setTab] = useState<Tab>('book');
+  const [tab, setTab] = useState<Tab>(() => (urlParam('tab') as Tab) ?? 'book');
   const [tz, setTz] = useState('Europe/Stockholm');
 
   useEffect(() => {
@@ -67,6 +86,7 @@ export default function App() {
       const v = fromLink ?? localStorage.getItem(`${STORE}-venue`) ?? 'solna';
       setVenue(v);
       setVenueState(v);
+      setUrl({ venue: v });
       setCast(r.cast);
       setVenues(r.venues);
       setAllMembers(r.members);
@@ -79,7 +99,15 @@ export default function App() {
     setVenue(key);
     localStorage.setItem(`${STORE}-venue`, key);
     setVenueState(key);
+    // The club is part of what the URL identifies — a slot means nothing
+    // without knowing which club's slot it is.
+    setUrl({ venue: key, slot: null });
     void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
+  }, []);
+
+  const goTab = useCallback((next: Tab) => {
+    setTab(next);
+    setUrl({ tab: next, slot: null });
   }, []);
 
   const pickWho = useCallback(
@@ -112,7 +140,7 @@ export default function App() {
           cast={cast}
           onPick={pickWho}
           onDone={() => {
-            history.replaceState({}, '', location.pathname);
+            setUrl({ match: null, tab: 'mine' });
             setInvite(null);
             setTab('mine');
           }}
@@ -175,7 +203,7 @@ export default function App() {
             ['me', 'Profil'],
           ] as const
         ).map(([k, label]) => (
-          <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
+          <button key={k} className={tab === k ? 'on' : ''} onClick={() => goTab(k)}>
             {label}
           </button>
         ))}
@@ -187,7 +215,7 @@ export default function App() {
 // ---------------------------------------------------------------------------
 
 function Book({ tz, memberId }: { tz: string; memberId: string }) {
-  const [date, setDate] = useState(todayISO);
+  const [date, setDate] = useState(() => urlParam('date') ?? todayISO());
   const [cover, setCover] = useState<Cover[]>([]);
   /** A duration filter on step 1 — it narrows WHICH TIMES show, nothing else. */
   const [only, setOnly] = useState<number | null>(null);
@@ -208,6 +236,35 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
 
   const shown = only ? slots.filter((s) => s.fits.includes(only)) : slots;
 
+  // Step 2 is a real place: it survives a refresh and the back button leaves it.
+  useEffect(() => {
+    const wanted = urlParam('slot');
+    if (!wanted) {
+      setPicked(null);
+      return;
+    }
+    const found = slots.find((s) => s.startsAt === wanted);
+    if (found) setPicked(found);
+  }, [slots]);
+
+  useEffect(() => {
+    const onPop = () => {
+      const wanted = urlParam('slot');
+      setPicked(wanted ? (slots.find((s) => s.startsAt === wanted) ?? null) : null);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [slots]);
+
+  const openStep2 = (s: VenueSlot) => {
+    setPicked(s);
+    setUrl({ slot: s.startsAt, date }, true); // a step worth a back button
+  };
+  const closeStep2 = () => {
+    setPicked(null);
+    setUrl({ slot: null });
+  };
+
   if (picked) {
     return (
       <Step2
@@ -217,14 +274,14 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
         cover={cover}
         memberId={memberId}
         mode={mode}
-        onBack={() => setPicked(null)}
+        onBack={closeStep2}
         onTaken={(t) => {
-          setPicked(null);
+          closeStep2();
           setTaken(t);
           loadSlots();
         }}
         onDone={(d) => {
-          setPicked(null);
+          closeStep2();
           setDone(d);
           loadSlots();
         }}
@@ -277,7 +334,10 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
         <input
           type="date"
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={(e) => {
+            setDate(e.target.value);
+            setUrl({ date: e.target.value, slot: null });
+          }}
           style={{
             width: '100%', minHeight: 44, border: '1px solid var(--border-strong)',
             borderRadius: 12, padding: '0 10px', font: 'inherit',
@@ -326,7 +386,7 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
             {shown.map((s) => {
               const t = hhmm(s.startsAt, tz);
               return (
-                <button key={s.startsAt} className="slot" onClick={() => setPicked(s)}>
+                <button key={s.startsAt} className="slot" onClick={() => openStep2(s)}>
                   <span className="t">{t}</span>
                   <span className="dots">
                     {[60, 90, 120].map((d) => (
