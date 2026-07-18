@@ -1,0 +1,18 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+// Dev ports in the private 887x/527x block. The employee app is :5275, the API
+// on :8875; the same two vars drive src/server.ts, so `PORT=… WEB_PORT=…` moves
+// both ends of the proxy together. The (future) admin web app takes :5276.
+const WEB_PORT = Number(process.env.WEB_PORT ?? 5275);
+const API_PORT = Number(process.env.PORT ?? 8875);
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: WEB_PORT,
+    proxy: {
+      '/api': `http://localhost:${API_PORT}`,
+    },
+  },
+});
