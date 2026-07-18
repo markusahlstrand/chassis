@@ -3,12 +3,14 @@ import {
   ApiError,
   api,
   dayLabel,
+  getVenue,
   hhmm,
   setPrincipal,
   setVenue,
   type CastMember,
   type Venue,
   type CourtListing,
+  type MatchLanding,
   type Money,
   type OpenMatch,
   type Reservation,
@@ -19,6 +21,20 @@ type Tab = 'book' | 'matches' | 'mine' | 'me';
 const STORE = 'rally-player-principal';
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const kr = (m: Money) => `${m.amount} kr`;
+
+/**
+ * A shared match link. It MUST carry the venue: a reservation id alone cannot be
+ * resolved, because each club is its own scope and nothing indexes across them.
+ * Older links without a venue fall back to the saved one, which is right often
+ * enough for a demo and wrong in general — a real link would carry a token that
+ * encodes the club.
+ */
+const linkParams = (): { match: string | null; venue: string | null } => {
+  const q = new URLSearchParams(location.search);
+  return { match: q.get('match'), venue: q.get('venue') };
+};
+export const matchLink = (venue: string, id: string): string =>
+  `${location.origin}/?venue=${venue}&match=${id}`;
 
 export default function App() {
   const [cast, setCast] = useState<Record<string, CastMember>>({});
@@ -41,7 +57,12 @@ export default function App() {
       const start = r.cast[saved] ? saved : (Object.keys(r.cast)[0] ?? '');
       const p = r.cast[start]?.principal;
       if (p) setPrincipal(p);
-      setVenue(localStorage.getItem(`${STORE}-venue`) ?? 'solna');
+      // A link's venue wins over the remembered one — you are being sent
+      // somewhere specific.
+      const fromLink = linkParams().venue;
+      const v = fromLink ?? localStorage.getItem(`${STORE}-venue`) ?? 'solna';
+      setVenue(v);
+      setVenueState(v);
       setCast(r.cast);
       setVenues(r.venues);
       setAllMembers(r.members);
@@ -57,7 +78,7 @@ export default function App() {
     void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
   }, []);
 
-  const pick = useCallback(
+  const pickWho = useCallback(
     (key: string) => {
       const p = cast[key]?.principal;
       if (p) setPrincipal(p);
@@ -67,10 +88,34 @@ export default function App() {
     },
     [cast],
   );
+  const pick = pickWho;
 
   // A member record is per club — the same human, a different row in each.
   const memberId = allMembers[venue]?.[who] ?? '';
   const ready = Boolean(cast[who]);
+  const [invite, setInvite] = useState<string | null>(() => linkParams().match);
+
+  // An invite takes over the whole screen: someone sent you here for one reason.
+  if (invite) {
+    return (
+      <div className="phone">
+        <JoinByLink
+          reservationId={invite}
+          tz={tz}
+          memberId={memberId}
+          ready={ready}
+          who={who}
+          cast={cast}
+          onPick={pickWho}
+          onDone={() => {
+            history.replaceState({}, '', location.pathname);
+            setInvite(null);
+            setTab('mine');
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="phone">
@@ -255,7 +300,7 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
               className="pill on"
               onClick={() => {
                 void navigator.clipboard
-                  ?.writeText(`${location.origin}/?match=${made.id}`)
+                  ?.writeText(matchLink(getVenue(), made.id))
                   .catch(() => {});
               }}
             >
@@ -622,7 +667,7 @@ function Matches({ tz, memberId }: { tz: string; memberId: string }) {
   };
 
   const share = async (m: OpenMatch) => {
-    const url = `${location.origin}/?match=${m.reservationId}`;
+    const url = matchLink(getVenue(), m.reservationId);
     try {
       await navigator.clipboard.writeText(url);
       setOk('Länk kopierad — klistra in i WhatsApp-gruppen.');
@@ -700,6 +745,183 @@ function Matches({ tz, memberId }: { tz: string; memberId: string }) {
         </div>
       ))}
     </>
+  );
+}
+
+/**
+ * The screen a shared link lands on. Per the handover (1m/2f): the match is
+ * shown FIRST — you decide whether you care before you are asked who you are —
+ * and a link that can no longer be taken says so plainly instead of failing.
+ */
+function JoinByLink({
+  reservationId,
+  tz,
+  memberId,
+  ready,
+  who,
+  cast,
+  onPick,
+  onDone,
+}: {
+  reservationId: string;
+  tz: string;
+  memberId: string;
+  ready: boolean;
+  who: string;
+  cast: Record<string, CastMember>;
+  onPick: (k: string) => void;
+  onDone: () => void;
+}) {
+  // `null` from the API is mapped straight to 'missing', so it never lands here.
+  const [m, setM] = useState<MatchLanding | 'loading' | 'missing'>('loading');
+  const [err, setErr] = useState('');
+  const [joined, setJoined] = useState<Money | null>(null);
+
+  useEffect(() => {
+    if (!ready) return;
+    api
+      .match(reservationId)
+      .then((r) => setM(r ?? 'missing'))
+      .catch((e) => {
+        setErr(e instanceof Error ? e.message : String(e));
+        setM('missing');
+      });
+  }, [reservationId, ready]);
+
+  const shell = (body: React.ReactNode) => (
+    <div className="scroll" style={{ background: 'var(--ink)', minHeight: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 20px' }}>
+        <span className="brand-mark" />
+        <span className="wordmark" style={{ color: '#fff' }}>
+          RALLYPOINT
+        </span>
+      </div>
+      {body}
+      <button
+        className="cta ghost"
+        style={{ marginTop: 12, background: 'transparent', color: '#fff', borderColor: '#4a5050' }}
+        onClick={onDone}
+      >
+        Bara nyfiken? Titta på klubben →
+      </button>
+    </div>
+  );
+
+  if (m === 'loading') return shell(<p style={{ color: '#8A938C' }}>Laddar inbjudan…</p>);
+
+  if (m === 'missing')
+    return shell(
+      <div className="card">
+        <h2>Matchen finns inte</h2>
+        <p className="meta">Länken kan höra till en annan klubb. {err}</p>
+      </div>,
+    );
+
+  if (joined)
+    return shell(
+      <div className="card">
+        <h2>Du är med!</h2>
+        <p className="meta">Din andel är {joined.amount} kr. Matchen syns under Mina tider.</p>
+      </div>,
+    );
+
+  const dead = m.status !== 'open';
+  return shell(
+    <>
+      <p style={{ color: '#D7F34F', fontWeight: 700, marginTop: 0 }}>
+        Du är inbjuden till en match
+      </p>
+
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+          <div>
+            <h2>{dayLabel(m.startsAt, tz)}</h2>
+            <p className="meta mono" style={{ fontSize: 15 }}>
+              {hhmm(m.startsAt, tz)}–{hhmm(m.endsAt, tz)}
+            </p>
+            <p className="meta">
+              {m.venueName} · {m.courtName}
+            </p>
+          </div>
+          <span className={`pill ${m.status === 'full' ? 'amber' : ''}`}>
+            {m.joined}/{m.fillTarget}
+          </span>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: 12,
+          }}
+        >
+          <span className="pill green">
+            nivå {m.levelMin}–{m.levelMax}
+          </span>
+          <span className="mono" style={{ fontSize: 16, color: 'var(--ink)', fontWeight: 600 }}>
+            din andel {m.share.amount} kr
+          </span>
+        </div>
+      </div>
+
+      {m.status === 'full' && (
+        <div className="banner">
+          <strong>Matchen blev full.</strong>
+          Ingenting har debiterats. Titta på klubbens övriga tider i stället.
+        </div>
+      )}
+      {m.status === 'expired' && (
+        <div className="banner">
+          <strong>Länken har gått ut.</strong>
+          Matchen har redan börjat — länkar dör vid starttid.
+        </div>
+      )}
+      {m.status === 'gone' && (
+        <div className="banner bad">
+          <strong>Matchen är avbokad.</strong>
+        </div>
+      )}
+      {err && <div className="banner bad">{err}</div>}
+
+      {!dead && (
+        <>
+          {/* Stands in for sign-in: you are asked who you are only once you have
+              seen what you are being asked to join. */}
+          <div className="card">
+            <h2>Vem är du?</h2>
+            <select
+              className="who"
+              style={{ width: '100%', marginTop: 8, marginLeft: 0 }}
+              value={who}
+              onChange={(e) => onPick(e.target.value)}
+            >
+              {Object.entries(cast).map(([k, c]) => (
+                <option key={k} value={k}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            {!memberId && (
+              <p className="legend">Du är inte medlem i {m.venueName} — välj någon annan.</p>
+            )}
+          </div>
+
+          <button
+            className="cta"
+            disabled={!memberId}
+            onClick={() => {
+              setErr('');
+              api
+                .joinMatch(m.reservationId, memberId)
+                .then((r) => setJoined(r.share))
+                .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+            }}
+          >
+            Ta platsen · {m.share.amount} kr
+          </button>
+        </>
+      )}
+    </>,
   );
 }
 

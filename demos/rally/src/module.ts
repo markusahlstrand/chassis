@@ -1285,6 +1285,80 @@ const openMatchesOp: OperationHandler<{ now?: string } | undefined, OpenMatchLis
   return out.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
 };
 
+export interface MatchLanding {
+  status: 'open' | 'full' | 'expired' | 'gone';
+  reservationId: string;
+  courtName: string;
+  venueName: string;
+  startsAt: string;
+  endsAt: string;
+  joined: number;
+  fillTarget: number;
+  levelMin: string;
+  levelMax: string;
+  share: Money;
+}
+
+/**
+ * One match, by id, for a shared link — INCLUDING the states a link dies in.
+ *
+ * `rally/open-matches` deliberately omits matches that are full or lapsed, which
+ * makes it useless for a link someone taps an hour late: the honest answers are
+ * "this filled up" and "this expired", and both need the row the list hides.
+ *
+ * Browse-guarded, like the list: a match link is published by definition. It
+ * still reports counts and never identities.
+ */
+const matchLandingOp: OperationHandler<
+  { reservationId: string; now?: string },
+  MatchLanding | null
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
+  const now = input.now ?? new Date().toISOString();
+  const r = listReservations(ctx, { now }).find((x) => x.id === input.reservationId);
+  if (!r || r.fillTarget === null) return null;
+
+  const band = ctx.sql.query<{ level_min: string; level_max: string }>(
+    'SELECT level_min, level_max FROM rally_matches WHERE reservation_id = ?',
+    [r.id],
+  )[0];
+  const booking = ctx.sql.query<{ price_amount: string; currency: string }>(
+    'SELECT price_amount, currency FROM rally_bookings WHERE reservation_id = ?',
+    [r.id],
+  )[0];
+  if (!band || !booking) return null;
+
+  const joined = joinedCount(ctx, r.id);
+  const dead = ['cancelled', 'expired', 'no_show'].includes(r.effectiveState);
+  // A link dies at the start: turning up to join a match already underway is not
+  // a thing, so time is as much an expiry as the hold deadline is.
+  const started = r.startsAt <= now;
+  const status: MatchLanding['status'] = dead
+    ? 'gone'
+    : started
+      ? 'expired'
+      : joined >= r.fillTarget
+        ? 'full'
+        : 'open';
+
+  return {
+    status,
+    reservationId: r.id,
+    courtName: listResources(ctx, 'court').find((c) => c.id === r.resourceId)?.name ?? '—',
+    venueName: venue(ctx).name,
+    startsAt: r.startsAt,
+    endsAt: r.endsAt,
+    joined,
+    fillTarget: r.fillTarget,
+    levelMin: band.level_min,
+    levelMax: band.level_max,
+    share: moneyOf(
+      String(Math.round(Number(booking.price_amount) / r.fillTarget)),
+      booking.currency,
+    ),
+  };
+};
+
 /**
  * Add a co-player to an ordinary booking — the "who else is playing" case, as
  * distinct from an open match anyone may join.
@@ -1482,6 +1556,7 @@ export const rallyModule: ModuleRegistration = {
     'rally/create-open-match': createOpenMatchOp as never,
     'rally/join-match': joinMatchOp as never,
     'rally/open-matches': openMatchesOp as never,
+    'rally/match': matchLandingOp as never,
     'rally/occupancy': occupancyOp as never,
     'rally/can-admin': canAdminOp as never,
     'rally/add-player': addPlayerOp as never,

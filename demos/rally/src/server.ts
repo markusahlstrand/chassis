@@ -222,6 +222,9 @@ app.post('/api/maintenance', async (c) =>
 
 // -- open matches -----------------------------------------------------------
 app.get('/api/matches', async (c) => c.json(await (await stub(c)).invoke('rally/open-matches')));
+app.get('/api/matches/:id', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/match', { reservationId: c.req.param('id') })),
+);
 app.post('/api/bookings/:id/players', async (c) =>
   c.json(
     await (await stub(c)).invoke('rally/add-player', {

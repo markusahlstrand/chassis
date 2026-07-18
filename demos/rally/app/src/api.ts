@@ -64,6 +64,7 @@ let venue = 'solna';
 export const setVenue = (v: string): void => {
   venue = v;
 };
+export const getVenue = (): string => venue;
 export interface Venue {
   key: string;
   label: string;
@@ -106,8 +107,23 @@ export interface OpenMatch {
   share: Money;
 }
 
+export interface MatchLanding {
+  status: 'open' | 'full' | 'expired' | 'gone';
+  reservationId: string;
+  courtName: string;
+  venueName: string;
+  startsAt: string;
+  endsAt: string;
+  joined: number;
+  fillTarget: number;
+  levelMin: string;
+  levelMax: string;
+  share: Money;
+}
+
 export const api = {
   openMatches: (): Promise<OpenMatch[]> => call('/api/matches'),
+  match: (id: string): Promise<MatchLanding | null> => call(`/api/matches/${id}`),
   createMatch: (i: {
     resourceId: string;
     memberId: string;
