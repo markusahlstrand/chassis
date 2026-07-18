@@ -26,16 +26,31 @@ export default function App() {
 
   useEffect(() => {
     void api.cast().then((r) => {
+      // Apply the principal BEFORE the state update that mounts the screens.
+      // React runs child effects before parent effects, so a screen mounted in
+      // this same commit would otherwise fire its first fetch with no
+      // x-principal header and take a 403.
+      const saved = localStorage.getItem(STORE) ?? 'elin';
+      const start = r.cast[saved] ? saved : (Object.keys(r.cast)[0] ?? '');
+      const p = r.cast[start]?.principal;
+      if (p) setPrincipal(p);
       setCast(r.cast);
       setMemberIds(r.members);
+      setWho(start);
+      if (p) void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
     });
   }, []);
-  useEffect(() => {
-    const p = cast[who]?.principal;
-    if (p) setPrincipal(p);
-    localStorage.setItem(STORE, who);
-    if (p) void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
-  }, [cast, who]);
+
+  const pick = useCallback(
+    (key: string) => {
+      const p = cast[key]?.principal;
+      if (p) setPrincipal(p);
+      localStorage.setItem(STORE, key);
+      setWho(key);
+      if (p) void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
+    },
+    [cast],
+  );
 
   const memberId = memberIds[who] ?? '';
   const ready = Boolean(cast[who]);
@@ -45,7 +60,7 @@ export default function App() {
       <div className="topbar">
         <span className="brand-mark" />
         <span className="wordmark">RALLYPOINT</span>
-        <select className="who" value={who} onChange={(e) => setWho(e.target.value)}>
+        <select className="who" value={who} onChange={(e) => pick(e.target.value)}>
           {Object.entries(cast).map(([k, m]) => (
             <option key={k} value={k}>
               {m.name}

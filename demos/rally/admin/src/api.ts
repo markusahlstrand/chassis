@@ -122,6 +122,13 @@ export const setPrincipal = (p: string): void => {
 };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  // /api/cast is the only route that legitimately runs unauthenticated — it is
+  // how the picker learns who it may be. Anything else firing without a
+  // principal is a mount-ordering bug, and should say so rather than surface as
+  // a mystery 403 from the server.
+  if (!principal && path !== '/api/cast') {
+    throw new ApiError(0, `no principal selected yet — ${path} fired before the picker was ready`);
+  }
   const res = await fetch(path, {
     ...init,
     headers: {

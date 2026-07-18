@@ -28,16 +28,31 @@ export default function App() {
 
   useEffect(() => {
     void api.cast().then((r) => {
+      // Apply the principal BEFORE the state update that mounts the views.
+      // React runs child effects before parent effects, so a view mounted in
+      // this same commit would otherwise fire its first fetch with no
+      // x-principal header and take a 403.
+      const saved = localStorage.getItem(STORE) ?? 'astrid';
+      const start = r.cast[saved] ? saved : (Object.keys(r.cast)[0] ?? '');
+      const p = r.cast[start]?.principal;
+      if (p) setPrincipal(p);
       setCast(r.cast);
       setMemberIds(r.members);
+      setWho(start);
     });
   }, []);
 
-  useEffect(() => {
-    const p = cast[who]?.principal;
-    if (p) setPrincipal(p);
-    localStorage.setItem(STORE, who);
-  }, [cast, who]);
+  // Switching principal is likewise applied synchronously, before the re-render
+  // that makes the views refetch.
+  const pick = useCallback(
+    (key: string) => {
+      const p = cast[key]?.principal;
+      if (p) setPrincipal(p);
+      localStorage.setItem(STORE, key);
+      setWho(key);
+    },
+    [cast],
+  );
 
   const shiftDay = useCallback((delta: number) => {
     setDate((d) => {
@@ -106,7 +121,7 @@ export default function App() {
 
           <span className="spacer" />
 
-          <select value={who} onChange={(e) => setWho(e.target.value)} title="Dev principal">
+          <select value={who} onChange={(e) => pick(e.target.value)} title="Dev principal">
             {Object.entries(cast).map(([k, m]) => (
               <option key={k} value={k}>
                 {m.name}
