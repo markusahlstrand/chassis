@@ -163,6 +163,13 @@ enough data to earn a deployment. Decide it at the second vertical, which is als
 open question 9 stops being theoretical. What must *not* happen is writing "the admin is
 never a vertical" into the log: it is false, and it forecloses the dogfooding.
 
+**Taken (D-31, [membership.md](membership.md)).** The trigger fired earlier than this
+section predicted, and for a different reason: self-service, not accumulated data. The
+effecting/record-keeping line above is unchanged; what moved is that membership, invites
+and plan-shaped entitlements turn out to be engines with two consumers (the admin and
+every hosted vertical), and that membership is not reachable from module code at all —
+see membership.md §4 for the kernel seam that blocks it.
+
 ## 4. What gets built
 
 ### 4.1 The tenant record
