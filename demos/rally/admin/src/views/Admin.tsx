@@ -4,6 +4,8 @@ import {
   newPartyRef,
   type Court,
   type Member,
+  type Occupancy,
+  type TenantRole,
   type VenueSnapshot,
 } from '../api';
 
@@ -11,7 +13,11 @@ const DAYS = ['Sön', 'Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör'];
 // Monday-first display over a Sunday-indexed store.
 const ORDER = [1, 2, 3, 4, 5, 6, 0];
 
-export default function Admin({ view }: { view: 'courts' | 'pricing' | 'members' | 'settings' }) {
+export default function Admin({
+  view,
+}: {
+  view: 'courts' | 'pricing' | 'members' | 'reports' | 'staff' | 'settings';
+}) {
   const [venue, setVenue] = useState<VenueSnapshot | null>(null);
   const [courts, setCourts] = useState<Court[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -204,6 +210,9 @@ export default function Admin({ view }: { view: 'courts' | 'pricing' | 'members'
         </div>
       )}
 
+      {view === 'reports' && <Reports />}
+      {view === 'staff' && <Staff />}
+
       {view === 'settings' && (
         <>
           <div className="card">
@@ -280,6 +289,203 @@ export default function Admin({ view }: { view: 'courts' | 'pricing' | 'members'
           </div>
         </>
       )}
+    </>
+  );
+}
+
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+function Reports() {
+  const [data, setData] = useState<Occupancy | null>(null);
+  const [err, setErr] = useState('');
+  const [from, setFrom] = useState(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 13);
+    return d.toISOString().slice(0, 10);
+  });
+  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    api
+      .occupancy(from, to)
+      .then(setData)
+      .catch((e) => setErr(e.message));
+  }, [from, to]);
+
+  const peak = Math.max(1, ...(data?.heat.flat() ?? [1]));
+  const rate = data && data.openHours > 0 ? Math.round((data.bookedHours / data.openHours) * 100) : 0;
+
+  return (
+    <>
+      {err && <div className="banner">{err}</div>}
+      <div className="card">
+        <h2>Rapporter</h2>
+        <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          <Kpi label="Beläggning" value={`${rate}%`} sub={`${data?.bookedHours ?? 0} av ${data?.openHours ?? 0} h`} />
+          <Kpi label="Intäkt" value={`${data?.revenue.amount ?? '0'} kr`} sub="bekräftade bokningar" />
+          <Kpi label="Avbokningar" value={String(data?.cancellations ?? 0)} sub={`${data?.noShows ?? 0} uteblivna`} />
+          <Kpi
+            label="Lågtrafik-luckor"
+            value={`${data?.offPeakGapHours ?? 0} h`}
+            sub="utanför 17–21"
+            amber
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Beläggning per timme</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Dag</th>
+              {Array.from({ length: 17 }, (_, i) => i + 7).map((h) => (
+                <th key={h} className="mono" style={{ textAlign: 'center', padding: '4px 2px' }}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {DAY_ORDER.map((wd) => (
+              <tr key={wd}>
+                <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{DAYS[wd]}</td>
+                {Array.from({ length: 17 }, (_, i) => i + 7).map((h) => {
+                  const n = data?.heat[wd]?.[h] ?? 0;
+                  const pct = n / peak;
+                  return (
+                    <td
+                      key={h}
+                      className="mono"
+                      title={`${n} bokningar`}
+                      style={{
+                        textAlign: 'center',
+                        padding: '4px 2px',
+                        fontSize: 9.5,
+                        // Lime ramp; the number is always present so the cell is
+                        // never colour-only.
+                        background:
+                          n === 0 ? 'var(--alt-3)' : `color-mix(in srgb, #7E9A15 ${pct * 70}%, #EFF1EA)`,
+                        color: pct > 0.6 ? '#fff' : 'var(--muted)',
+                      }}
+                    >
+                      {n || '·'}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="hint" style={{ marginTop: 8 }}>
+          Ljusa rutor utanför 17–21 är de timmar en öppen match fyller billigast.
+        </p>
+      </div>
+    </>
+  );
+}
+
+function Kpi({
+  label,
+  value,
+  sub,
+  amber,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  amber?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: 10,
+        background: amber ? 'var(--amber-bg)' : 'var(--alt-3)',
+      }}
+    >
+      <div style={{ fontSize: 9.5, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--muted-2)' }}>
+        {label}
+      </div>
+      <div
+        className="mono"
+        style={{ fontSize: 20, color: amber ? 'var(--amber)' : 'var(--ink)', fontWeight: 600 }}
+      >
+        {value}
+      </div>
+      <div className="hint">{sub}</div>
+    </div>
+  );
+}
+
+function Staff() {
+  const [roles, setRoles] = useState<TenantRole[] | null>(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api
+      .roles()
+      .then(setRoles)
+      .catch((e) => setErr(e.message));
+  }, []);
+
+  const keys = [...new Set((roles ?? []).flatMap((r) => r.permissions))].sort();
+
+  return (
+    <>
+      {err && <div className="banner">{err}</div>}
+      <div className="card">
+        <h2>Personal &amp; roller</h2>
+        <p className="hint" style={{ marginTop: -4, marginBottom: 10 }}>
+          Rollerna kommer från katalogen (kontrollplanet), inte från klubbens databas — det här är
+          vad den körande installationen faktiskt håller, vilket inte är samma fråga som vad koden
+          deklarerar.
+        </p>
+        {roles === null && <p className="hint">Laddar…</p>}
+        {roles !== null && (
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Rättighet</th>
+                  {roles.map((r) => (
+                    <th key={r.key} style={{ textAlign: 'center' }}>
+                      {r.key}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {keys.map((k) => (
+                  <tr key={k}>
+                    <td className="mono" style={{ fontSize: 11 }}>
+                      {k}
+                    </td>
+                    {roles.map((r) => (
+                      <td key={r.key} style={{ textAlign: 'center' }}>
+                        {r.permissions.includes(k) ? (
+                          <span className="chip green">✓</span>
+                        ) : (
+                          <span style={{ color: 'var(--disabled)' }}>·</span>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="hint" style={{ marginTop: 10 }}>
+          Spelare syns inte här: en spelare har <strong>ingen roll</strong>. Deras åtkomst är
+          tilldelningar per entitet, som per definition inte kan ritas som en rollmatris.
+        </p>
+      </div>
     </>
   );
 }

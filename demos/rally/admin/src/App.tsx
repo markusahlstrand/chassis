@@ -3,13 +3,15 @@ import { api, setPrincipal, setVenue, type CastMember, type Venue } from './api'
 import Calendar from './views/Calendar';
 import Admin from './views/Admin';
 
-type View = 'calendar' | 'courts' | 'pricing' | 'members' | 'settings';
+type View = 'calendar' | 'courts' | 'pricing' | 'members' | 'reports' | 'staff' | 'settings';
 
 const NAV: { key: View; label: string }[] = [
   { key: 'calendar', label: 'Kalender' },
   { key: 'courts', label: 'Banor' },
   { key: 'pricing', label: 'Priser' },
   { key: 'members', label: 'Medlemmar' },
+  { key: 'reports', label: 'Rapporter' },
+  { key: 'staff', label: 'Personal & roller' },
   { key: 'settings', label: 'Inställningar' },
 ];
 

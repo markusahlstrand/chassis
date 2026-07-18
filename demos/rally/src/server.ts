@@ -213,6 +213,32 @@ app.post('/api/matches/:id/join', async (c) =>
   ),
 );
 
+// -- reports ----------------------------------------------------------------
+app.get('/api/occupancy', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('rally/occupancy', {
+      from: c.req.query('from'),
+      to: c.req.query('to'),
+    }),
+  ),
+);
+
+/**
+ * Role definitions come from the CONTROL PLANE, not from a scope — roles live in
+ * the directory beside the tenant registry, so no module code can read them
+ * (kernel scope-host: `listRoles`). The server is harness code and may, but it
+ * gates on the caller proving club-admin inside the scope first, so this is not
+ * a back door around the permission model.
+ */
+app.get('/api/roles', async (c) => {
+  const s = await stub(c);
+  await s.invoke('rally/can-admin'); // throws PermissionDenied for anyone else
+  const key = c.req.header('x-venue') ?? 'solna';
+  const venue = VENUES[key]!;
+  const roles = await host.admin.listRoles({ tenantId: venue.tenantId });
+  return c.json(roles);
+});
+
 // -- portal -----------------------------------------------------------------
 app.get('/api/portal/bookings', async (c) =>
   c.json(await (await stub(c)).invoke('rally/portal-bookings')),

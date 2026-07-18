@@ -151,6 +151,72 @@ rule-table row, court card, occupancy chart, and an empty/quiet-day calendar.
 
 ---
 
+---
+
+## Round 2 — what the first handover did not cover
+
+Round 1 (`spec/design/`) is complete for a **single club**. Building against it
+surfaced four gaps. Note for sequencing: these screens look the same whether the
+social data lives in a player tier or elsewhere, so they are safe to design now —
+what is undecided is where the data comes from, not what the screen is.
+
+```
+Design four additions to RallyPoint, a padel/tennis booking platform. An existing
+high-fidelity design system is in place — match it exactly. Tokens: ink #14171A,
+lime accent #D7F34F (always with ink text), success #256B3E on #EDF6D2, urgency
+amber #C2510F on #FDF6EE, danger #A33328 on #F9ECEA, page #F4F4F0, surface #FFF,
+borders #E2E3DC / #D8DAD2. Archivo (800 for display, tight tracking), IBM Plex
+Mono 500/600 for EVERY time, price, level number and countdown. Radii 16/13/12/7,
+99px pills. Borders over shadows. Selected = 2px ink border + lime fill. Disabled
+= dashed border + reason text. SEK, 24-hour time, Monday-first. Skill levels are
+0–7 with one decimal ("3.4"), bands as ranges ("2.5–4.0"). WCAG AA; state never
+by colour alone. Mobile 402×874 with 44px minimum targets; desktop 1440px+.
+
+1. CONNECTIONS — "players I've played with" (mobile)
+   The list accumulates automatically from matches actually played together; it
+   is NOT a friend-request directory and there is no global player search. Design:
+   the list (avatar, name, level chip, "played together ×3", last played), a
+   just-played prompt offering to keep the people from a finished match, an empty
+   state that explains people land here by playing rather than by searching, and
+   the per-person view (shared history, "invite to a match").
+   Constraint: a connection is a social edge, NOT data access. Being connected
+   never reveals the other person's other bookings. Do not design anything that
+   implies it does.
+
+2. INVITE / SHARE — the sending side (mobile)
+   Round 1 designed the receiving side (1m, logged-out join). Design the sending
+   side: a share sheet for an open match (copy link, QR for the person standing
+   next to you, WhatsApp/Messages hand-off), the QR display screen, an invite-by-
+   phone/email form, and the states after sending — sent, accepted, declined.
+   Constraints, which are product rules and not implementation detail:
+   - invites are ACCEPT-REQUIRED; the edge forms only when they accept;
+   - a non-member and a decline must look identical to the sender (no
+     enumeration — the UI must not reveal whether someone is already a user);
+   - the QR/link is capacity-bounded and expiring: design "this link is full" and
+     "this link has expired".
+
+3. GROUPS — the small regular group (mobile)
+   A group is 4–8 people who play together regularly, and it belongs to the
+   PLAYERS, not to any club — it can book at any club. Design: the group list,
+   group detail (members, next session, recent sessions), create-a-group, and the
+   "find a slot that works for the four of us" flow, including the case where no
+   common slot exists.
+
+4. MULTI-CLUB (both surfaces)
+   A player may belong to several clubs; a manager may run several venues. Design:
+   the club switcher on mobile and the venue switcher in the console, a player's
+   "my clubs" view, the state where a player opens a club they do NOT belong to
+   (joining is per club, not a global flag), and — for the console — whether a
+   multi-venue manager gets a cross-venue overview or only a switcher. That last
+   one is an open question worth a recommendation.
+
+Also useful: adding a named co-player to an ordinary booking (not an open match) —
+who can be added, and what the other person sees.
+
+DELIVERABLE: high-fidelity screens plus the component additions (connection row,
+invite state chips, QR card, group tile, club switcher).
+```
+
 ## Notes for whoever runs these
 
 - **Design the calendar first.** The console lives or dies on that one screen; everything

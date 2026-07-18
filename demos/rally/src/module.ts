@@ -1017,6 +1017,117 @@ const addPlayerOp: OperationHandler<
   return { participants: joinedCount(ctx, input.reservationId) };
 };
 
+export interface Occupancy {
+  from: string;
+  to: string;
+  bookedHours: number;
+  openHours: number;
+  offPeakGapHours: number;
+  revenue: Money;
+  cancellations: number;
+  noShows: number;
+  /** [weekday 0-6][hour 0-23] → booked count, for the heatmap. */
+  heat: number[][];
+}
+
+/**
+ * Occupancy and revenue over a date range. Staff-only (`booking:read`): unlike
+ * free/busy, this reports what the club actually earned.
+ */
+const occupancyOp: OperationHandler<{ from: string; to: string; now?: string }, Occupancy> = async (
+  ctx,
+  input,
+) => {
+  assertAllowed(await ctx.check(BK.read));
+  const v = venue(ctx);
+  const now = input.now ?? new Date().toISOString();
+  const fromInstant = zonedToInstant(input.from, '00:00', v.timezone);
+  const toInstant = zonedToInstant(input.to, '23:59', v.timezone);
+
+  const heat: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+  let bookedMinutes = 0;
+  let cancellations = 0;
+  let noShows = 0;
+  let revenue = 0;
+  let currency = 'SEK';
+  let offPeakGapMinutes = 0;
+
+  const prices = new Map(
+    ctx.sql
+      .query<{ reservation_id: string; price_amount: string; currency: string }>(
+        'SELECT reservation_id, price_amount, currency FROM rally_bookings',
+      )
+      .map((b) => [b.reservation_id, b] as const),
+  );
+
+  for (const r of listReservations(ctx, { from: fromInstant, to: toInstant, now })) {
+    if (r.effectiveState === 'cancelled') {
+      cancellations += 1;
+      continue;
+    }
+    if (r.effectiveState === 'no_show') noShows += 1;
+    if (!['confirmed', 'in_service', 'completed', 'no_show'].includes(r.effectiveState)) continue;
+
+    const minutes = (Date.parse(r.endsAt) - Date.parse(r.startsAt)) / 60_000;
+    bookedMinutes += minutes;
+
+    const local = new Intl.DateTimeFormat('en-US', {
+      timeZone: v.timezone,
+      weekday: 'short',
+      hour: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(r.startsAt));
+    const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(
+      local.find((p) => p.type === 'weekday')?.value ?? 'Sun',
+    );
+    const hr = Number(local.find((p) => p.type === 'hour')?.value ?? '0') % 24;
+    if (wd >= 0) heat[wd]![hr] = (heat[wd]![hr] ?? 0) + 1;
+
+    const price = prices.get(r.id);
+    if (price) {
+      revenue += Number(price.price_amount);
+      currency = price.currency;
+    }
+  }
+
+  // Open capacity across the range: every court's bookable window per day.
+  const courts = listResources(ctx, 'court').filter((c) => c.active);
+  let openMinutes = 0;
+  for (
+    let d = Date.parse(`${input.from}T12:00:00Z`);
+    d <= Date.parse(`${input.to}T12:00:00Z`);
+    d += 86_400_000
+  ) {
+    const date = new Date(d).toISOString().slice(0, 10);
+    for (const c of courts) {
+      const w = bookableWindow(ctx, c.id, date);
+      if (!w) continue;
+      const span = (Date.parse(w.endsAt) - Date.parse(w.startsAt)) / 60_000;
+      openMinutes += span;
+      // Off-peak = outside 17–21, the hours a club most wants to fill.
+      offPeakGapMinutes += Math.max(0, span - 4 * 60);
+    }
+  }
+
+  return {
+    from: input.from,
+    to: input.to,
+    bookedHours: Math.round(bookedMinutes / 60),
+    openHours: Math.round(openMinutes / 60),
+    offPeakGapHours: Math.max(0, Math.round((offPeakGapMinutes - bookedMinutes) / 60)),
+    revenue: moneyOf(String(revenue), currency),
+    cancellations,
+    noShows,
+    heat,
+  };
+};
+
+/** A cheap "is this caller club staff?" probe, so the console can gate its own chrome. */
+const canAdminOp: OperationHandler<undefined, { ok: true }> = async (ctx) => {
+  assertAllowed(await ctx.check(RALLY_PERM.manageVenue));
+  return { ok: true };
+};
+
 /** Portal listing: a proof walk per reservation, never a WHERE clause on the caller. */
 const portalBookingsOp: OperationHandler<{ now?: string } | undefined, Reservation[]> = async (
   ctx,
@@ -1067,6 +1178,8 @@ export const rallyModule: ModuleRegistration = {
     'rally/create-open-match': createOpenMatchOp as never,
     'rally/join-match': joinMatchOp as never,
     'rally/open-matches': openMatchesOp as never,
+    'rally/occupancy': occupancyOp as never,
+    'rally/can-admin': canAdminOp as never,
     'rally/add-player': addPlayerOp as never,
     'rally/block-maintenance': blockMaintenanceOp as never,
     'rally/portal-bookings': portalBookingsOp as never,

@@ -218,7 +218,30 @@ export const api = {
   }): Promise<PriceRule> => post('/api/price-rules', input),
   addMember: (input: { partyRef: string; name: string; tier?: string }): Promise<Member> =>
     post('/api/members', input),
+
+  occupancy: (from: string, to: string): Promise<Occupancy> =>
+    call(`/api/occupancy?from=${from}&to=${to}`),
+  roles: (): Promise<TenantRole[]> => call('/api/roles'),
 };
+
+export interface Occupancy {
+  from: string;
+  to: string;
+  bookedHours: number;
+  openHours: number;
+  offPeakGapHours: number;
+  revenue: Money;
+  cancellations: number;
+  noShows: number;
+  heat: number[][];
+}
+
+export interface TenantRole {
+  key: string;
+  permissions: string[];
+  source: string;
+  tenantId: string;
+}
 
 /** ULID-shaped id for a new member's global player ref (Crockford: no I L O U). */
 export function newPartyRef(): string {
