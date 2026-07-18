@@ -121,6 +121,17 @@ export const setPrincipal = (p: string): void => {
   principal = p;
 };
 
+/** Which club's scope the console is looking at. One API, many scopes. */
+let venue = 'solna';
+export const setVenue = (v: string): void => {
+  venue = v;
+};
+
+export interface Venue {
+  key: string;
+  label: string;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   // /api/cast is the only route that legitimately runs unauthenticated — it is
   // how the picker learns who it may be. Anything else firing without a
@@ -134,6 +145,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       'content-type': 'application/json',
       ...(principal ? { 'x-principal': principal } : {}),
+      'x-venue': venue,
       ...(init?.headers ?? {}),
     },
   });
@@ -149,8 +161,11 @@ const post = <T,>(path: string, body?: unknown): Promise<T> =>
   call<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
 
 export const api = {
-  cast: (): Promise<{ cast: Record<string, CastMember>; members: Record<string, string> }> =>
-    call('/api/cast'),
+  cast: (): Promise<{
+    cast: Record<string, CastMember>;
+    venues: Venue[];
+    members: Record<string, Record<string, string>>;
+  }> => call('/api/cast'),
   venue: (): Promise<VenueSnapshot> => call('/api/venue'),
   courts: (): Promise<Court[]> => call('/api/courts'),
   members: (): Promise<Member[]> => call('/api/members'),

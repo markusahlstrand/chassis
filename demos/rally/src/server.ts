@@ -33,6 +33,20 @@ const CAST: Record<string, { name: string; role: string; principal: PrincipalId 
   rutger: { name: 'Rutger (annan klubb!)', role: 'attacker', principal: world.rutger },
 };
 
+/**
+ * The venues this demo knows about. Two belong to RallyPoint AB and one to a
+ * different company — picking the wrong one is not a UI error, it is the tenancy
+ * boundary answering. Astrid's `club-admin` role is tenant-level, so she reaches
+ * Solna and Nacka; Ravi's is scoped to Solna; nobody at RallyPoint reaches
+ * Göteborg at all.
+ */
+const VENUES: Record<string, { label: string; tenantId: typeof world.t1; scopeId: typeof world.s1 }> =
+  {
+    solna: { label: 'RallyPoint Solna', tenantId: world.t1, scopeId: world.s1 },
+    nacka: { label: 'RallyPoint Nacka', tenantId: world.t1, scopeId: world.s1b },
+    goteborg: { label: 'Padelcenter Göteborg', tenantId: world.t2, scopeId: world.s2 },
+  };
+
 const app = new Hono();
 
 function principalOf(c: Context): PrincipalId {
@@ -42,7 +56,12 @@ function principalOf(c: Context): PrincipalId {
 }
 
 async function stub(c: Context): Promise<ScopeStub> {
-  return host.getScope(principalOf(c), world.t1, world.s1);
+  const key = c.req.header('x-venue') ?? 'solna';
+  const venue = VENUES[key];
+  if (!venue) throw new PermissionDenied(`unknown venue: ${key}`);
+  // getScope cross-checks (tenantId, scopeId) and fails closed — a principal
+  // claiming another company's scope gets `unknown scope`, not a 403.
+  return host.getScope(principalOf(c), venue.tenantId, venue.scopeId);
 }
 
 const body = async (c: Context): Promise<Record<string, unknown>> =>
@@ -57,7 +76,19 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 400);
 });
 
-app.get('/api/cast', (c) => c.json({ cast: CAST, members: { elin: world.elinId, johan: world.johanId } }));
+app.get('/api/cast', (c) =>
+  c.json({
+    cast: CAST,
+    venues: Object.entries(VENUES).map(([key, v]) => ({ key, label: v.label })),
+    // Member ids are per venue: the same human has a separate member record in
+    // every club they belong to, tied together only by the global player ref.
+    members: {
+      solna: { elin: world.elinId, johan: world.johanId },
+      nacka: { elin: world.elinNackaId, johan: world.johanNackaId },
+      goteborg: { elin: '', johan: '' },
+    },
+  }),
+);
 
 // -- the club's shape -------------------------------------------------------
 app.get('/api/venue', async (c) => c.json(await (await stub(c)).invoke('rally/get-venue')));
@@ -161,6 +192,15 @@ app.post('/api/maintenance', async (c) =>
 );
 
 // -- open matches -----------------------------------------------------------
+app.get('/api/matches', async (c) => c.json(await (await stub(c)).invoke('rally/open-matches')));
+app.post('/api/bookings/:id/players', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('rally/add-player', {
+      reservationId: c.req.param('id'),
+      ...(await body(c)),
+    }),
+  ),
+);
 app.post('/api/matches', async (c) =>
   c.json(await (await stub(c)).invoke('rally/create-open-match', await body(c))),
 );

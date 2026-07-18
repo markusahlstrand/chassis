@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, setPrincipal, type CastMember } from './api';
+import { api, setPrincipal, setVenue, type CastMember, type Venue } from './api';
 import Calendar from './views/Calendar';
 import Admin from './views/Admin';
 
@@ -20,7 +20,11 @@ const todayISO = (): string => new Date().toISOString().slice(0, 10);
 
 export default function App() {
   const [cast, setCast] = useState<Record<string, CastMember>>({});
-  const [memberIds, setMemberIds] = useState<Record<string, string>>({});
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [allMembers, setAllMembers] = useState<Record<string, Record<string, string>>>({});
+  const [venue, setVenueState] = useState<string>(
+    () => localStorage.getItem(`${STORE}-venue`) ?? 'solna',
+  );
   const [who, setWho] = useState<string>(() => localStorage.getItem(STORE) ?? 'astrid');
   const [view, setView] = useState<View>('calendar');
   const [date, setDate] = useState(todayISO);
@@ -36,10 +40,19 @@ export default function App() {
       const start = r.cast[saved] ? saved : (Object.keys(r.cast)[0] ?? '');
       const p = r.cast[start]?.principal;
       if (p) setPrincipal(p);
+      setVenue(localStorage.getItem(`${STORE}-venue`) ?? 'solna');
       setCast(r.cast);
-      setMemberIds(r.members);
+      setVenues(r.venues);
+      setAllMembers(r.members);
       setWho(start);
     });
+  }, []);
+
+  // Same synchronous-before-render discipline as the principal picker.
+  const pickVenue = useCallback((key: string) => {
+    setVenue(key);
+    localStorage.setItem(`${STORE}-venue`, key);
+    setVenueState(key);
   }, []);
 
   // Switching principal is likewise applied synchronously, before the re-render
@@ -98,9 +111,19 @@ export default function App() {
           ))}
         </nav>
         <div className="side-foot">
-          RallyPoint Solna
-          <br />
-          <span className="mono" style={{ fontSize: 10 }}>
+          <label style={{ marginBottom: 4 }}>Klubb</label>
+          <select
+            value={venue}
+            onChange={(e) => pickVenue(e.target.value)}
+            style={{ width: '100%', fontSize: 11.5 }}
+          >
+            {venues.map((v) => (
+              <option key={v.key} value={v.key}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+          <span className="mono" style={{ fontSize: 10, display: 'block', marginTop: 6 }}>
             {cast[who]?.role ?? '—'}
           </span>
         </div>
@@ -136,9 +159,14 @@ export default function App() {
         <div className="content">
           {!ready && <div className="card">Laddar…</div>}
           {ready && view === 'calendar' && (
-            <Calendar date={date} openDrawer={newBooking} memberIds={memberIds} />
+            <Calendar
+              key={venue} /* switching club remounts: a new scope, a new world */
+              date={date}
+              openDrawer={newBooking}
+              memberIds={allMembers[venue] ?? {}}
+            />
           )}
-          {ready && view !== 'calendar' && <Admin view={view} />}
+          {ready && view !== 'calendar' && <Admin key={venue} view={view} />}
         </div>
       </main>
     </div>

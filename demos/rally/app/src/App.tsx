@@ -5,21 +5,28 @@ import {
   dayLabel,
   hhmm,
   setPrincipal,
+  setVenue,
   type CastMember,
+  type Venue,
   type CourtListing,
   type Money,
+  type OpenMatch,
   type Reservation,
   type SlotFit,
 } from './api';
 
-type Tab = 'book' | 'mine' | 'me';
+type Tab = 'book' | 'matches' | 'mine' | 'me';
 const STORE = 'rally-player-principal';
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const kr = (m: Money) => `${m.amount} kr`;
 
 export default function App() {
   const [cast, setCast] = useState<Record<string, CastMember>>({});
-  const [memberIds, setMemberIds] = useState<Record<string, string>>({});
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [allMembers, setAllMembers] = useState<Record<string, Record<string, string>>>({});
+  const [venue, setVenueState] = useState(
+    () => localStorage.getItem(`${STORE}-venue`) ?? 'solna',
+  );
   const [who, setWho] = useState(() => localStorage.getItem(STORE) ?? 'elin');
   const [tab, setTab] = useState<Tab>('book');
   const [tz, setTz] = useState('Europe/Stockholm');
@@ -34,11 +41,20 @@ export default function App() {
       const start = r.cast[saved] ? saved : (Object.keys(r.cast)[0] ?? '');
       const p = r.cast[start]?.principal;
       if (p) setPrincipal(p);
+      setVenue(localStorage.getItem(`${STORE}-venue`) ?? 'solna');
       setCast(r.cast);
-      setMemberIds(r.members);
+      setVenues(r.venues);
+      setAllMembers(r.members);
       setWho(start);
       if (p) void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
     });
+  }, []);
+
+  const pickVenue = useCallback((key: string) => {
+    setVenue(key);
+    localStorage.setItem(`${STORE}-venue`, key);
+    setVenueState(key);
+    void api.venue().then((v) => setTz(v.venue.timezone)).catch(() => {});
   }, []);
 
   const pick = useCallback(
@@ -52,7 +68,8 @@ export default function App() {
     [cast],
   );
 
-  const memberId = memberIds[who] ?? '';
+  // A member record is per club — the same human, a different row in each.
+  const memberId = allMembers[venue]?.[who] ?? '';
   const ready = Boolean(cast[who]);
 
   return (
@@ -69,17 +86,42 @@ export default function App() {
         </select>
       </div>
 
+      {venues.length > 1 && (
+        <div className="row" style={{ padding: '0 16px 8px' }}>
+          {venues.map((v) => (
+            <button
+              key={v.key}
+              className={`pill ${v.key === venue ? 'on' : ''}`}
+              onClick={() => pickVenue(v.key)}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="scroll">
         {!ready && <div className="empty">Laddar…</div>}
-        {ready && tab === 'book' && <Book tz={tz} memberId={memberId} />}
-        {ready && tab === 'mine' && <Mine tz={tz} />}
+        {ready && !memberId && (
+          <div className="empty">
+            Du är inte medlem i den här klubben.
+            <br />
+            Att gå med är en tilldelning per klubb — inte en global flagga.
+          </div>
+        )}
+        {ready && memberId && tab === 'book' && <Book key={venue} tz={tz} memberId={memberId} />}
+        {ready && memberId && tab === 'matches' && (
+          <Matches key={venue} tz={tz} memberId={memberId} />
+        )}
+        {ready && memberId && tab === 'mine' && <Mine key={venue} tz={tz} />}
         {ready && tab === 'me' && <Me who={cast[who]!} memberId={memberId} />}
       </div>
 
-      <nav className="nav">
+      <nav className="nav" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         {(
           [
             ['book', 'Boka'],
+            ['matches', 'Matcher'],
             ['mine', 'Mina tider'],
             ['me', 'Profil'],
           ] as const
@@ -476,6 +518,113 @@ function Mine({ tz }: { tz: string }) {
           ))}
         </>
       )}
+    </>
+  );
+}
+
+function Matches({ tz, memberId }: { tz: string; memberId: string }) {
+  const [rows, setRows] = useState<OpenMatch[] | null>(null);
+  const [err, setErr] = useState('');
+  const [ok, setOk] = useState('');
+
+  const load = useCallback(() => {
+    api
+      .openMatches()
+      .then(setRows)
+      .catch((e) => setErr(e.message));
+  }, []);
+  useEffect(load, [load]);
+
+  const join = (m: OpenMatch) => {
+    setErr('');
+    setOk('');
+    api
+      .joinMatch(m.reservationId, memberId)
+      .then((r) => {
+        setOk(`Du är med — din andel är ${r.share.amount} kr.`);
+        load();
+      })
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  };
+
+  const share = async (m: OpenMatch) => {
+    const url = `${location.origin}/?match=${m.reservationId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setOk('Länk kopierad — klistra in i WhatsApp-gruppen.');
+    } catch {
+      setOk(url);
+    }
+  };
+
+  return (
+    <>
+      <h1>Öppna matcher</h1>
+      {err && <div className="banner bad">{err}</div>}
+      {ok && <div className="banner">{ok}</div>}
+      {rows === null && <div className="empty">Laddar…</div>}
+      {rows !== null && rows.length === 0 && (
+        <div className="empty">
+          Inga öppna matcher just nu.
+          <br />
+          Skapa en från en bokning så syns den här.
+        </div>
+      )}
+
+      {(rows ?? []).map((m) => (
+        <div className="card" key={m.reservationId}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <div>
+              <h2>{dayLabel(m.startsAt, tz)}</h2>
+              <p className="meta mono" style={{ fontSize: 13 }}>
+                {hhmm(m.startsAt, tz)}–{hhmm(m.endsAt, tz)} · {m.courtName}
+              </p>
+            </div>
+            <span className="pill">
+              {m.joined}/{m.fillTarget}
+            </span>
+          </div>
+
+          {/* Fill meter — momentum, not identities. Who is already in is a
+              player-tier fact; the club scope reports counts only. */}
+          <div className="row" style={{ gap: 4, marginTop: 10 }}>
+            {Array.from({ length: m.fillTarget }, (_, i) => (
+              <i
+                key={i}
+                style={{
+                  flex: 1,
+                  height: 4,
+                  borderRadius: 99,
+                  background: i < m.joined ? 'var(--lime-deep)' : 'var(--alt-2)',
+                }}
+              />
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: 10,
+            }}
+          >
+            <span className="pill green">
+              nivå {m.levelMin}–{m.levelMax}
+            </span>
+            <span className="mono" style={{ fontSize: 15, color: 'var(--ink)', fontWeight: 600 }}>
+              {m.share.amount} kr
+            </span>
+          </div>
+
+          <button className="cta" style={{ marginTop: 10 }} onClick={() => join(m)}>
+            Gå med · {m.share.amount} kr
+          </button>
+          <button className="cta ghost" style={{ marginTop: 8 }} onClick={() => void share(m)}>
+            Dela länk
+          </button>
+        </div>
+      ))}
     </>
   );
 }

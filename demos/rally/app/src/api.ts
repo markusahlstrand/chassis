@@ -59,6 +59,16 @@ export const setPrincipal = (p: string): void => {
   principal = p;
 };
 
+/** Which club the player is looking at. Each is a separate scope. */
+let venue = 'solna';
+export const setVenue = (v: string): void => {
+  venue = v;
+};
+export interface Venue {
+  key: string;
+  label: string;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   // /api/cast is the only route that legitimately runs unauthenticated — it is
   // how the picker learns who it may be. Anything else firing without a
@@ -72,6 +82,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       'content-type': 'application/json',
       ...(principal ? { 'x-principal': principal } : {}),
+      'x-venue': venue,
     },
   });
   const text = await res.text();
@@ -82,9 +93,39 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T,>(p: string, b?: unknown): Promise<T> =>
   call<T>(p, { method: 'POST', body: JSON.stringify(b ?? {}) });
 
+export interface OpenMatch {
+  reservationId: string;
+  resourceId: string;
+  courtName: string;
+  startsAt: string;
+  endsAt: string;
+  joined: number;
+  fillTarget: number;
+  levelMin: string;
+  levelMax: string;
+  share: Money;
+}
+
 export const api = {
-  cast: (): Promise<{ cast: Record<string, CastMember>; members: Record<string, string> }> =>
-    call('/api/cast'),
+  openMatches: (): Promise<OpenMatch[]> => call('/api/matches'),
+  createMatch: (i: {
+    resourceId: string;
+    memberId: string;
+    date: string;
+    time: string;
+    duration: number;
+    fillTarget: number;
+    levelMin: string;
+    levelMax: string;
+  }): Promise<{ reservation: Reservation; price: Money; sharePerPlayer: Money }> =>
+    post('/api/matches', i),
+  joinMatch: (id: string, memberId: string): Promise<{ share: Money }> =>
+    post(`/api/matches/${id}/join`, { memberId }),
+  cast: (): Promise<{
+    cast: Record<string, CastMember>;
+    venues: Venue[];
+    members: Record<string, Record<string, string>>;
+  }> => call('/api/cast'),
   venue: (): Promise<VenueSnapshot> => call('/api/venue'),
   courts: (): Promise<CourtListing[]> => call('/api/browse/courts'),
   availability: (resourceId: string, date: string): Promise<SlotFit[]> =>

@@ -17,6 +17,7 @@ import {
 import {
   availability as engineAvailability,
   confirmReservation,
+  getReservation as engineGetReservation,
   holdReservation,
   joinReservation,
   listReservations,
@@ -915,6 +916,107 @@ const blockMaintenanceOp: OperationHandler<
   return confirmReservation(ctx, { reservationId: held.id, now });
 };
 
+/** Live participant count, via the engine's exported read — never its private tables. */
+function joinedCount(ctx: OperationContext, reservationId: string): number {
+  return engineGetReservation(ctx, reservationId).participants.filter((p) => !p.leftAt).length;
+}
+
+export interface OpenMatchListing {
+  reservationId: string;
+  resourceId: string;
+  courtName: string;
+  startsAt: string;
+  endsAt: string;
+  joined: number;
+  fillTarget: number;
+  levelMin: string;
+  levelMax: string;
+  share: Money;
+}
+
+/**
+ * Open matches on offer. Browse-guarded rather than `booking:read`, because an
+ * open match is PUBLISHED by definition — its whole purpose is to be found.
+ *
+ * It still reports counts, never identities: `joined: 2` of `fillTarget: 4`.
+ * Showing who is already in would mean handing a browsing player other members'
+ * names, which is precisely what `rally:browse` exists to avoid. Real rosters
+ * with names and ratings are a player-tier concern (booking-social.md §4), fed
+ * by participant events rather than read out of the club's scope.
+ */
+const openMatchesOp: OperationHandler<{ now?: string } | undefined, OpenMatchListing[]> = async (
+  ctx,
+  input,
+) => {
+  assertAllowed(await ctx.check(RALLY_PERM.browse));
+  const now = input?.now ?? new Date().toISOString();
+  const courts = new Map(listResources(ctx, 'court').map((r) => [r.id, r.name] as const));
+  const out: OpenMatchListing[] = [];
+
+  for (const r of listReservations(ctx, { now })) {
+    if (r.fillTarget === null) continue;
+    if (r.effectiveState !== 'held' && r.effectiveState !== 'confirmed') continue;
+    const band = ctx.sql.query<{ level_min: string; level_max: string }>(
+      'SELECT level_min, level_max FROM rally_matches WHERE reservation_id = ?',
+      [r.id],
+    )[0];
+    if (!band) continue;
+    const booking = ctx.sql.query<{ price_amount: string; currency: string }>(
+      'SELECT price_amount, currency FROM rally_bookings WHERE reservation_id = ?',
+      [r.id],
+    )[0];
+    if (!booking) continue;
+    const joined = joinedCount(ctx, r.id);
+    if (joined >= r.fillTarget) continue; // full — no longer on offer
+    out.push({
+      reservationId: r.id,
+      resourceId: r.resourceId,
+      courtName: courts.get(r.resourceId) ?? '—',
+      startsAt: r.startsAt,
+      endsAt: r.endsAt,
+      joined,
+      fillTarget: r.fillTarget,
+      levelMin: band.level_min,
+      levelMax: band.level_max,
+      share: moneyOf(
+        String(Math.round(Number(booking.price_amount) / r.fillTarget)),
+        booking.currency,
+      ),
+    });
+  }
+  return out.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+};
+
+/**
+ * Add a co-player to an ordinary booking — the "who else is playing" case, as
+ * distinct from an open match anyone may join.
+ *
+ * KNOWN GAP: this cannot yet check that the caller is the booking's owner,
+ * because the vertical has no principal → member mapping. `ctx.principal` is a
+ * PrincipalId; a member is keyed by its party_ref (a DataSubjectId), and nothing
+ * joins them. A player's `booking:create` is scope-wide (they must be able to
+ * join a stranger's open match), so this currently admits adding a player to
+ * anyone's booking. Closing it means either narrowing `booking:create` and
+ * giving open-match joins their own key, or storing the principal on the member
+ * row — a decision worth making deliberately rather than in passing.
+ */
+const addPlayerOp: OperationHandler<
+  { reservationId: string; memberId: string; now?: string },
+  { participants: number }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(BK.create, reservationRef(input.reservationId)));
+  const member = ctx.sql.query<MemberRow>('SELECT * FROM rally_members WHERE id = ?', [
+    input.memberId,
+  ])[0];
+  if (!member) throw new Error(`member not found: ${input.memberId}`);
+  joinReservation(ctx, {
+    reservationId: input.reservationId,
+    partyRef: dataSubjectId.parse(member.party_ref),
+    ...(input.now !== undefined ? { now: input.now } : {}),
+  });
+  return { participants: joinedCount(ctx, input.reservationId) };
+};
+
 /** Portal listing: a proof walk per reservation, never a WHERE clause on the caller. */
 const portalBookingsOp: OperationHandler<{ now?: string } | undefined, Reservation[]> = async (
   ctx,
@@ -964,6 +1066,8 @@ export const rallyModule: ModuleRegistration = {
     'rally/confirm-booking': confirmBookingOp as never,
     'rally/create-open-match': createOpenMatchOp as never,
     'rally/join-match': joinMatchOp as never,
+    'rally/open-matches': openMatchesOp as never,
+    'rally/add-player': addPlayerOp as never,
     'rally/block-maintenance': blockMaintenanceOp as never,
     'rally/portal-bookings': portalBookingsOp as never,
     'rally/timeline': timelineOp as never,
