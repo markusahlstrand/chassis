@@ -31,6 +31,7 @@ export const PERM = {
   hold: permissionKey.parse('booking:hold'),
   confirm: permissionKey.parse('booking:confirm'),
   cancel: permissionKey.parse('booking:cancel'),
+  move: permissionKey.parse('booking:move'),
   complete: permissionKey.parse('booking:complete'),
   manageResources: permissionKey.parse('booking:manage-resources'),
 };
@@ -45,6 +46,7 @@ export const bookingManifest = moduleManifest.parse({
     { key: 'booking:hold', description: 'Place a tentative hold on a slot' },
     { key: 'booking:confirm', description: 'Confirm a held reservation' },
     { key: 'booking:cancel', description: 'Cancel a reservation or leave one' },
+    { key: 'booking:move', description: 'Reschedule a reservation to another slot or resource' },
     { key: 'booking:complete', description: 'Start service, complete, or mark a no-show' },
     { key: 'booking:manage-resources', description: 'Create, edit and deactivate bookable resources' },
   ],
@@ -54,6 +56,7 @@ export const bookingManifest = moduleManifest.parse({
       { type: 'booking.confirmed', schemaVersion: 1 },
       { type: 'booking.expired', schemaVersion: 1 },
       { type: 'booking.cancelled', schemaVersion: 1 },
+      { type: 'booking.moved', schemaVersion: 1 },
       { type: 'booking.started', schemaVersion: 1 },
       { type: 'booking.completed', schemaVersion: 1 },
       { type: 'booking.no-show', schemaVersion: 1 },
@@ -217,6 +220,18 @@ export const joinReservationInput = z.object({
 });
 export type JoinReservationInput = z.infer<typeof joinReservationInput>;
 
+export const moveReservationInput = z.object({
+  reservationId: z.string().min(1),
+  /** Target resource. Omitted = stay on the current one. */
+  resourceId: z.string().min(1).optional(),
+  /** New start. Given alone, the booking is *shifted* — its duration is preserved. */
+  startsAt: instantIn.optional(),
+  /** New end. Given alone, the booking is re-sized from its existing start. */
+  endsAt: instantIn.optional(),
+  now: z.string().optional(),
+});
+export type MoveReservationInput = z.infer<typeof moveReservationInput>;
+
 interface ResourceRow {
   id: string;
   kind: string;
@@ -272,7 +287,17 @@ export interface Reservation {
   resourceId: string;
   startsAt: string;
   endsAt: string;
+  /** The state as stored. A `held` row keeps saying `held` until someone sweeps it. */
   state: ReservationState;
+  /**
+   * What the row actually means *now* — `expired` once a hold's deadline has passed,
+   * whether or not anyone has swept it.
+   *
+   * Expiry is lazy, so `state` alone would render a dead hold as a live one: the
+   * console calendar would show a HELD cell counting down past 0:00 forever. Read
+   * paths render this; the transition guards use the stored `state`.
+   */
+  effectiveState: ReservationState;
   quantity: number;
   expiresAt: string | null;
   fillTarget: number | null;
@@ -296,12 +321,25 @@ const toResource = (r: ResourceRow): Resource => ({
   createdAt: r.created_at,
 });
 
-const toReservation = (r: ReservationRow): Reservation => ({
+/** The one definition of "a hold past its deadline is expired". */
+export function effectiveStateOf(
+  state: ReservationState,
+  expiresAt: string | null,
+  now: string,
+): ReservationState {
+  return state === 'held' && expiresAt !== null && expiresAt <= now ? 'expired' : state;
+}
+
+const toReservation = (
+  r: ReservationRow,
+  now: string = new Date().toISOString(),
+): Reservation => ({
   id: r.id,
   resourceId: r.resource_id,
   startsAt: r.starts_at,
   endsAt: r.ends_at,
   state: r.state,
+  effectiveState: effectiveStateOf(r.state, r.expires_at, now),
   quantity: r.quantity,
   expiresAt: r.expires_at,
   fillTarget: r.fill_target,
@@ -701,6 +739,74 @@ export function cancelReservation(
   return toReservation(getRow(ctx, row.id));
 }
 
+/**
+ * Reschedule to another slot and/or resource, keeping the reservation's identity
+ * and its participants.
+ *
+ * Deliberately **not** a general `updateReservation`. Engines model named
+ * transitions rather than field patches (cf. `engine-workorder`), participants are
+ * an append-only log with per-subject events rather than a patchable field (D-C),
+ * and `booking.moved` carrying from/to is worth far more to a consumer than a
+ * generic diff — event payloads freeze once shipped.
+ *
+ * This is not cancel-then-rebook: that would lose the identity, the roster, and
+ * any payment already attached.
+ */
+export function moveReservation(
+  ctx: OperationContext,
+  rawInput: MoveReservationInput,
+): Reservation {
+  const input = moveReservationInput.parse(rawInput);
+  const row = getRow(ctx, input.reservationId);
+  requireState(row, 'held', 'confirmed');
+  const now = nowOr(input.now);
+
+  const targetResourceId = input.resourceId ?? row.resource_id;
+  let startsAt = input.startsAt ?? row.starts_at;
+  let endsAt: string;
+  if (input.endsAt) {
+    endsAt = input.endsAt;
+  } else if (input.startsAt) {
+    // Shift: preserve the booked duration, which is what dragging a cell means.
+    const duration = Date.parse(row.ends_at) - Date.parse(row.starts_at);
+    endsAt = new Date(Date.parse(startsAt) + duration).toISOString();
+  } else {
+    endsAt = row.ends_at;
+  }
+  if (startsAt >= endsAt) {
+    throw new Error(`invalid interval: ${startsAt} is not before ${endsAt}`);
+  }
+
+  const target = getResourceRow(ctx, targetResourceId);
+  if (target.active !== 1) throw new Error(`resource is inactive: ${target.id}`);
+
+  // Excluding self is what makes a small nudge (overlapping its own old slot) legal.
+  const allocated = allocatedOver(ctx, target.id, startsAt, endsAt, now, row.id);
+  if (allocated + row.quantity > target.capacity) {
+    throw new SlotUnavailable(target.id, startsAt, endsAt);
+  }
+
+  const from = { resourceId: row.resource_id, startsAt: row.starts_at, endsAt: row.ends_at };
+  ctx.sql.exec(
+    'UPDATE booking_reservations SET resource_id = ?, starts_at = ?, ends_at = ? WHERE id = ?',
+    [target.id, startsAt, endsAt, row.id],
+  );
+  ctx.emit({
+    type: 'booking.moved',
+    schemaVersion: 1,
+    entity: reservationRef(row.id),
+    piiClass: 'none',
+    payload: {
+      reservationId: row.id,
+      from,
+      to: { resourceId: target.id, startsAt, endsAt },
+      resource: { id: target.id, kind: target.kind, name: target.name },
+      participantCount: activeParticipants(ctx, row.id).length,
+    },
+  });
+  return toReservation(getRow(ctx, row.id), now);
+}
+
 export function startReservation(
   ctx: OperationContext,
   input: { reservationId: string },
@@ -772,16 +878,17 @@ export function markNoShow(ctx: OperationContext, input: { reservationId: string
 export function getReservation(
   ctx: OperationContext,
   reservationId: string,
+  now?: string,
 ): { reservation: Reservation; participants: Participant[] } {
   return {
-    reservation: toReservation(getRow(ctx, reservationId)),
+    reservation: toReservation(getRow(ctx, reservationId), nowOr(now)),
     participants: allParticipants(ctx, reservationId),
   };
 }
 
 export function listReservations(
   ctx: OperationContext,
-  input: { resourceId?: string; from?: string; to?: string },
+  input: { resourceId?: string; from?: string; to?: string; now?: string },
 ): Reservation[] {
   const clauses: string[] = [];
   const params: string[] = [];
@@ -798,12 +905,13 @@ export function listReservations(
     params.push(toInstant(input.from));
   }
   const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+  const now = nowOr(input.now);
   return ctx.sql
     .query<ReservationRow>(
       `SELECT * FROM booking_reservations${where} ORDER BY starts_at, id`,
       params,
     )
-    .map(toReservation);
+    .map((r) => toReservation(r, now));
 }
 
 /**
@@ -933,6 +1041,11 @@ const cancelOp: OperationHandler<{ reservationId: string; reason?: string }, Res
   return cancelReservation(ctx, input);
 };
 
+const moveOp: OperationHandler<MoveReservationInput, Reservation> = async (ctx, input) => {
+  assertAllowed(await ctx.check(PERM.move, reservationRef(input.reservationId)));
+  return moveReservation(ctx, input);
+};
+
 const startOp: OperationHandler<{ reservationId: string }, Reservation> = async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.complete));
   return startReservation(ctx, input);
@@ -949,15 +1062,15 @@ const noShowOp: OperationHandler<{ reservationId: string }, Reservation> = async
 };
 
 const getOp: OperationHandler<
-  { reservationId: string },
+  { reservationId: string; now?: string },
   { reservation: Reservation; participants: Participant[] }
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.read, reservationRef(input.reservationId)));
-  return getReservation(ctx, input.reservationId);
+  return getReservation(ctx, input.reservationId, input.now);
 };
 
 const listOp: OperationHandler<
-  { resourceId?: string; from?: string; to?: string } | undefined,
+  { resourceId?: string; from?: string; to?: string; now?: string } | undefined,
   Reservation[]
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(PERM.read));
@@ -985,6 +1098,7 @@ export const bookingModule: ModuleRegistration = {
     'booking/join': joinOp as OperationHandler<never, unknown>,
     'booking/leave': leaveOp as OperationHandler<never, unknown>,
     'booking/cancel': cancelOp as OperationHandler<never, unknown>,
+    'booking/move': moveOp as OperationHandler<never, unknown>,
     'booking/start': startOp as OperationHandler<never, unknown>,
     'booking/complete': completeOp as OperationHandler<never, unknown>,
     'booking/no-show': noShowOp as OperationHandler<never, unknown>,

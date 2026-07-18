@@ -117,7 +117,25 @@ domain, one writer, transactions never interleave.
 > being safe.
 
 Lazy expiry means a stale `held` row never blocks a slot — it simply stops counting once
-`expires_at` passes. A DO alarm is only needed if the UI must *react* to release.
+`expires_at` passes.
+
+### D-E: lazy expiry must not lie to a read
+
+Lazy expiry is correct for *allocation* and wrong for *display*. The stored `state` stays
+`held` until something sweeps it, so a calendar rendering `state` shows a HELD cell counting
+down past 0:00 forever — which is exactly what the design handover's "releases
+automatically" cell promises not to do.
+
+So a reservation carries **both**:
+
+| Field | Meaning | Used by |
+|---|---|---|
+| `state` | as stored | transition guards |
+| `effectiveState` | `expired` once a hold's deadline passed, whether swept or not | every read path / UI |
+
+`effectiveStateOf(state, expiresAt, now)` is the single definition, and `availability()`
+already applied the same rule. This closes the gap without a DO alarm; an alarm is still the
+answer only when something must be *pushed* on release (a notification), not merely rendered.
 
 ## 3. State machine
 
@@ -146,10 +164,33 @@ confirmReservation(ctx, { reservationId })                      → void        
 joinReservation(ctx, { reservationId, partyRef, share? })       → ParticipantId  // auto-confirms at fillTarget
 leaveReservation(ctx, { reservationId, participantId })         → void
 cancelReservation(ctx, { reservationId, reason? })              → void
+moveReservation(ctx, { reservationId, resourceId?,
+                       startsAt?, endsAt? })                    → Reservation    // throws SlotUnavailable
 completeReservation(ctx, { reservationId })                     → void
 markNoShow(ctx, { reservationId })                              → void
 availability(ctx, { resourceId, from, to })                     → FreeInterval[] // read model
 ```
+
+### D-D: `move`, not a general `updateReservation`
+
+Rescheduling is a named transition, not a field patch. `moveReservation` changes resource
+and/or interval, re-runs the allocation check **excluding itself** (so a nudge overlapping
+its own old slot is legal), and keeps the reservation's identity, roster and payments — it
+is emphatically not cancel-then-rebook. Passing `startsAt` alone *shifts* the booking,
+preserving its duration, which is what dragging a calendar cell means.
+
+A generic `updateReservation` was considered and rejected:
+
+- **Engines model named transitions** (`engine-workorder` has assign/start/report/complete/
+  close, no `update`). One verb per invariant keeps the guards honest.
+- **Participants are an append-only log, not a patchable field.** `join`/`leave` emit
+  per-subject events keyed for crypto-shredding (D-C); folding people into a PATCH would
+  break that keying.
+- **Payloads freeze once shipped.** `booking.moved` carrying `from`/`to` tells a consumer
+  "your match moved to court 3"; a `booking.updated` diff blob would be permanent and weak.
+
+`quantity` is deliberately **not** mutable yet — courts are capacity 1 / quantity 1, so
+nothing needs it, and a later `changeQuantity` is purely additive.
 
 `SlotUnavailable` is the typed rejection the demo's concurrency scenario asserts on.
 
@@ -180,7 +221,10 @@ the pricing hook takes `(resource, day, time, duration)`.
 ## 5. Permissions
 
 `booking:create` · `booking:read` · `booking:hold` · `booking:confirm` · `booking:cancel` ·
-`booking:complete` · `booking:manage-resources`
+`booking:move` · `booking:complete` · `booking:manage-resources`
+
+`booking:move` is separate from `booking:cancel` on purpose: reception staff who may
+reschedule are not necessarily staff who may cancel and refund.
 
 Per-entity checks (`ctx.check(perm, entityRef)`) carry the portal walk: a player reaches
 their own reservation through an entity-narrowed grant, holding **no role**.
@@ -188,8 +232,8 @@ their own reservation through an entity-narrowed grant, holding **no role**.
 ## 6. Events (frozen once shipped)
 
 `booking.resource-created` · `booking.held` · `booking.confirmed` · `booking.expired` ·
-`booking.cancelled` · `booking.started` · `booking.completed` · `booking.no-show` ·
-`booking.participant-joined` · `booking.participant-left`
+`booking.cancelled` · `booking.moved` · `booking.started` · `booking.completed` ·
+`booking.no-show` · `booking.participant-joined` · `booking.participant-left`
 
 ### D-C: aggregate events carry no participant identities
 

@@ -11,9 +11,12 @@ import {
   confirmReservation,
   createResource,
   expireReservation,
+  getReservation,
   holdReservation,
   joinReservation,
   leaveReservation,
+  listReservations,
+  moveReservation,
   type FreeInterval,
   type Reservation,
   type Resource,
@@ -32,6 +35,7 @@ const EXPIRES = '2026-07-20T12:10:00.000Z';
 const AFTER_EXPIRY = '2026-07-20T12:11:00.000Z';
 
 const T17 = '2026-07-20T17:00:00.000Z';
+const T1730 = '2026-07-20T17:30:00.000Z';
 const T1830 = '2026-07-20T18:30:00.000Z';
 const T19 = '2026-07-20T19:00:00.000Z';
 const T2030 = '2026-07-20T20:30:00.000Z';
@@ -54,6 +58,7 @@ describe('engine-booking', () => {
       PERM.hold,
       PERM.confirm,
       PERM.cancel,
+      PERM.move,
       PERM.complete,
       PERM.manageResources,
     ]);
@@ -394,6 +399,134 @@ describe('engine-booking', () => {
     expect(free).toEqual<FreeInterval[]>([{ startsAt: T17, endsAt: T1830, available: 1 }]);
   });
 
+  // -- move (reschedule) ---------------------------------------------------
+
+  it('moves to another court, keeping identity and roster', async () => {
+    const one = await court('Bana 1');
+    const two = await court('Bana 2');
+    const match = await hold(one.id, T17, T1830, { fillTarget: 4 });
+    await h.run((ctx) =>
+      joinReservation(ctx, { reservationId: match.id, partyRef: player(1), now: NOW }),
+    );
+
+    const moved = await h.run((ctx) =>
+      moveReservation(ctx, { reservationId: match.id, resourceId: two.id, now: NOW }),
+    );
+    expect(moved.id).toBe(match.id); // same reservation, not a rebook
+    expect(moved.resourceId).toBe(two.id);
+    expect(moved.startsAt).toBe(T17);
+
+    const { participants } = await h.run((ctx) => getReservation(ctx, match.id, NOW));
+    expect(participants).toHaveLength(1); // roster survives the move
+  });
+
+  it('shifting by start alone preserves the booked duration', async () => {
+    const r = await court();
+    const held = await hold(r.id, T17, T1830); // 90 minutes
+    const moved = await h.run((ctx) =>
+      moveReservation(ctx, { reservationId: held.id, startsAt: T1730, now: NOW }),
+    );
+    expect(moved.startsAt).toBe(T1730);
+    expect(moved.endsAt).toBe(T19); // 17:30 + 90m, not the old 18:30
+  });
+
+  it('allows a nudge that overlaps its OWN old slot', async () => {
+    const r = await court();
+    const held = await hold(r.id, T17, T1830);
+    const moved = await h.run((ctx) =>
+      moveReservation(ctx, { reservationId: held.id, startsAt: T1730, endsAt: T19, now: NOW }),
+    );
+    expect(moved.startsAt).toBe(T1730);
+  });
+
+  it('rejects a move onto an occupied slot', async () => {
+    const r = await court();
+    await hold(r.id, T19, T2030);
+    const held = await hold(r.id, T17, T1830);
+    await expect(
+      h.run((ctx) =>
+        moveReservation(ctx, { reservationId: held.id, startsAt: T19, endsAt: T2030, now: NOW }),
+      ),
+    ).rejects.toThrow(SlotUnavailable);
+  });
+
+  it('emits booking.moved carrying from and to', async () => {
+    const one = await court('Bana 1');
+    const two = await court('Bana 2');
+    const held = await hold(one.id, T17, T1830);
+    await h.run((ctx) =>
+      moveReservation(ctx, { reservationId: held.id, resourceId: two.id, now: NOW }),
+    );
+
+    const [evt] = h.eventsOfType('booking.moved');
+    const payload = evt!.payload as {
+      from: { resourceId: string };
+      to: { resourceId: string };
+      resource: { name: string };
+    };
+    expect(payload.from.resourceId).toBe(one.id);
+    expect(payload.to.resourceId).toBe(two.id);
+    expect(payload.resource.name).toBe('Bana 2');
+  });
+
+  it('cannot move a completed reservation', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    await h.run((ctx) => confirmReservation(ctx, { reservationId: held.id, now: NOW }));
+    await h.run((ctx) => completeReservation(ctx, { reservationId: held.id }));
+    await expect(
+      h.run((ctx) => moveReservation(ctx, { reservationId: held.id, startsAt: T19, now: NOW })),
+    ).rejects.toThrow(/invalid transition/);
+  });
+
+  it('frees the vacated slot after a move', async () => {
+    const r = await court();
+    const held = await hold(r.id, T17, T1830);
+    await h.run((ctx) =>
+      moveReservation(ctx, { reservationId: held.id, startsAt: T19, endsAt: T2030, now: NOW }),
+    );
+    const backfill = await hold(r.id, T17, T1830);
+    expect(backfill.state).toBe('held');
+  });
+
+  // -- effective state: lazy expiry must not lie to a read ------------------
+
+  it('an expired hold READS as expired without anyone sweeping it', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    expect(held.effectiveState).toBe('held');
+
+    const [listed] = await h.run((ctx) =>
+      listReservations(ctx, { resourceId: r.id, now: AFTER_EXPIRY }),
+    );
+    expect(listed!.state).toBe('held'); // the row is untouched
+    expect(listed!.effectiveState).toBe('expired'); // but it reads honestly
+  });
+
+  it('a live hold reads as held', async () => {
+    const r = await court();
+    await hold(r.id);
+    const [listed] = await h.run((ctx) => listReservations(ctx, { resourceId: r.id, now: NOW }));
+    expect(listed!.effectiveState).toBe('held');
+  });
+
+  it('after a real sweep, stored and effective state agree', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    await h.run((ctx) => expireReservation(ctx, { reservationId: held.id, now: AFTER_EXPIRY }));
+    const { reservation } = await h.run((ctx) => getReservation(ctx, held.id, AFTER_EXPIRY));
+    expect(reservation.state).toBe('expired');
+    expect(reservation.effectiveState).toBe('expired');
+  });
+
+  it('a confirmed reservation is unaffected by the clock', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    await h.run((ctx) => confirmReservation(ctx, { reservationId: held.id, now: NOW }));
+    const { reservation } = await h.run((ctx) => getReservation(ctx, held.id, AFTER_EXPIRY));
+    expect(reservation.effectiveState).toBe('confirmed');
+  });
+
   // -- permissions ---------------------------------------------------------
 
   it('refuses every operation to a principal holding nothing', async () => {
@@ -415,6 +548,15 @@ describe('engine-booking', () => {
     const booker = await h.as([PERM.read, PERM.hold]);
     await expect(
       booker.invoke('booking/create-resource', { kind: 'court', name: 'Bana 9' }),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it('separates rescheduling from cancelling', async () => {
+    const r = await court();
+    const held = await hold(r.id);
+    const canceller = await h.as([PERM.read, PERM.cancel]);
+    await expect(
+      canceller.invoke('booking/move', { reservationId: held.id, startsAt: T19, now: NOW }),
     ).rejects.toThrow(/permission denied/);
   });
 
