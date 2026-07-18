@@ -1,0 +1,278 @@
+# Membership, invites, and the admin as first consumer
+
+**Status:** proposed. Implements plan decision 31; takes the option
+[control-plane](control-plane.md) §3 deferred ("decide it at the second vertical").
+Nothing here is built.
+
+**What this is:** the decision that the Substrat admin's record-keeping half becomes a
+vertical, and that the engines it needs — membership, invites, entitlements-as-plan — are
+the same engines every hosted vertical needs. Plus the one kernel seam that makes it
+possible, and the role-write question that gates self-service.
+
+Read alongside [control-plane](control-plane.md) §3 (what can be a vertical),
+[kernel-design](kernel-design.md) §4.2 (the tuple engine) and §4.3 (identity, the three
+audiences), and [master-plan](../master-plan.md) D-30.
+
+---
+
+## 1. The finding this starts from
+
+**Substrat's own admin has the same shape as the software it hosts.** It needs members,
+invites, roles, a plan with quotas and expiry, metered usage, and an audit trail. So does
+every vertical on the platform. Today those are filed as five separate control-plane gaps
+(#33, #34, #35, #38, #39), which frames them as platform plumbing that the admin happens
+to need.
+
+They are not plumbing. They are product engines with **two consumers**, one of whom is us.
+
+The consequence of not seeing that: members and billing get built twice — once bespoke
+inside the control plane, once properly as engines when a vertical needs them — and the
+bespoke one will not be the reusable one, because nothing forced it to be. This is the
+same argument §2 made about the console ("not a feature on a finished kernel; it is what
+forces the shared layer to exist"), applied one level up.
+
+It is also the test [master-plan](../master-plan.md) §10 sets for the platform trap —
+*"kernel features nobody consumes yet = the trap announcing itself."* Two real consumers
+is precisely the condition the trap is defined against. Membership passes that test
+today. Metering does not (§7).
+
+## 2. What §3 deferred, and what triggers it now
+
+§3 already concluded that the record-keeping half "can be a vertical, and probably should
+be, eventually", and set the trigger as *"when the platform tenant holds enough data to
+earn a deployment. Decide it at the second vertical."* It also warned, correctly, against
+writing "the admin is never a vertical" into the log.
+
+The trigger fired, but not for the reason §3 predicted. It is not that the platform tenant
+accumulated data. It is that **self-service changed the population**: thousands of tenants,
+each with a set of members who join, change role, and leave without a human at Substrat
+being involved. That makes membership a product surface rather than an ops task, and a
+product surface is exactly what a vertical is for.
+
+## 3. The line that does not move
+
+§3's split stands unchanged:
+
+| Half | Where it runs | Why |
+|---|---|---|
+| **Effecting** — provision, suspend, archive, entitlement flips, hostname issuance, admin-query RPC | Out-of-band host code, always | K-8: module code holds one service binding to its own kernel entrypoint and **never a raw DO namespace binding**. An admin vertical has no addressable path to another vertical's scopes. Not dangerous — **impotent**. |
+| **Record-keeping** — tenant registry, plan and contacts, members and roles, the action trail | A vertical in a platform tenant | Ordinary scope-shaped data. Gets the outbox (audit for free), the tuple engine, and migrations from the kernel instead of reimplemented beside it. |
+
+The bridge is unchanged too, and already designed: **D-18's triage rule — effects on the
+outside world are connectors.** The control-plane vertical emits
+`tenant.provision_requested`; a privileged executor outside module code consumes it, acts
+through the host admin surface, and emits the result back. Module code never obtains a
+cross-tenant stub. K-3 and K-8 are untouched.
+
+Note that members and metered billing — the two properties that motivated this decision —
+both fall on the record-keeping side. The split does not obstruct the case; it bounds it.
+Roughly 30% of the admin stays host code.
+
+## 4. The missing seam: membership is unreachable in-scope
+
+This is the new finding, and the reason #34 as currently written would not unblock
+self-service.
+
+`OperationContext` is `{ tenantId, scopeId, principal, sql, emit, check, link }`
+([scope-host.ts:54-69](../../packages/kernel/src/scope-host.ts#L54-L69)). `link` writes
+entity-edge relation tuples (K-16). **There is no membership equivalent.** Membership
+lives in the tenant-root DO ([kernel-design](kernel-design.md) §3.2), and module code is
+forbidden to write `_substrat_tuples` ([kernel-design](kernel-design.md) §13, open
+question 15).
+
+Membership mutation exists only on `HostAdmin`:
+
+```ts
+addMember(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId, orgId: string): Promise<void>
+```
+([scope-host.ts:189](../../packages/kernel/src/scope-host.ts#L189))
+
+Three things are wrong with that for self-service, in increasing order of severity:
+
+1. **There is no `removeMember` and no member enumeration.** Add-only membership at
+   thousands of self-serve tenants is a security incident waiting for its first departing
+   employee.
+2. **`orgId` is an unvalidated free-form string with no org record behind it.** A tuple
+   `principal:X --member--> org:Y` where `org:Y` is whatever the caller typed.
+3. **The signature takes a `PlatformActorId`.** This is the structural one. A tenant admin
+   is a `PrincipalId`. Even if the route existed, a tenant admin could not call it *as
+   themselves* — every self-serve membership change would have to be laundered through a
+   platform actor, which destroys the distinction the admin log exists to record. Adding
+   `removeMember`/`listMembers` alongside it inherits the same defect.
+
+So the seam is not an HTTP route. It is **membership as an in-scope capability**, on the
+same pattern `ctx.link` already establishes: the kernel owns the tuple write, the module
+triggers it, the acting subject is the scope's own principal and the check is an ordinary
+`ctx.check`.
+
+```ts
+// sketch, not a signature
+ctx.members.add(principal, org)     // kernel writes the tuple; ctx.check gates it
+ctx.members.remove(principal, org)  // revocation, honouring the tombstone question below
+ctx.members.list(org)               // enumeration
+```
+
+**Revocation inherits an open question.** [kernel-design](kernel-design.md) §13's open
+question 15 already records it for tuples generally: deletion is simple but destroys the
+audit property K-4 rests on — a tuple that once granted access is evidence of why an access was allowed. The
+candidates there are a tombstone or `revoked_at` the checker's walk skips. Membership
+removal must take whichever answer that question takes; it must not invent a second one.
+
+## 5. Role definition vs. role assignment
+
+This gates whether invites can exist at all, and it is the piece most likely to be
+designed twice if left implicit.
+
+`defineRole` / `assignRole` / `grant` / `grantToOrg` / `addMember` / `linkIdentity` are on
+`HostAdmin` and have **no HTTP route**
+([api.ts:95-99](../../packages/control-plane-api/src/api.ts#L95-L99)). The stated reason
+there is v1 scoping — "the console's v1 job is the tenant registry, lifecycle,
+entitlements and history" — not a permanent ban. The permanent principle is the D-22/D-29
+permission-diff human checkpoint, and it is narrower than the route absence suggests.
+
+Every invite writes a role assignment. A human cannot read a permission diff per invite
+across thousands of tenants. So the checkpoint has to be cut at the right joint:
+
+| | What it is | Who does it | Why it is safe |
+|---|---|---|---|
+| **Role *definition*** | What permissions a role carries | Stays a reviewed checkpoint — `pnpm lint:permissions`, checked-in `PERMISSIONS.md`, CI-diffed | Changes rarely; it is the vertical's security model. Widening a role must still appear in a PR diff. |
+| **Role *assignment*** | Putting a person into an already-defined role | Self-serve, by a tenant admin, gated by an ordinary `ctx.check` | The permission set was reviewed upstream — **provided assignment is bounded by the assigner's own authority (§5.1)**, without which this claim is false. |
+
+This does not weaken D-22/D-29 — it identifies what they were protecting. The checkpoint
+exists so that a *widening of what a role can do* cannot merge unseen. Assigning a person
+to a reviewed role is a different act, and holding it to the same gate makes self-service
+impossible while protecting nothing.
+
+**Corollary:** a self-serve tenant admin may assign from a fixed, vertical-declared role
+set and may never call `defineRole`. That is a capability boundary, not a UI convention,
+and it should be enforced where the seam in §4 is enforced.
+
+### 5.1 Assignment is bounded by the assigner's own authority
+
+The claim "assignment invents no authority" is **not unconditionally true**, and the
+version of this section that omits this subsection is wrong.
+
+Nothing above stops a tenant admin holding `admin` from assigning someone — or
+themselves — to `owner`, a role strictly more powerful than their own. No `defineRole`
+call is involved, no permission was widened, no diff would show anything, and authority
+that review never granted to that person now exists. The moment a vertical defines any
+role carrying role-assignment permission, assignment becomes an escalation path and the
+checkpoint is back to protecting nothing.
+
+**The rule:** a principal may assign role `R` at node `N` only if the assigner already
+holds every permission `R` carries at `N`. You cannot grant what you do not hold. This
+makes the safety claim true rather than merely plausible, and it falls out of the same
+`ctx.check` the rest of the model uses — no new concept, just a stated bound.
+
+Three consequences worth pinning before implementation:
+
+1. **Removal takes the same bound.** If a junior admin can strip a role they could not
+   have granted, they can lock the owner out of their own tenant. Revocation is the
+   mirror of assignment, not a lesser act.
+2. **Entity-narrowed grants must not launder into unnarrowed roles.** A principal whose
+   `workorder.read` is narrowed to one entity (§4.2 rule 3) does not thereby hold
+   `workorder.read` for the purposes of this comparison. The bound is over *effective*
+   authority at the node, narrowing included.
+3. **It needs a permission-set comparison, which the kernel does not currently expose.**
+   `ctx.check` answers one permission at a time; this asks whether one principal's set
+   contains a role's set. Roles are directory-local (`listRoles`), so the set is
+   enumerable — but the comparison is either N checks or a new capability, and it should
+   be settled alongside §4's seam rather than discovered during implementation.
+
+**Bootstrap.** The rule implies a tenant's first admin cannot assign themselves. It does
+not need to: the initial owner is seeded platform-side during provisioning — the effecting
+half (§3), which is out-of-band host code and already holds the authority. Self-service
+begins at the second member, not the first.
+
+## 6. The invites engine
+
+With §4 and §5 settled, invites is an ordinary engine and a good one — a state machine
+that cannot skip states, every mutation emitting a fat event, every operation checking a
+permission:
+
+`invited → accepted | expired | revoked`, accept-required, verified hashed identifier,
+rate-limited. The mechanics are already worked out in
+[booking-social](booking-social.md) §"invite, don't search" — written for a consumer
+social graph, but they transfer intact.
+
+The engine owns the flow. The kernel owns the effect: on accept, the engine calls the §4
+seam. That division is why the seam has to exist first — without it the engine can run its
+entire state machine and then be unable to make anyone a member.
+
+**Extraction discipline (D-27) is satisfied, narrowly.** Engines are extracted at the
+second vertical, never designed ahead. Membership and invites have two real consumers on
+day one — the admin vertical and the demo verticals — which is the condition, not an
+exception to it. This does not license the same reasoning for anything else in this
+document.
+
+## 7. Metering: priced, not promised
+
+Declaring the admin a vertical does **not** deliver metered billing, and the case for this
+decision should not lean on it.
+
+D-30 is explicit: meters 1 (active scopes) and 2 (entitlements) fall out free; **3 and 4
+are uncomputable by construction** — the outbox is per-scope-database and cannot aggregate,
+reads emit nothing, `drained_at` is written nowhere. Meter 3 needs the Tier-2 fan-in sink;
+meter 4 needs cross-tenant orders. *"A meter you cannot compute is not a pricing decision,
+it is a data-pipeline project."*
+
+So metering is the one item here that **fails the two-consumers test**: no vertical meters
+anything today. It stays deferred (#38, #39) until one does. Entitlements-as-plan (#33) is
+separable — quota, expiry and tier are needed for self-serve signup and need no meters —
+and lands with the tenant-admin surface.
+
+Naming this is the honest half of the decision. Admin-as-vertical *forces the metering
+substrate to eventually exist*, which is the same forcing-function argument §1 makes — but
+with a much larger bill attached, and it should be paid deliberately rather than
+discovered.
+
+## 8. Sequencing
+
+1. **This decision** (D-31) and §5's definition/assignment split — the gate on the rest.
+2. **Failed-migration visibility (#32).** Promoted above its position in #44. Self-service
+   means scopes are provisioned without a human watching; a migration that fails silently
+   means a tenant signs up, receives a broken scope, and the fleet renders it healthy.
+   Cheap, and it scales linearly with signups.
+3. **The membership seam + org record (#34, reshaped).** A kernel change, not a
+   control-plane one: in-scope add/remove/list, a real org entity replacing the free-form
+   `orgId`, revocation following §4's tombstone answer.
+4. **The invites engine (#35, engine half).**
+5. **The tenant-admin surface (#35, app half; #33).** Its own app, its own auth — the
+   authhero path, self-service, org membership. Not bolted into the staff console: §6's
+   two-regimes point means that would be a category error.
+6. **The admin vertical itself** — the platform tenant composing the same engines. This is
+   where dogfooding is actually collected.
+
+Deferred: metering and billing (#38, #39) per §7. Opportunistic: per-person staff actors
+(#42) — a real bug, five operators, nothing blocks on it.
+
+## 9. Consequences and risks
+
+- **This converts a bounded queue into a platform program.** Five issues that could be
+  closed one at a time become one sequenced body of work with a kernel change at its root.
+  That is the honest cost, and it is how schedules disappear. The discipline that keeps it
+  bounded is the two-consumers test applied per engine, per §1 — membership passes today,
+  metering does not, and nothing else gets grandfathered in on elegance.
+- **The bootstrap chicken-and-egg is real but small.** Who provisions the platform tenant's
+  scope? An out-of-band seed. §3 already named this and correctly called it trivial.
+- **Provisioning becomes async, and suspend-for-incident is the sharp case.** §3's warning
+  stands: async suspend is worse than a synchronous call when it is being used as an
+  incident weapon. The executor pattern is compatible with §3.3's idempotent-and-journaled
+  requirement, but the incident path may want to stay synchronous host code even after the
+  rest moves.
+- **The audit trail splits** across the vertical's outbox and the executor's log, and needs
+  correlation. §3 flagged this; it is the main thing that gets worse before it gets better.
+- **`boundary-lint` is unchanged.** The admin vertical is module code and is bound by every
+  module rule — including that it never touches `_substrat_*` tables. The §4 seam is what
+  makes that possible rather than a thing to be worked around.
+- **The identity model still cannot represent a person in two tenants.**
+  `_substrat_identities` is keyed `(provider, external_id)` → one principal, one home
+  tenant ([adapter-sqlite/src/index.ts:266](../../packages/adapter-sqlite/src/index.ts#L266)).
+  A consultant serving two customers has no representation. §4's seam does not fix this;
+  the cross-tenant user is a distinct piece of #34 and follows
+  [kernel-design](kernel-design.md) §4.3's three-audiences model (staff org on a central
+  pool, consumers in per-tenant pools).
+- **Staff signup is currently open.** `emailAndPassword` is enabled with no `disableSignUp`
+  ([staff-auth.ts:31](../../apps/control-plane/src/staff-auth.ts#L31)), leaving the
+  allowlist as the only gate in front of a surface that can suspend every tenant. Unrelated
+  to this decision, filed separately, and should not ride along on it.
