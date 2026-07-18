@@ -1,6 +1,14 @@
 export { createControlPlaneApi } from './api.js';
 export type { ControlPlaneApiOptions } from './api.js';
-export { DEV_ACTOR_HEADER, UNSAFE_devPlatformActorAuth, sessionPlatformAuth, staffAllowlist } from './auth.js';
+export {
+  DEV_ACTOR_HEADER,
+  SERVICE_TOKEN_HEADER,
+  UNSAFE_devPlatformActorAuth,
+  sessionPlatformAuth,
+  staffAllowlist,
+  serviceTokenAuth,
+  firstPlatformActorAuth,
+} from './auth.js';
 export type {
   PlatformActorAuth,
   StaffIdentity,

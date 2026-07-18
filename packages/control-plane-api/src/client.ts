@@ -1,5 +1,5 @@
 import type { Scope, ScopeId, Tenant, TenantId } from '@substrat-run/contracts';
-import { DEV_ACTOR_HEADER } from './auth.js';
+import { DEV_ACTOR_HEADER, SERVICE_TOKEN_HEADER } from './auth.js';
 
 /**
  * A typed HTTP client for the control-plane API — the vertical side of the
@@ -26,6 +26,12 @@ export interface ControlPlaneClientOptions {
   baseUrl: string;
   /** The platform actor id stamped as the audit subject on every write. */
   actor: string;
+  /**
+   * A service credential (`x-service-token`) proving the caller is an authorized
+   * vertical, not just anyone with an actor id. Required when the control plane
+   * has real auth — the dev-actor header alone does not authenticate there.
+   */
+  serviceToken?: string;
   /** Defaults to the global `fetch`. */
   fetch?: typeof globalThis.fetch;
 }
@@ -54,12 +60,17 @@ export class ControlPlaneError extends Error {
 export class ControlPlaneClient {
   private readonly baseUrl: string;
   private readonly actor: string;
+  private readonly serviceToken?: string;
   private readonly fetchImpl: typeof globalThis.fetch;
 
   constructor(options: ControlPlaneClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.actor = options.actor;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.serviceToken = options.serviceToken;
+    // Bind to globalThis: workerd throws "Illegal invocation" if `fetch` is called
+    // with a `this` other than the global scope (which `this.fetchImpl(...)` would
+    // otherwise set to this instance). An injected fetch is used as-is.
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   private async call<T>(path: string, init?: RequestInit, allow404 = false): Promise<T> {
@@ -69,6 +80,7 @@ export class ControlPlaneClient {
         ...init,
         headers: {
           [DEV_ACTOR_HEADER]: this.actor,
+          ...(this.serviceToken ? { [SERVICE_TOKEN_HEADER]: this.serviceToken } : {}),
           'content-type': 'application/json',
           ...init?.headers,
         },
