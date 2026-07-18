@@ -4,6 +4,11 @@
 [control-plane](control-plane.md) §3 deferred ("decide it at the second vertical").
 Nothing here is built.
 
+The two forks §4 and §5.1 left open are settled by **K-21**: revocation tombstones rather
+than deletes, and assignment authority is one kernel-resolved set comparison rather than N
+checks. Both sections record the answers inline; the seam itself (#34) is buildable
+against them.
+
 **What this is:** the decision that the Substrat admin's record-keeping half becomes a
 vertical, and that the engines it needs — membership, invites, entitlements-as-plan — are
 the same engines every hosted vertical needs. Plus the one kernel seam that makes it
@@ -112,9 +117,19 @@ ctx.members.remove(principal, org)  // revocation, honouring the tombstone quest
 ctx.members.list(org)               // enumeration
 ```
 
-**Revocation inherits an open question.** [kernel-design](kernel-design.md) §13's open
-question 15 already records it for tuples generally: deletion is simple but destroys the
-audit property K-4 rests on — a tuple that once granted access is evidence of why an access was allowed. The
+**Revocation: settled by K-21 — tombstone, never delete.** A revoked tuple keeps its row
+and gains a `revoked_at` the checker's walk skips. This is now decided for *every*
+relation, membership included, so there is one revocation mechanism rather than one per
+relation, and `ctx.members.remove` implements it rather than choosing it.
+
+The reasoning is D-32 rather than taste: an operated compliance product pursuing ISO 27001
+and SOC 2 Type II has to show both that access was revoked *and* the trail proving it was
+once granted, and deletion cannot produce the second. What remains open in
+[kernel-design](kernel-design.md) §13's question 15 is only whether the kernel offers
+`relink` for entity parent edges — which composes on top of the tombstone (tombstone the
+old edge, link the new, emit a spine event) rather than competing with it, and has no
+membership analogue. The original framing of the trade is kept below because the cost is
+real: deletion is simple but destroys the audit property K-4 rests on — a tuple that once granted access is evidence of why an access was allowed. The
 candidates there are a tombstone or `revoked_at` the checker's walk skips. Membership
 removal must take whichever answer that question takes; it must not invent a second one.
 
@@ -173,11 +188,15 @@ Three consequences worth pinning before implementation:
    `workorder.read` is narrowed to one entity (§4.2 rule 3) does not thereby hold
    `workorder.read` for the purposes of this comparison. The bound is over *effective*
    authority at the node, narrowing included.
-3. **It needs a permission-set comparison, which the kernel does not currently expose.**
-   `ctx.check` answers one permission at a time; this asks whether one principal's set
-   contains a role's set. Roles are directory-local (`listRoles`), so the set is
-   enumerable — but the comparison is either N checks or a new capability, and it should
-   be settled alongside §4's seam rather than discovered during implementation.
+3. **It needs a permission-set comparison — settled by K-21 as one kernel-resolved
+   comparison, not N checks.** `ctx.check` answers one permission at a time and each call
+   walks tuples, so checking a 20-permission role would repeat the same walk twenty times
+   on every invite acceptance. The kernel resolves the assigner's effective set once and
+   compares. *Effective* is narrowing-aware: an entity-narrowed grant does not satisfy the
+   bound for the unnarrowed permission, or narrowing would launder into full authority by
+   way of assignment. This follows §4.3's rule that the kernel stays the only place "who
+   can do what" is enumerable — the comparison is that enumeration turned inward, and
+   keeping it there is what stops each vertical hand-rolling its own escalation check.
 
 **Bootstrap.** The rule implies a tenant's first admin cannot assign themselves. It does
 not need to: the initial owner is seeded platform-side during provisioning — the effecting
