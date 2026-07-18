@@ -185,16 +185,44 @@ the pricing hook takes `(resource, day, time, duration)`.
 Per-entity checks (`ctx.check(perm, entityRef)`) carry the portal walk: a player reaches
 their own reservation through an entity-narrowed grant, holding **no role**.
 
-## 6. Events (fat payloads, frozen once shipped)
+## 6. Events (frozen once shipped)
 
-`booking.held` · `booking.confirmed` · `booking.expired` · `booking.cancelled` ·
-`booking.completed` · `booking.no-show` · `booking.participant-joined` ·
-`booking.participant-left` · `booking.match-played`
+`booking.resource-created` · `booking.held` · `booking.confirmed` · `booking.expired` ·
+`booking.cancelled` · `booking.started` · `booking.completed` · `booking.no-show` ·
+`booking.participant-joined` · `booking.participant-left`
 
-Each carries the full reservation (resource id + kind + name, interval, state, quantity)
-**and the participant list with `party_ref`s and shares** — so `engine-invoicing` can raise
-split charges and the outbox consumer can build cross-club history, neither needing a
-cross-module read.
+### D-C: aggregate events carry no participant identities
+
+Implementation surfaced a real collision between three platform rules. Fat events are
+required; a padel match has four participants; and the event envelope permits exactly **one**
+`subjectId`, which is mandatory whenever `piiClass !== 'none'` because crypto-shredding must
+be able to key the erasure ([contracts/events.ts](../../packages/contracts/src/events.ts)).
+A four-player roster on one event cannot be keyed to one subject. The envelope has no plural.
+
+The split that resolves it — and which is better privacy design than what it replaced:
+
+| Event | `piiClass` | Carries |
+|---|---|---|
+| `participant-joined` / `-left` | `pseudonymous`, `subjectId` = that party | the one `partyRef` + share |
+| every reservation lifecycle event | `none` | resource, interval, quantity, **participantCount** |
+
+Consequences, all of them wanted:
+
+- **The club's business record survives an erasure.** "Court 1 was booked 17:00–18:30 and
+  completed" names nobody, so it is retained as a legitimate business record while the
+  personal link is shredded with the per-participant events.
+- **Each pseudonymous fact is individually shreddable**, keyed to exactly the subject it
+  concerns — which is what the envelope was asking for all along.
+- **`partyRef` is therefore a `DataSubjectId`** (ULID), not a free string. Participants are
+  people; the type now says so.
+- A projection consumer reconstructs the roster by correlating `participant-joined` /
+  `-left` with the lifecycle event on `reservationId`. That is ordinary stream processing
+  over one module's own events, **not** a cross-module read — the fat-event rule is intact.
+- Split invoicing is unaffected: the vertical composes invoicing's in-scope functions in the
+  **same transaction**, where it already holds the roster. It never needed the event.
+
+`booking.match-played` is **not** emitted. `booking.completed` is the same fact, and one
+transition should not produce two events; a vertical wanting match vocabulary emits its own.
 
 ## 7. Open questions
 

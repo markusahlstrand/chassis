@@ -131,8 +131,10 @@ The primitive ([booking-social.md §2](../../../docs/design/booking-social.md)):
   4. Append-only participants, bound to a non-terminal reservation.
   5. Every mutation emits a fat event; every operation checks a permission.
 - **Permissions**: `booking:create|read|hold|confirm|cancel|complete|manage-resources`.
-- **Emits**: `booking.held|confirmed|expired|cancelled|completed|no-show`,
-  `booking.participant-joined|left`, `booking.match-played` (v1 schemas).
+- **Emits**: `booking.resource-created|held|confirmed|expired|cancelled|started|completed|no-show`
+  (`piiClass: none`, carrying `participantCount`) and `booking.participant-joined|left`
+  (`pseudonymous`, keyed to that one data subject). See engine-booking.md **D-C** — a roster
+  cannot ride an aggregate event, because the envelope permits one `subjectId`.
 - **Consumes**: nothing (leaf producer).
 - **Vertical extension points**: resource `kind` vocabulary (court / stylist / bench),
   duration model (fixed slot vs service-derived), capacity, the **pricing hook** consulted
@@ -207,7 +209,8 @@ of this vertical** and cannot be: they are keyed to a global player identity own
 tenant ([booking-social.md §1, §4](../../../docs/design/booking-social.md)). The demo ships
 only the **seam**:
 
-- `booking.match-played` emitted with participants as **global player refs**;
+- `booking.participant-joined` emitted per player, carrying the **global player ref** as a
+  shreddable `DataSubjectId`, correlated to `booking.completed` on `reservationId`;
 - one thin consumer draining `_substrat_outbox` into a "my bookings across clubs" read
   model — proving the event→projection loop without building the social network;
 - a **match join-link** (capacity-bounded, expiring) to show the privacy-clean add.
@@ -228,7 +231,8 @@ Out of scope: global player search, feed fanout, contact matching, geo index.
 8. **Unfilled open match** hits deadline → expire + refund.
 9. Cancellation inside/outside the 24h window → policy accepts/rejects.
 10. **Cross-tenant attack** from vertical code → fails at the boundary.
-11. `booking.match-played` lands in the outbox consumer's cross-club read model.
+11. `booking.completed` + its `participant-joined` events land in the outbox consumer's
+    cross-club read model.
 
 ## 12. Open decisions
 
