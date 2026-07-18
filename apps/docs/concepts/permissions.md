@@ -71,10 +71,32 @@ derivation algebra**:
    depth-capped.
 4. **Org/group membership** — grants to an organization reach its members.
 
-No negation, no configurable rewrite rules. Tuples are scope-local and evaluated inside
-the scope's serialization domain, so there is no distributed-consistency problem to
-solve. Verticals never see or author tuples — roles and grants remain the only authored
-surface. The checker interface is deliberately swappable (an OpenFGA-backed adapter is
+No negation, no configurable rewrite rules. Verticals never see or author tuples — roles
+and grants remain the only authored surface.
+
+**Where tuples live.** Scope and entity tuples (rules 2 and 3) live in the scope's own
+database and are evaluated inside its serialization domain, so there is no
+distributed-consistency problem for them. Tenant-level tuples — role assignments and org
+membership (rules 1 and 4) — live in the **directory** instead, because they are
+tenant-wide facts rather than scope-local ones. On the Cloudflare adapter that means a
+separate Durable Object the checker reads over RPC. The distinction matters when you are
+extending the kernel: a write path that is same-transaction for entity edges is not
+same-transaction for membership.
+
+## Revocation: tuples tombstone, they never disappear
+
+Access is withdrawn by **tombstoning** a tuple — it keeps its row, gains a `revokedAt`,
+and the checker's walk skips it. Nothing deletes a tuple.
+
+That is deliberate. A tuple that once granted access is the evidence of *why* an access
+was allowed, so deleting it destroys the audit trail exactly where it is most needed: a
+deleted row can show neither that access was revoked nor that it was ever granted. Every
+revocation path in the kernel works this way — `removeMember` is the first of them — and
+`listMembers({ includeRevoked: true })` is the evidence view over the result.
+
+Liveness is therefore one predicate, applied identically everywhere: a tuple grants only
+while it is **unexpired and unrevoked**. Expiry (`expiresAt` above) and revocation are
+siblings, not separate mechanisms. The checker interface is deliberately swappable (an OpenFGA-backed adapter is
 the designated alternative), and any implementation must pass the same contract tests.
 
 ## Decisions carry proof

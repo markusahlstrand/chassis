@@ -11,6 +11,7 @@ import type {
   Jurisdiction,
   ModuleManifest,
   Node,
+  OrgMembership,
   PermissionKey,
   PlatformActorId,
   PrincipalId,
@@ -192,6 +193,36 @@ export interface HostAdmin {
     principal: PrincipalId,
     orgId: string,
   ): Promise<void>;
+  /**
+   * Revoke a membership (K-21). **Tombstones, never deletes**: the tuple keeps its
+   * row, gains a `revokedAt`, and the permission walk skips it. Deletion would
+   * destroy the audit property K-4 rests on — a tuple that once granted access is
+   * evidence of why an access was allowed — and D-32's operated compliance product
+   * has to produce exactly that evidence.
+   *
+   * Idempotent: revoking an already-revoked or never-existing membership is a
+   * no-op, and a no-op is not audited. Re-adding via `addMember` clears the
+   * tombstone (they are a member again); the add/revoke history lives in the admin
+   * log, which is append-only.
+   */
+  removeMember(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    principal: PrincipalId,
+    orgId: string,
+  ): Promise<void>;
+  /**
+   * The members of an org. Live members only unless `includeRevoked` — the
+   * revoked rows are the evidence view, not the roster.
+   *
+   * Answering "who has access to this org" at all is new: membership was
+   * write-only before this (#34).
+   */
+  listMembers(
+    tenantId: TenantId,
+    orgId: string,
+    options?: { includeRevoked?: boolean },
+  ): Promise<OrgMembership[]>;
 
   // -- tenant registry (control-plane.md §4.1) -------------------------------
 

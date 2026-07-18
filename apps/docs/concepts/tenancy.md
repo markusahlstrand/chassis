@@ -34,6 +34,14 @@ type Scope = {
   storageShape: 'A' | 'B';
   jurisdiction: 'eu' | null;
   schemaVersion: string; // last applied migration journal entry
+  // Non-null when the scope's last migration attempt FAILED. The scope fails
+  // closed and serves nothing; this is what stops it rendering as healthy.
+  migrationFailure: {
+    version: string;        // the `module@version` that threw
+    error: string;
+    attempts: number;       // consecutive failures
+    lastAttemptAt: Instant;
+  } | null;
   createdAt: Instant;
 };
 ```

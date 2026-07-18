@@ -101,6 +101,9 @@ const KERNEL_DDL = `
     relation TEXT NOT NULL,
     object TEXT NOT NULL,
     expires_at TEXT,
+    -- K-21: revocation tombstones rather than deletes -- the row stays, the walk
+    -- skips it, and it remains readable as evidence.
+    revoked_at TEXT,
     PRIMARY KEY (subject, relation, object)
   );
   CREATE TABLE IF NOT EXISTS _substrat_deliveries (
@@ -155,6 +158,15 @@ export function defineScopeDO(
       for (const stmt of KERNEL_DDL.split(';')) {
         const s = stmt.trim();
         if (s) this.sql.exec(s);
+      }
+      // KERNEL_DDL is all IF NOT EXISTS, so a scope DO created before K-21 keeps
+      // the old shape. Attempt-and-tolerate: DO SQLite restricts PRAGMA, so there
+      // is no column probe, and a duplicate is the steady state after the first
+      // cold start (same argument as ControlPlaneDO.addColumn).
+      try {
+        this.sql.exec('ALTER TABLE _substrat_tuples ADD COLUMN revoked_at TEXT');
+      } catch (err) {
+        if (!/duplicate column name/i.test((err as Error).message)) throw err;
       }
 
       for (const registration of modules) this.registerModule(registration);

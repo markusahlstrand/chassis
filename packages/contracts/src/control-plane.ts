@@ -14,6 +14,7 @@ export const adminAction = z.enum([
   'grant',
   'grantToOrg',
   'addMember',
+  'removeMember', // K-21 — tombstones the membership tuple, never deletes it
   'createTenant', // §4.1
   'setTenantStatus', // §4.1 — before/after carry the transitioned status
   'provisionScope', // §4.2 — the first scope-lifecycle transition (→ active)
@@ -50,6 +51,23 @@ export const resolvedIdentity = z.object({
   scopeId: scopeId.nullable(),
 });
 export type ResolvedIdentity = z.infer<typeof resolvedIdentity>;
+
+/**
+ * One principal's membership of one org, as the directory holds it (K-21).
+ *
+ * `revokedAt` non-null is a **tombstone**: the tuple is still here and still
+ * readable, and the permission walk skips it. Deletion is not an option — an
+ * operated compliance product has to show both that access was revoked and the
+ * trail proving it was once granted (D-32), and a deleted row shows neither.
+ *
+ * Listing defaults to live members only; revoked rows are the evidence view.
+ */
+export const orgMembership = z.object({
+  principal: principalId,
+  orgId: z.string().min(1),
+  revokedAt: instant.nullable(),
+});
+export type OrgMembership = z.infer<typeof orgMembership>;
 
 /**
  * An append-only admin audit row (control-plane.md §4.4). Every field except

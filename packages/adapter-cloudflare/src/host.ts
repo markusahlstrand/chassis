@@ -3,6 +3,7 @@ import {
   createTenantInput,
   identityLink,
   moduleManifest,
+  orgMembership,
   resolvedIdentity,
   roleDefinition,
   scope as scopeSchema,
@@ -115,6 +116,13 @@ interface ControlPlaneStub {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  /** K-21 tombstone. Returns whether anything changed (idempotent revoke). */
+  revokeMember(tenantId: string, subject: string, object: string, at: string): Promise<boolean>;
+  listMembers(
+    tenantId: string,
+    object: string,
+    includeRevoked: boolean,
+  ): Promise<{ subject: string; revoked_at: string | null }[]>;
   grantEntitlement(tenantId: string, key: string): Promise<boolean>;
   revokeEntitlement(tenantId: string, key: string): Promise<boolean>;
   tenantHoldsEntitlement(tenantId: string, key: string): Promise<boolean>;
@@ -528,6 +536,32 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
         );
         await this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
+      },
+      removeMember: async (actor, tenantId, principal, orgId) => {
+        // Tombstone (K-21), never DELETE. The DO reports whether anything changed
+        // so a repeat revoke stays a silent no-op rather than a second audit row.
+        const changed = await this.cp.revokeMember(
+          tenantId,
+          `principal:${principal}`,
+          `org:${orgId}`,
+          new Date().toISOString(),
+        );
+        if (!changed) return;
+        await this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
+      },
+      listMembers: async (tenantId, orgId, options) => {
+        const rows = await this.cp.listMembers(
+          tenantId,
+          `org:${orgId}`,
+          options?.includeRevoked ?? false,
+        );
+        return rows.map((r) =>
+          orgMembership.parse({
+            principal: r.subject.slice('principal:'.length),
+            orgId,
+            revokedAt: r.revoked_at,
+          }),
+        );
       },
       createTenant: async (actor, input: CreateTenantInput) => {
         const parsed = createTenantInput.parse(input);
