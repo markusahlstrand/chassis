@@ -243,14 +243,24 @@ describe('RallyPoint demo scenario (spec §11)', () => {
       levelMax: '4.0',
       now: NOW,
     });
-    expect(match.reservation.state).toBe('held');
+    // The host is already IN. Opening a court you are not on is never the intent,
+    // and without it a 4-player match starts at 0/4 — the fill meter, the share
+    // split and the auto-confirm would all count one short.
+    expect(match.reservation.state).toBe('held'); // 1 of 2 — still filling
     expect(match.reservation.fillTarget).toBe(2);
     expect(match.sharePerPlayer.amount).toBe('170'); // 340 / 2
 
-    const first = await astrid.invoke<{ reservation: Reservation }>('rally/join-match', {
-      reservationId: match.reservation.id, memberId: w.elinId, now: NOW,
+    const detail = await astrid.invoke<{ participants: unknown[] }>('booking/get', {
+      reservationId: match.reservation.id,
     });
-    expect(first.reservation.state).toBe('held'); // still filling
+    expect(detail.participants).toHaveLength(1);
+
+    // …so the host cannot double-join their own match.
+    await expect(
+      astrid.invoke('rally/join-match', {
+        reservationId: match.reservation.id, memberId: w.elinId, now: NOW,
+      }),
+    ).rejects.toThrow(/already joined/);
 
     const second = await astrid.invoke<{ reservation: Reservation }>('rally/join-match', {
       reservationId: match.reservation.id, memberId: w.johanId, now: NOW,

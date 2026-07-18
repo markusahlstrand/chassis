@@ -143,11 +143,15 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
   const [date, setDate] = useState(todayISO);
   const [slots, setSlots] = useState<SlotFit[]>([]);
   const [start, setStart] = useState('');
-  const [duration, setDuration] = useState(90);
   const [held, setHeld] = useState<{ r: Reservation; price: Money; label: string } | null>(null);
   const [taken, setTaken] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // Booking for yourself, or opening the court up for others to join.
+  const [mode, setMode] = useState<'solo' | 'match'>('solo');
+  const [fillTarget, setFillTarget] = useState(4);
+  const [band, setBand] = useState<[string, string]>(['3.0', '4.5']);
+  const [made, setMade] = useState<{ id: string; share: Money } | null>(null);
 
   useEffect(() => {
     void api
@@ -169,15 +173,8 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
   useEffect(loadSlots, [loadSlots]);
 
   const court = courts.find((c) => c.id === courtId);
-  const offered = (court?.durations ?? '60,90,120').split(',').map(Number);
   const chosen = slots.find((s) => hhmm(s.startsAt, tz) === start);
   const fits = chosen?.fits ?? [];
-
-  // Every tap must lead somewhere: if the chosen duration stops fitting, fall
-  // back to the longest that does rather than dead-ending on a disabled CTA.
-  useEffect(() => {
-    if (start && fits.length > 0 && !fits.includes(duration)) setDuration(fits[fits.length - 1]!);
-  }, [start, fits, duration]);
 
   if (held) {
     return (
@@ -193,17 +190,34 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
     );
   }
 
-  const hold = async () => {
-    if (!courtId || !memberId || !start) return;
+  /**
+   * One tap commits. Choosing a duration IS the decision — there is nothing left
+   * to confirm on this screen, so a separate "hold the time" button was only ever
+   * an extra tap between the player and the payment screen. The hold is safe to
+   * take on a tap because it expires by itself and the next screen can cancel it.
+   */
+  const commit = async (time: string, minutes: number) => {
+    if (!courtId || !memberId) return;
     setBusy(true);
     setErr('');
     setTaken(null);
     try {
-      const r = await api.book({ resourceId: courtId, memberId, date, time: start, duration });
-      setHeld({ r: r.reservation, price: r.price, label: r.ruleLabel });
+      if (mode === 'match') {
+        const m = await api.createMatch({
+          resourceId: courtId, memberId, date, time, duration: minutes,
+          fillTarget, levelMin: band[0], levelMax: band[1],
+        });
+        setMade({ id: m.reservation.id, share: m.sharePerPlayer });
+        loadSlots();
+      } else {
+        const r = await api.book({
+          resourceId: courtId, memberId, date, time, duration: minutes,
+        });
+        setHeld({ r: r.reservation, price: r.price, label: r.ruleLabel });
+      }
     } catch (e) {
       if (e instanceof ApiError && e.isSlotTaken) {
-        setTaken(start);
+        setTaken(time);
         loadSlots();
       } else setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -211,11 +225,82 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
     }
   };
 
-  const alternatives = slots.filter((s) => s.fits.includes(duration)).slice(0, 3);
+  /** Tapping a time commits outright when only one duration can fit. */
+  const pickTime = (time: string, slotFits: number[]) => {
+    setStart(time);
+    if (slotFits.length === 1) void commit(time, slotFits[0]!);
+  };
+
+  const alternatives = slots.slice(0, 3);
 
   return (
     <>
-      <h1>Boka bana</h1>
+      <h1>{mode === 'match' ? 'Öppna en match' : 'Boka bana'}</h1>
+
+      <div className="seg" style={{ marginBottom: 12 }}>
+        <button className={mode === 'solo' ? 'on' : ''} onClick={() => setMode('solo')}>
+          Boka själv
+        </button>
+        <button className={mode === 'match' ? 'on' : ''} onClick={() => setMode('match')}>
+          Öppen match
+        </button>
+      </div>
+
+      {made && (
+        <div className="banner">
+          <strong>Matchen är öppen.</strong>
+          Din andel är {made.share.amount} kr. Dela länken så fyller den sig själv.
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="pill on"
+              onClick={() => {
+                void navigator.clipboard
+                  ?.writeText(`${location.origin}/?match=${made.id}`)
+                  .catch(() => {});
+              }}
+            >
+              Kopiera länk
+            </button>
+            <button className="pill" onClick={() => setMade(null)}>
+              Klart
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'match' && (
+        <div className="card">
+          <h2>Vilka söker du?</h2>
+          <div className="seg" style={{ marginTop: 8 }}>
+            {[2, 4].map((n) => (
+              <button key={n} className={fillTarget === n ? 'on' : ''} onClick={() => setFillTarget(n)}>
+                {n} spelare
+              </button>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            {(
+              [
+                ['Nybörjare', '1.0', '3.0'],
+                ['Medel', '3.0', '4.5'],
+                ['Avancerad', '4.5', '7.0'],
+              ] as const
+            ).map(([label, lo, hi]) => (
+              <button
+                key={label}
+                className={`pill ${band[0] === lo ? 'on' : ''}`}
+                onClick={() => setBand([lo, hi])}
+              >
+                {label} {lo}–{hi}
+              </button>
+            ))}
+          </div>
+          <p className="legend">
+            Spelare utanför nivåspannet kan be om en plats. Din egen plats räknas när du öppnar
+            matchen.
+          </p>
+        </div>
+      )}
 
       {err && <div className="banner bad">{err}</div>}
 
@@ -286,7 +371,8 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
                 <button
                   key={s.startsAt}
                   className={`slot ${t === start ? 'on' : ''}`}
-                  onClick={() => setStart(t)}
+                  disabled={busy}
+                  onClick={() => pickTime(t, s.fits)}
                 >
                   <span className="t">{t}</span>
                   <span className="dots">
@@ -302,35 +388,23 @@ function Book({ tz, memberId }: { tz: string; memberId: string }) {
         </>
       )}
 
-      {start && (
+      {/* Only asked when there is genuinely a choice — and answering it commits,
+          so there is no trailing confirm button to tap. */}
+      {start && fits.length > 1 && (
         <div className="card" style={{ marginTop: 12 }}>
-          <h2>Längd</h2>
+          <h2>Hur länge, {start}?</h2>
           <div className="seg" style={{ marginTop: 8 }}>
-            {offered.map((d) => {
-              const ok = fits.includes(d);
-              return (
-                <button
-                  key={d}
-                  className={duration === d ? 'on' : ''}
-                  disabled={!ok}
-                  onClick={() => setDuration(d)}
-                >
-                  {d} min
-                </button>
-              );
-            })}
+            {fits.map((d) => (
+              <button key={d} disabled={busy} onClick={() => void commit(start, d)}>
+                {d} min
+              </button>
+            ))}
           </div>
-          {offered.some((d) => !fits.includes(d)) && (
-            <p className="legend">
-              Gråa längder ryms inte vid {start} — luckan tar slut innan dess.
-            </p>
-          )}
+          <p className="legend">
+            {court?.name} erbjuder {court?.durations} min; bara de som ryms i luckan visas.
+          </p>
         </div>
       )}
-
-      <button className="cta" disabled={busy || !start || !memberId} onClick={() => void hold()}>
-        {start ? `Håll ${start} · ${duration} min →` : 'Välj en tid'}
-      </button>
     </>
   );
 }

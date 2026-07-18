@@ -1128,12 +1128,19 @@ const createOpenMatchOp: OperationHandler<
   );
   ctx.link(reservationRef(reservation.id), memberRef(member.id));
 
-  const share = Math.round(Number(price.amount) / input.fillTarget);
-  return {
-    reservation,
-    price,
-    sharePerPlayer: moneyOf(String(share), price.currency),
-  };
+  const share = moneyOf(String(Math.round(Number(price.amount) / input.fillTarget)), price.currency);
+
+  // The host is IN their own match. Opening a court and then not being on it is
+  // never what anyone meant, and without this a 4-player match starts at 0/4 —
+  // so the fill meter, the share split and the auto-confirm all count wrong.
+  const joined = joinReservation(ctx, {
+    reservationId: reservation.id,
+    partyRef: dataSubjectId.parse(member.party_ref),
+    share,
+    now,
+  });
+
+  return { reservation: joined.reservation, price, sharePerPlayer: share };
 };
 
 /**
