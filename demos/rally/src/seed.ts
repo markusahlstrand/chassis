@@ -72,6 +72,9 @@ export const ROLES: RoleDefinition[] = [
     key: 'receptionist',
     permissions: [
       RP.browse, RP.wallet, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.create,
+      // Recording that someone did not turn up is desk work — the flow test
+      // caught its absence when reception could book but not close the loop.
+      BK.complete,
       RP.manageMembers,
     ],
     source: 'vertical',

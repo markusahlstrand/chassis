@@ -35,14 +35,14 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 | --- | --- |
 | `club-admin` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:manage-resources`, `booking:move`, `booking:read`, `invoicing:export`, `invoicing:read`, `rally:browse`, `rally:manage-members`, `rally:manage-pricing`, `rally:manage-venue`, `rally:wallet` |
 | `coach` | `booking:read`, `rally:browse` |
-| `receptionist` | `booking:cancel`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:move`, `booking:read`, `rally:browse`, `rally:manage-members`, `rally:wallet` |
+| `receptionist` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:move`, `booking:read`, `rally:browse`, `rally:manage-members`, `rally:wallet` |
 
 ## 3. Coverage — which roles hold each key
 
 | Key | Held by |
 | --- | --- |
 | `booking:cancel` | `club-admin`, `receptionist` |
-| `booking:complete` | `club-admin` |
+| `booking:complete` | `club-admin`, `receptionist` |
 | `booking:confirm` | `club-admin`, `receptionist` |
 | `booking:create` | `club-admin`, `receptionist` |
 | `booking:hold` | `club-admin`, `receptionist` |
