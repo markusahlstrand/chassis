@@ -107,9 +107,10 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     });
     expect(booked.reservation.state).toBe('held');
     expect(booked.reservation.startsAt).toBe('2026-07-20T17:00:00.000Z');
-    // Peak 340 kr − Member 10% = 306 kr. Duration is an input, not a multiplier.
-    expect(booked.price.amount).toBe('306');
-    expect(booked.ruleLabel).toContain('Peak');
+    // Högtrafik 17–21 = 340 kr flat. There is NO membership discount: padel
+    // prices the court, not the customer. Duration is an input, not a multiplier.
+    expect(booked.price.amount).toBe('340');
+    expect(booked.ruleLabel).toContain('Högtrafik');
 
     const confirmed = await ravi.invoke<{ reservation: Reservation }>('rally/confirm-booking', {
       reservationId: booked.reservation.id,
@@ -244,7 +245,7 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     });
     expect(match.reservation.state).toBe('held');
     expect(match.reservation.fillTarget).toBe(2);
-    expect(match.sharePerPlayer.amount).toBe('153'); // 306 / 2
+    expect(match.sharePerPlayer.amount).toBe('170'); // 340 / 2
 
     const first = await astrid.invoke<{ reservation: Reservation }>('rally/join-match', {
       reservationId: match.reservation.id, memberId: w.elinId, now: NOW,
@@ -381,7 +382,112 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     ).rejects.toThrow(/invalid transition/);
   });
 
-  it('19. members are the vertical’s vocabulary, keyed to a global player ref', async () => {
+  it('19. floodlights are priced by SEASON, not by the clock', async () => {
+    // Same wall-clock hour, six months apart. In July 16:00 is daylight and
+    // costs base rate; in December it is pitch dark and the lights are billed.
+    const july = await ravi.invoke<{ price: Money; ruleLabel: string }>('rally/book-court', {
+      resourceId: w.court1, memberId: w.elinId, date: DATE,
+      time: '16:00', duration: 60, now: NOW,
+    });
+    expect(july.price.amount).toBe('260');
+    expect(july.ruleLabel).toBe('Bas');
+
+    const december = await ravi.invoke<{ price: Money; ruleLabel: string }>('rally/book-court', {
+      resourceId: w.court1, memberId: w.elinId, date: '2026-12-15',
+      time: '16:00', duration: 60, now: NOW,
+    });
+    expect(december.price.amount).toBe('400'); // 340 + 60 lighting
+    expect(december.ruleLabel).toContain('Belysning');
+  });
+
+  it('20. a credit pack gives more than it charges', async () => {
+    const bought = await astrid.invoke<{ balance: Money; paid: Money; received: Money }>(
+      'rally/buy-credits',
+      { memberId: w.johanId, packKey: 'klipp-5' },
+    );
+    // Five games at 340, paid for four.
+    expect(bought.paid.amount).toBe('1360');
+    expect(bought.received.amount).toBe('1700');
+    expect(bought.balance.amount).toBe('1700');
+  });
+
+  it('21. paying from the wallet debits exactly the court price', async () => {
+    const booked = await astrid.invoke<{ reservation: Reservation; price: Money }>(
+      'rally/book-court',
+      {
+        resourceId: w.court2, memberId: w.johanId, date: DATE,
+        time: '11:00', duration: 60, now: NOW,
+      },
+    );
+    const paid = await astrid.invoke<{
+      reservation: Reservation;
+      paidFromWallet: boolean;
+      balance: Money | null;
+    }>('rally/confirm-booking', {
+      reservationId: booked.reservation.id, payWith: 'wallet', now: NOW,
+    });
+    expect(paid.reservation.state).toBe('confirmed');
+    expect(paid.paidFromWallet).toBe(true);
+    expect(paid.balance!.amount).toBe('1440'); // 1700 − 260 base
+  });
+
+  it('22. ATOMICITY: an unaffordable booking leaves neither a charge nor a court', async () => {
+    // Elin has no balance at all.
+    const booked = await astrid.invoke<{ reservation: Reservation }>('rally/book-court', {
+      resourceId: w.court2, memberId: w.elinId, date: DATE,
+      time: '12:00', duration: 60, now: NOW,
+    });
+    await expect(
+      astrid.invoke('rally/confirm-booking', {
+        reservationId: booked.reservation.id, payWith: 'wallet', now: NOW,
+      }),
+    ).rejects.toThrow(/insufficient balance/);
+
+    // The debit and the confirm are one transaction in one Durable Object, so
+    // the rollback took the confirm with it: still held, and no ledger entry.
+    const after = await astrid.invoke<{ reservation: Reservation }>('booking/get', {
+      reservationId: booked.reservation.id,
+    });
+    expect(after.reservation.state).toBe('held');
+    const wallet = await astrid.invoke<{ balance: Money; entries: unknown[] }>('rally/wallet', {
+      memberId: w.elinId,
+    });
+    expect(wallet.balance.amount).toBe('0');
+    expect(wallet.entries).toHaveLength(0);
+  });
+
+  it('23. a subscription is a wallet topped up on a schedule', async () => {
+    await astrid.invoke('rally/subscribe', {
+      memberId: w.elinId, planKey: 'manadskort', on: '2026-08-01',
+    });
+    const first = await astrid.invoke<{ charged: number; creditedOre: number }>('rally/run-billing', {
+      on: '2026-08-01',
+    });
+    expect(first.charged).toBe(1);
+    expect(first.creditedOre).toBe(120000); // pays 999 kr, receives 1200 kr
+
+    const wallet = await astrid.invoke<{ balance: Money }>('rally/wallet', {
+      memberId: w.elinId,
+    });
+    expect(wallet.balance.amount).toBe('1200');
+
+    // Idempotent within the month: the cycle advanced next_charge_on.
+    const again = await astrid.invoke<{ charged: number }>('rally/run-billing', { on: '2026-08-15' });
+    expect(again.charged).toBe(0);
+
+    const next = await astrid.invoke<{ charged: number }>('rally/run-billing', { on: '2026-09-01' });
+    expect(next.charged).toBe(1);
+  });
+
+  it('24. a player reads their own wallet and nobody else’s', async () => {
+    const elin = await host.getScope(w.elin, w.t1, w.s1);
+    await expect(elin.invoke('rally/wallet', { memberId: w.elinId })).resolves.toBeDefined();
+    await expect(elin.invoke('rally/wallet', { memberId: w.johanId })).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+
+  it('25. members are the vertical’s vocabulary, keyed to a global player ref', async () => {
     const members = await astrid.invoke<MemberRow[]>('rally/list-members');
     expect(members.map((m) => m.name).sort()).toEqual(['Elin Kastberg', 'Johan Ek']);
     expect(members.find((m) => m.name === 'Elin Kastberg')!.party_ref).toBe(w.elinParty);

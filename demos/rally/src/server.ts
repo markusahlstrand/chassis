@@ -190,7 +190,12 @@ app.post('/api/bookings', async (c) =>
   c.json(await (await stub(c)).invoke('rally/book-court', await body(c))),
 );
 app.post('/api/bookings/:id/confirm', async (c) =>
-  c.json(await (await stub(c)).invoke('rally/confirm-booking', { reservationId: c.req.param('id') })),
+  c.json(
+    await (await stub(c)).invoke('rally/confirm-booking', {
+      reservationId: c.req.param('id'),
+      ...(await body(c)), // { payWith?: 'wallet' | 'card' }
+    }),
+  ),
 );
 app.post('/api/bookings/:id/cancel', async (c) =>
   c.json(
@@ -235,6 +240,39 @@ app.post('/api/matches/:id/join', async (c) =>
       ...(await body(c)),
     }),
   ),
+);
+
+// -- wallet, credit packs and subscriptions ---------------------------------
+app.get('/api/wallet', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/wallet', { memberId: c.req.query('memberId') })),
+);
+app.post('/api/wallet/buy', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/buy-credits', await body(c))),
+);
+app.post('/api/packs', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/upsert-pack', await body(c))),
+);
+app.post('/api/plans', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/upsert-plan', await body(c))),
+);
+app.post('/api/subscriptions', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/subscribe', await body(c))),
+);
+app.post('/api/subscriptions/:id/cancel', async (c) =>
+  c.json(
+    await (await stub(c)).invoke('rally/cancel-subscription', {
+      subscriptionId: c.req.param('id'),
+    }),
+  ),
+);
+/**
+ * The step a billing Workflow would invoke. It is an operation rather than a
+ * timer because the schedule belongs outside the scope — durable, long-waiting,
+ * retryable per step (docs/design/booking-social.md §7) — while the credit and
+ * the cursor advance belong inside one transaction.
+ */
+app.post('/api/billing/run', async (c) =>
+  c.json(await (await stub(c)).invoke('rally/run-billing', await body(c))),
 );
 
 // -- reports ----------------------------------------------------------------

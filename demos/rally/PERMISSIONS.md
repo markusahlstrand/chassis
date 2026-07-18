@@ -5,7 +5,7 @@
 
 # Permission snapshot — @substrat-run/demo-rally
 
-14 keys · 3 modules · 3 roles
+15 keys · 3 modules · 3 roles
 
 ## 1. Registry — every key a registered manifest declares
 
@@ -23,8 +23,9 @@
 | `invoicing:read` | Read fakturaunderlag | `@substrat-run/engine-invoicing` |
 | `rally:browse` | See courts, opening hours and free slots — free/busy only, never who booked | `@substrat-run/demo-rally` |
 | `rally:manage-members` | Manage club members and their records | `@substrat-run/demo-rally` |
-| `rally:manage-pricing` | Manage price rules and membership tiers | `@substrat-run/demo-rally` |
+| `rally:manage-pricing` | Manage price rules, credit packs and subscription plans | `@substrat-run/demo-rally` |
 | `rally:manage-venue` | Set club and court opening hours, closures, and maintenance blocks | `@substrat-run/demo-rally` |
+| `rally:wallet` | Buy club credit and pay for a booking from a club balance | `@substrat-run/demo-rally` |
 
 ## 2. Roles — as defined by this vertical's provisioning code
 
@@ -32,9 +33,9 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 
 | Role | Permissions |
 | --- | --- |
-| `club-admin` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:manage-resources`, `booking:move`, `booking:read`, `invoicing:export`, `invoicing:read`, `rally:browse`, `rally:manage-members`, `rally:manage-pricing`, `rally:manage-venue` |
+| `club-admin` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:manage-resources`, `booking:move`, `booking:read`, `invoicing:export`, `invoicing:read`, `rally:browse`, `rally:manage-members`, `rally:manage-pricing`, `rally:manage-venue`, `rally:wallet` |
 | `coach` | `booking:read`, `rally:browse` |
-| `receptionist` | `booking:cancel`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:move`, `booking:read`, `rally:browse`, `rally:manage-members` |
+| `receptionist` | `booking:cancel`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:move`, `booking:read`, `rally:browse`, `rally:manage-members`, `rally:wallet` |
 
 ## 3. Coverage — which roles hold each key
 
@@ -54,6 +55,7 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 | `rally:manage-members` | `club-admin`, `receptionist` |
 | `rally:manage-pricing` | `club-admin` |
 | `rally:manage-venue` | `club-admin` |
+| `rally:wallet` | `club-admin`, `receptionist` |
 
 ## 4. Entity-narrowed grant shapes
 
@@ -62,7 +64,7 @@ no role in §3 but listed here is deliberate, not a gap.
 
 | Entity type | Permissions granted per entity |
 | --- | --- |
-| `(scope-wide, no entity)` | `booking:create`, `booking:hold`, `rally:browse` |
+| `(scope-wide, no entity)` | `booking:create`, `booking:hold`, `rally:browse`, `rally:wallet` |
 | `member` | `booking:cancel`, `booking:confirm`, `booking:read` |
 
 ## 5. Not covered by this artifact

@@ -53,7 +53,7 @@ export interface RallyWorld {
 export const MODULES = [bookingModule, invoicingModule, rallyModule];
 
 const adminPerms = [
-  RP.browse, RP.manageVenue, RP.managePricing, RP.manageMembers,
+  RP.browse, RP.wallet, RP.manageVenue, RP.managePricing, RP.manageMembers,
   BK.create, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.complete, BK.manageResources,
   INV.read, INV.export,
 ];
@@ -71,7 +71,8 @@ export const ROLES: RoleDefinition[] = [
   {
     key: 'receptionist',
     permissions: [
-      RP.browse, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.create, RP.manageMembers,
+      RP.browse, RP.wallet, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.create,
+      RP.manageMembers,
     ],
     source: 'vertical',
   },
@@ -100,7 +101,7 @@ export const ROLES: RoleDefinition[] = [
  * no narrower entity to hang them on, because the court they want is by
  * definition not yet theirs.
  */
-const portalScopePerms = [RP.browse, BK.hold, BK.create];
+const portalScopePerms = [RP.browse, RP.wallet, BK.hold, BK.create];
 
 /**
  * ENTITY-NARROWED to the player's own member record — everything that touches a
@@ -160,18 +161,45 @@ async function seedVenue(
     ids.push(court.id);
   }
 
-  await stub.invoke('rally/upsert-tier', { key: 'drop-in', title: 'Drop-in', discountPct: 0 });
-  await stub.invoke('rally/upsert-tier', {
-    key: 'member', title: 'Member', discountPct: 10, monthlyAmount: '199',
+  // What the club actually sells. No membership discount — padel prices the
+  // court, not the customer — so the commercial products are prepaid credit and
+  // a subscription that tops it up.
+  await stub.invoke('rally/upsert-pack', {
+    key: 'klipp-5', title: '5 speltillfällen — betala för 4',
+    priceOre: 4 * Number(spec.peakAmount) * 100,
+    creditOre: 5 * Number(spec.peakAmount) * 100,
   });
-  await stub.invoke('rally/upsert-tier', {
-    key: 'club-plus', title: 'Club+', discountPct: 20, monthlyAmount: '449',
+  await stub.invoke('rally/upsert-pack', {
+    key: 'klipp-10', title: '10 speltillfällen — betala för 8',
+    priceOre: 8 * Number(spec.peakAmount) * 100,
+    creditOre: 10 * Number(spec.peakAmount) * 100,
+  });
+  await stub.invoke('rally/upsert-plan', {
+    key: 'manadskort', title: 'Månadskort',
+    monthlyOre: 99900, monthlyCreditOre: 120000,
   });
 
-  // Base first, then the narrower peak rule — precedence is most-specific-wins.
-  await stub.invoke('rally/upsert-price-rule', { label: 'Base', amount: '260' });
+  // Base first, then narrower rules — precedence is most-specific-wins.
+  await stub.invoke('rally/upsert-price-rule', { label: 'Bas', amount: '260' });
   await stub.invoke('rally/upsert-price-rule', {
-    label: 'Peak 17–21', fromTime: '17:00', toTime: '21:00', amount: spec.peakAmount,
+    label: 'Högtrafik 17–21', fromTime: '17:00', toTime: '21:00', amount: spec.peakAmount,
+  });
+  // FLOODLIGHTS. Seasonal, because the dark is: Stockholm sunset moves from
+  // ~14:45 in December to ~22:00 in June, so a fixed clock window would bill for
+  // lights in June daylight and miss the December afternoon entirely. Two rules,
+  // one per half-year; they outrank the demand-based peak rule because a season
+  // is more specific than a time-of-day alone.
+  await stub.invoke('rally/upsert-price-rule', {
+    label: 'Belysning (vinter)',
+    fromDate: '2026-10-01', toDate: '2027-03-31',
+    fromTime: '15:00', toTime: '23:00',
+    amount: String(Number(spec.peakAmount) + 60),
+  });
+  await stub.invoke('rally/upsert-price-rule', {
+    label: 'Belysning (sommar)',
+    fromDate: '2026-04-01', toDate: '2026-09-30',
+    fromTime: '21:00', toTime: '23:00',
+    amount: String(Number(spec.peakAmount) + 60),
   });
 
   return ids;
@@ -283,10 +311,10 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
       const stub = await host.getScope(world.astrid, world.t1, scope);
       const elin = await stub.invoke<{ id: string }>('rally/create-member', {
         partyRef: world.elinParty, name: 'Elin Kastberg', phone: '070-555 21 09',
-        tier: 'member', level: '3.4',
+        level: '3.4',
       });
       const johan = await stub.invoke<{ id: string }>('rally/create-member', {
-        partyRef: world.johanParty, name: 'Johan Ek', tier: 'drop-in', level: '3.1',
+        partyRef: world.johanParty, name: 'Johan Ek', level: '3.1',
       });
       if (ids === 'solna') {
         world.elinId = elin.id;

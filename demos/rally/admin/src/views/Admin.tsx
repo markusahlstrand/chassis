@@ -110,13 +110,14 @@ export default function Admin({
           <div className="card">
             <h2>Prisregler</h2>
             <p className="hint" style={{ marginTop: -4, marginBottom: 10 }}>
-              Mest specifik vinner: bana &gt; längd &gt; tid &gt; veckodag &gt; bas.
+              Mest specifik vinner: bana &gt; längd &gt; säsong &gt; tid &gt; veckodag &gt; bas.
             </p>
             <table>
               <thead>
                 <tr>
                   <th>Regel</th>
                   <th>Tid</th>
+                  <th>Säsong</th>
                   <th>Längd</th>
                   <th style={{ textAlign: 'right' }}>Pris</th>
                 </tr>
@@ -128,6 +129,9 @@ export default function Admin({
                     <td className="mono">
                       {r.from_time ? `${r.from_time}–${r.to_time}` : 'hela dagen'}
                     </td>
+                    <td className="mono">
+                      {r.from_date ? `${r.from_date} → ${r.to_date}` : 'hela året'}
+                    </td>
                     <td className="mono">{r.duration ?? 'alla'}</td>
                     <td className="mono" style={{ textAlign: 'right' }}>
                       {r.amount} kr
@@ -136,7 +140,7 @@ export default function Admin({
                 ))}
                 {venue?.priceRules.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="hint">
+                    <td colSpan={5} className="hint">
                       Inga regler — bokning kommer att avvisas.
                     </td>
                   </tr>
@@ -145,22 +149,31 @@ export default function Admin({
             </table>
           </div>
           <div className="card">
-            <h3>Medlemsnivåer</h3>
+            <h3>Klippkort &amp; månadskort</h3>
             <table>
               <thead>
                 <tr>
-                  <th>Nivå</th>
-                  <th>Rabatt</th>
-                  <th style={{ textAlign: 'right' }}>Avgift/mån</th>
+                  <th>Produkt</th>
+                  <th>Betalar</th>
+                  <th style={{ textAlign: 'right' }}>Får</th>
                 </tr>
               </thead>
               <tbody>
-                {venue?.tiers.map((t) => (
+                {venue?.creditPacks.map((t) => (
                   <tr key={t.key}>
                     <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{t.title}</td>
-                    <td className="mono">−{t.discount_pct}%</td>
+                    <td className="mono">{(t.price_ore / 100).toFixed(0)} kr</td>
                     <td className="mono" style={{ textAlign: 'right' }}>
-                      {t.monthly_amount} kr
+                      {(t.credit_ore / 100).toFixed(0)} kr
+                    </td>
+                  </tr>
+                ))}
+                {venue?.plans.map((t) => (
+                  <tr key={t.key}>
+                    <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{t.title}</td>
+                    <td className="mono">{(t.monthly_ore / 100).toFixed(0)} kr/mån</td>
+                    <td className="mono" style={{ textAlign: 'right' }}>
+                      {(t.monthly_credit_ore / 100).toFixed(0)} kr/mån
                     </td>
                   </tr>
                 ))}
@@ -183,7 +196,6 @@ export default function Admin({
               <thead>
                 <tr>
                   <th>Namn</th>
-                  <th>Nivå</th>
                   <th>Rating</th>
                   <th>Spelar-ID</th>
                 </tr>
@@ -192,9 +204,6 @@ export default function Admin({
                 {members.map((m) => (
                   <tr key={m.id}>
                     <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{m.name}</td>
-                    <td>
-                      <span className="chip">{m.tier}</span>
-                    </td>
                     <td className="mono">{m.level ?? '—'}</td>
                     <td className="mono hint">{m.party_ref}</td>
                   </tr>
@@ -203,9 +212,7 @@ export default function Admin({
             </table>
           )}
           <NewMember
-            onCreate={(name, tier) =>
-              guard(() => api.addMember({ partyRef: newPartyRef(), name, tier }))
-            }
+            onCreate={(name) => guard(() => api.addMember({ partyRef: newPartyRef(), name }))}
           />
         </div>
       )}
@@ -504,18 +511,12 @@ function NewCourt({ onCreate }: { onCreate: (n: string, d: string) => void }) {
   );
 }
 
-function NewMember({ onCreate }: { onCreate: (n: string, t: string) => void }) {
+function NewMember({ onCreate }: { onCreate: (n: string) => void }) {
   const [name, setName] = useState('');
-  const [tier, setTier] = useState('drop-in');
   return (
     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
       <input type="text" placeholder="Namn" value={name} onChange={(e) => setName(e.target.value)} />
-      <select value={tier} onChange={(e) => setTier(e.target.value)}>
-        <option value="drop-in">drop-in</option>
-        <option value="member">member</option>
-        <option value="club-plus">club-plus</option>
-      </select>
-      <button className="btn lime" disabled={!name} onClick={() => { onCreate(name, tier); setName(''); }}>
+      <button className="btn lime" disabled={!name} onClick={() => { onCreate(name); setName(''); }}>
         Lägg till medlem
       </button>
     </div>

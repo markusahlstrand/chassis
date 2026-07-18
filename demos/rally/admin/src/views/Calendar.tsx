@@ -524,7 +524,7 @@ function BookingDrawer({
               {members.length === 0 && <option value="">(ingen behörighet)</option>}
               {members.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name} · {m.tier}
+                  {m.name}
                 </option>
               ))}
             </select>

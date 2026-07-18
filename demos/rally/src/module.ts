@@ -52,6 +52,14 @@ export const RALLY_PERM = {
    * the capability that actually matches the need: free/busy, no identities.
    */
   browse: permissionKey.parse('rally:browse'),
+  /**
+   * Hold and spend a club balance. Scope-wide for players: topping up is
+   * harmless (it only ever adds money), and SPENDING is gated separately — a
+   * debit only happens inside a booking confirm, which walks the reservation to
+   * its member. Reading a balance is likewise narrowed, so this key never
+   * exposes someone else's wallet.
+   */
+  wallet: permissionKey.parse('rally:wallet'),
   manageVenue: permissionKey.parse('rally:manage-venue'),
   managePricing: permissionKey.parse('rally:manage-pricing'),
   manageMembers: permissionKey.parse('rally:manage-members'),
@@ -67,10 +75,14 @@ export const rallyManifest = moduleManifest.parse({
       description: 'See courts, opening hours and free slots — free/busy only, never who booked',
     },
     {
+      key: 'rally:wallet',
+      description: 'Buy club credit and pay for a booking from a club balance',
+    },
+    {
       key: 'rally:manage-venue',
       description: 'Set club and court opening hours, closures, and maintenance blocks',
     },
-    { key: 'rally:manage-pricing', description: 'Manage price rules and membership tiers' },
+    { key: 'rally:manage-pricing', description: 'Manage price rules, credit packs and subscription plans' },
     { key: 'rally:manage-members', description: 'Manage club members and their records' },
   ],
   events: { emits: [], consumes: [] },
@@ -99,17 +111,46 @@ export const rallyMigrations = [
         party_ref  TEXT NOT NULL UNIQUE,
         name       TEXT NOT NULL,
         phone      TEXT,
-        tier       TEXT NOT NULL DEFAULT 'drop-in',
         level      TEXT,
         created_at TEXT NOT NULL
       );
-      CREATE TABLE rally_tiers (
-        key             TEXT PRIMARY KEY,
-        title           TEXT NOT NULL,
-        discount_pct    INTEGER NOT NULL DEFAULT 0,
-        monthly_amount  TEXT NOT NULL DEFAULT '0',
-        currency        TEXT NOT NULL DEFAULT 'SEK'
+      -- The club's prepaid balance for a member, as an APPEND-ONLY ledger:
+      -- balance is the sum of deltas, never a mutable column. Öre as an integer
+      -- so a balance can never carry a rounding error.
+      CREATE TABLE rally_wallet_entries (
+        id             TEXT PRIMARY KEY,
+        member_id      TEXT NOT NULL REFERENCES rally_members(id),
+        delta_ore      INTEGER NOT NULL,
+        reason         TEXT NOT NULL,
+        reservation_id TEXT,
+        created_at     TEXT NOT NULL
       );
+      CREATE INDEX rally_wallet_member ON rally_wallet_entries (member_id);
+      -- What a club sells: pay for 4 games, get 5. price_ore is what the member
+      -- PAYS and credit_ore is what they RECEIVE; keeping them apart is what lets
+      -- the ledger record the credit while an invoice records the payment.
+      CREATE TABLE rally_credit_packs (
+        key        TEXT PRIMARY KEY,
+        title      TEXT NOT NULL,
+        price_ore  INTEGER NOT NULL,
+        credit_ore INTEGER NOT NULL
+      );
+      CREATE TABLE rally_plans (
+        key            TEXT PRIMARY KEY,
+        title          TEXT NOT NULL,
+        monthly_ore    INTEGER NOT NULL,
+        monthly_credit_ore INTEGER NOT NULL
+      );
+      CREATE TABLE rally_subscriptions (
+        id             TEXT PRIMARY KEY,
+        member_id      TEXT NOT NULL REFERENCES rally_members(id),
+        plan_key       TEXT NOT NULL REFERENCES rally_plans(key),
+        status         TEXT NOT NULL CHECK (status IN ('active','cancelled')),
+        started_on     TEXT NOT NULL,
+        next_charge_on TEXT NOT NULL,
+        cancelled_at   TEXT
+      );
+      CREATE INDEX rally_subs_member ON rally_subscriptions (member_id);
       CREATE TABLE rally_courts (
         resource_id TEXT PRIMARY KEY,
         durations   TEXT NOT NULL DEFAULT '60,90,120',
@@ -145,6 +186,13 @@ export const rallyMigrations = [
         weekday     INTEGER,
         from_time   TEXT,
         to_time     TEXT,
+        -- SEASON. A floodlight surcharge is not a fixed clock window: Stockholm
+        -- sunset runs from ~14:45 in December to ~22:00 in June, so "after 17:00"
+        -- bills for lights in June daylight and misses 15:00 in December dark.
+        -- Clubs set explicit seasonal windows they can predict, rather than the
+        -- system deriving sunset and surprising them.
+        from_date   TEXT,
+        to_date     TEXT,
         duration    INTEGER,
         amount      TEXT NOT NULL,
         currency    TEXT NOT NULL DEFAULT 'SEK',
@@ -237,16 +285,37 @@ export interface MemberRow {
   party_ref: string;
   name: string;
   phone: string | null;
-  tier: string;
   level: string | null;
   created_at: string;
 }
-export interface TierRow {
+export interface WalletEntryRow {
+  id: string;
+  member_id: string;
+  delta_ore: number;
+  reason: string;
+  reservation_id: string | null;
+  created_at: string;
+}
+export interface CreditPackRow {
   key: string;
   title: string;
-  discount_pct: number;
-  monthly_amount: string;
-  currency: string;
+  price_ore: number;
+  credit_ore: number;
+}
+export interface PlanRow {
+  key: string;
+  title: string;
+  monthly_ore: number;
+  monthly_credit_ore: number;
+}
+export interface SubscriptionRow {
+  id: string;
+  member_id: string;
+  plan_key: string;
+  status: 'active' | 'cancelled';
+  started_on: string;
+  next_charge_on: string;
+  cancelled_at: string | null;
 }
 export interface HoursRow {
   weekday: number;
@@ -273,6 +342,8 @@ export interface PriceRuleRow {
   weekday: number | null;
   from_time: string | null;
   to_time: string | null;
+  from_date: string | null;
+  to_date: string | null;
   duration: number | null;
   amount: string;
   currency: string;
@@ -367,13 +438,13 @@ export function bookableWindow(
 
 /**
  * Resolve the price for a slot: most specific rule wins
- * (court > duration > time-of-day > weekday > base), then the member's tier
- * discount. Duration is an input, not a multiplier — a 90-minute peak slot is
- * not necessarily 1.5× the 60-minute price (spec §4).
+ * (court > duration > season > time-of-day > weekday > base). Duration is an
+ * input, not a multiplier (spec §4). There is no per-customer discount: padel
+ * prices the court, not the customer.
  */
 export function resolvePrice(
   ctx: OperationContext,
-  input: { resourceId: string; date: string; time: string; duration: number; tier?: string },
+  input: { resourceId: string; date: string; time: string; duration: number },
 ): { price: Money; label: string } {
   const weekday = weekdayOf(input.date);
   const rules = ctx.sql.query<PriceRuleRow>('SELECT * FROM rally_price_rules');
@@ -384,24 +455,108 @@ export function resolvePrice(
     if (r.duration !== null && r.duration !== input.duration) return false;
     if (r.from_time && input.time < r.from_time) return false;
     if (r.to_time && input.time >= r.to_time) return false;
+    // Seasonal window — how a floodlight surcharge tracks the actual dark.
+    if (r.from_date && input.date < r.from_date) return false;
+    if (r.to_date && input.date > r.to_date) return false;
     return true;
   });
   if (applicable.length === 0) throw new Error(`no price rule matches ${input.date} ${input.time}`);
 
+  // Most specific wins: court > duration > season > time-of-day > weekday.
   const specificity = (r: PriceRuleRow): number =>
-    (r.resource_id ? 8 : 0) + (r.duration !== null ? 4 : 0) + (r.from_time ? 2 : 0) + (r.weekday !== null ? 1 : 0);
+    (r.resource_id ? 16 : 0) +
+    (r.duration !== null ? 8 : 0) +
+    (r.from_date || r.to_date ? 4 : 0) +
+    (r.from_time ? 2 : 0) +
+    (r.weekday !== null ? 1 : 0);
   const winner = applicable.reduce((best, r) => (specificity(r) > specificity(best) ? r : best));
 
-  let amount = Number(winner.amount);
-  let label = winner.label;
-  if (input.tier) {
-    const tier = ctx.sql.query<TierRow>('SELECT * FROM rally_tiers WHERE key = ?', [input.tier])[0];
-    if (tier && tier.discount_pct > 0) {
-      amount = Math.round(amount * (1 - tier.discount_pct / 100));
-      label = `${winner.label} − ${tier.title} ${tier.discount_pct}%`;
-    }
+  // No membership discount: padel prices the COURT, not the customer. What a
+  // club sells instead is prepaid credit (rally_credit_packs) — see the wallet.
+  return { price: moneyOf(winner.amount, winner.currency), label: winner.label };
+}
+
+// ---------------------------------------------------------------------------
+// The wallet — a club's prepaid balance, as an append-only ledger
+// ---------------------------------------------------------------------------
+
+const oreOf = (m: Money): number => Math.round(Number(m.amount) * 100);
+const kronor = (ore: number, currency = 'SEK'): Money =>
+  moneyOf((ore / 100).toFixed(2).replace(/\.00$/, ''), currency);
+
+/** Balance is the SUM of entries, never a stored column that could drift from them. */
+export function walletBalance(ctx: OperationContext, memberId: string): number {
+  return (
+    ctx.sql.query<{ b: number | null }>(
+      'SELECT COALESCE(SUM(delta_ore), 0) AS b FROM rally_wallet_entries WHERE member_id = ?',
+      [memberId],
+    )[0]?.b ?? 0
+  );
+}
+
+function addEntry(
+  ctx: OperationContext,
+  input: { memberId: string; deltaOre: number; reason: string; reservationId?: string },
+): void {
+  ctx.sql.exec(
+    `INSERT INTO rally_wallet_entries (id, member_id, delta_ore, reason, reservation_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      ulid(),
+      input.memberId,
+      input.deltaOre,
+      input.reason,
+      input.reservationId ?? null,
+      new Date().toISOString(),
+    ],
+  );
+}
+
+/**
+ * Spend from the balance. Throws rather than going negative.
+ *
+ * Composed INSIDE the booking's own transaction, which is why this needs no
+ * two-phase anything: the scope is one Durable Object, so debiting the wallet and
+ * confirming the court either both happen or neither does. The classic
+ * "charged but not booked" failure cannot occur here.
+ */
+export function debitWallet(
+  ctx: OperationContext,
+  input: { memberId: string; amountOre: number; reason: string; reservationId?: string },
+): number {
+  const balance = walletBalance(ctx, input.memberId);
+  if (input.amountOre > balance) {
+    throw new Error(
+      `insufficient balance: ${(balance / 100).toFixed(2)} available, ${(input.amountOre / 100).toFixed(2)} required`,
+    );
   }
-  return { price: moneyOf(String(amount), winner.currency), label };
+  addEntry(ctx, { ...input, deltaOre: -input.amountOre });
+  return balance - input.amountOre;
+}
+
+/**
+ * Top up. `price_ore` is what the member PAID, `credit_ore` what they RECEIVED —
+ * "5 games for the price of 4" is the gap between them. Keeping them separate is
+ * what lets the ledger record the credit while an invoice records the payment.
+ */
+export function creditFromPack(
+  ctx: OperationContext,
+  input: { memberId: string; packKey: string },
+): { balanceOre: number; paid: Money; received: Money } {
+  const pack = ctx.sql.query<CreditPackRow>('SELECT * FROM rally_credit_packs WHERE key = ?', [
+    input.packKey,
+  ])[0];
+  if (!pack) throw new Error(`no such credit pack: ${input.packKey}`);
+  addEntry(ctx, {
+    memberId: input.memberId,
+    deltaOre: pack.credit_ore,
+    reason: `pack:${pack.key}`,
+  });
+  return {
+    balanceOre: walletBalance(ctx, input.memberId),
+    paid: kronor(pack.price_ore),
+    received: kronor(pack.credit_ore),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +656,8 @@ const upsertPriceRuleOp: OperationHandler<
     weekday?: number;
     fromTime?: string;
     toTime?: string;
+    fromDate?: string;
+    toDate?: string;
     duration?: number;
     amount: string;
     currency?: string;
@@ -511,8 +668,9 @@ const upsertPriceRuleOp: OperationHandler<
   const id = input.id ?? ulid();
   ctx.sql.exec(
     `INSERT OR REPLACE INTO rally_price_rules
-       (id, label, resource_id, weekday, from_time, to_time, duration, amount, currency, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, label, resource_id, weekday, from_time, to_time, from_date, to_date,
+        duration, amount, currency, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.label,
@@ -520,6 +678,8 @@ const upsertPriceRuleOp: OperationHandler<
       input.weekday ?? null,
       input.fromTime ?? null,
       input.toTime ?? null,
+      input.fromDate ?? null,
+      input.toDate ?? null,
       input.duration ?? null,
       input.amount,
       input.currency ?? 'SEK',
@@ -529,21 +689,138 @@ const upsertPriceRuleOp: OperationHandler<
   return ctx.sql.query<PriceRuleRow>('SELECT * FROM rally_price_rules WHERE id = ?', [id])[0]!;
 };
 
-const upsertTierOp: OperationHandler<
-  { key: string; title: string; discountPct?: number; monthlyAmount?: string },
-  TierRow
+const upsertPackOp: OperationHandler<
+  { key: string; title: string; priceOre: number; creditOre: number },
+  CreditPackRow
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(RALLY_PERM.managePricing));
   ctx.sql.exec(
-    `INSERT OR REPLACE INTO rally_tiers (key, title, discount_pct, monthly_amount, currency)
-     VALUES (?, ?, ?, ?, 'SEK')`,
-    [input.key, input.title, input.discountPct ?? 0, input.monthlyAmount ?? '0'],
+    `INSERT OR REPLACE INTO rally_credit_packs (key, title, price_ore, credit_ore)
+     VALUES (?, ?, ?, ?)`,
+    [input.key, input.title, input.priceOre, input.creditOre],
   );
-  return ctx.sql.query<TierRow>('SELECT * FROM rally_tiers WHERE key = ?', [input.key])[0]!;
+  return ctx.sql.query<CreditPackRow>('SELECT * FROM rally_credit_packs WHERE key = ?', [
+    input.key,
+  ])[0]!;
+};
+
+const upsertPlanOp: OperationHandler<
+  { key: string; title: string; monthlyOre: number; monthlyCreditOre: number },
+  PlanRow
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.managePricing));
+  ctx.sql.exec(
+    `INSERT OR REPLACE INTO rally_plans (key, title, monthly_ore, monthly_credit_ore)
+     VALUES (?, ?, ?, ?)`,
+    [input.key, input.title, input.monthlyOre, input.monthlyCreditOre],
+  );
+  return ctx.sql.query<PlanRow>('SELECT * FROM rally_plans WHERE key = ?', [input.key])[0]!;
+};
+
+/** Read a balance and its history — narrowed to the member, so only your own. */
+const walletOp: OperationHandler<
+  { memberId: string },
+  { balance: Money; entries: WalletEntryRow[] }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(BK.read, memberRef(input.memberId)));
+  return {
+    balance: kronor(walletBalance(ctx, input.memberId)),
+    entries: ctx.sql.query<WalletEntryRow>(
+      'SELECT * FROM rally_wallet_entries WHERE member_id = ? ORDER BY id DESC',
+      [input.memberId],
+    ),
+  };
+};
+
+const buyCreditsOp: OperationHandler<
+  { memberId: string; packKey: string },
+  { balance: Money; paid: Money; received: Money }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.wallet));
+  const r = creditFromPack(ctx, input);
+  return { balance: kronor(r.balanceOre), paid: r.paid, received: r.received };
+};
+
+const subscribeOp: OperationHandler<
+  { memberId: string; planKey: string; on: string },
+  SubscriptionRow
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.wallet));
+  const plan = ctx.sql.query<PlanRow>('SELECT * FROM rally_plans WHERE key = ?', [input.planKey])[0];
+  if (!plan) throw new Error(`no such plan: ${input.planKey}`);
+  const open = ctx.sql.query<SubscriptionRow>(
+    `SELECT * FROM rally_subscriptions WHERE member_id = ? AND status = 'active'`,
+    [input.memberId],
+  )[0];
+  if (open) throw new Error(`member already has an active subscription`);
+
+  const id = ulid();
+  ctx.sql.exec(
+    `INSERT INTO rally_subscriptions
+       (id, member_id, plan_key, status, started_on, next_charge_on)
+     VALUES (?, ?, ?, 'active', ?, ?)`,
+    [id, input.memberId, plan.key, input.on, input.on],
+  );
+  return ctx.sql.query<SubscriptionRow>('SELECT * FROM rally_subscriptions WHERE id = ?', [id])[0]!;
+};
+
+const cancelSubscriptionOp: OperationHandler<{ subscriptionId: string }, SubscriptionRow> = async (
+  ctx,
+  input,
+) => {
+  const sub = ctx.sql.query<SubscriptionRow>('SELECT * FROM rally_subscriptions WHERE id = ?', [
+    input.subscriptionId,
+  ])[0];
+  if (!sub) throw new Error(`subscription not found: ${input.subscriptionId}`);
+  assertAllowed(await ctx.check(BK.read, memberRef(sub.member_id)));
+  ctx.sql.exec(
+    `UPDATE rally_subscriptions SET status = 'cancelled', cancelled_at = ? WHERE id = ?`,
+    [new Date().toISOString(), sub.id],
+  );
+  return ctx.sql.query<SubscriptionRow>('SELECT * FROM rally_subscriptions WHERE id = ?', [sub.id])[0]!;
+};
+
+/**
+ * Charge every subscription due on or before `on`, crediting the wallet.
+ *
+ * A subscription that grants monthly credit IS a wallet topped up on a schedule —
+ * one mechanism, not two. In production the schedule is a Workflow (durable,
+ * long-waiting, per-step retry, per docs/design/booking-social.md §7), and the
+ * actual card charge is a payment connector; this operation is the step such a
+ * workflow would invoke, and it is idempotent per (subscription, due date)
+ * because it advances `next_charge_on` in the same transaction as the credit.
+ */
+const runBillingOp: OperationHandler<
+  { on: string },
+  { charged: number; creditedOre: number }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.managePricing));
+  const due = ctx.sql.query<SubscriptionRow>(
+    `SELECT * FROM rally_subscriptions WHERE status = 'active' AND next_charge_on <= ?`,
+    [input.on],
+  );
+  let creditedOre = 0;
+  for (const sub of due) {
+    const plan = ctx.sql.query<PlanRow>('SELECT * FROM rally_plans WHERE key = ?', [sub.plan_key])[0];
+    if (!plan) continue;
+    addEntry(ctx, {
+      memberId: sub.member_id,
+      deltaOre: plan.monthly_credit_ore,
+      reason: `plan:${plan.key}`,
+    });
+    creditedOre += plan.monthly_credit_ore;
+    const next = new Date(`${sub.next_charge_on}T12:00:00Z`);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    ctx.sql.exec('UPDATE rally_subscriptions SET next_charge_on = ? WHERE id = ?', [
+      next.toISOString().slice(0, 10),
+      sub.id,
+    ]);
+  }
+  return { charged: due.length, creditedOre };
 };
 
 const createMemberOp: OperationHandler<
-  { partyRef: string; name: string; phone?: string; tier?: string; level?: string },
+  { partyRef: string; name: string; phone?: string; level?: string },
   MemberRow
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(RALLY_PERM.manageMembers));
@@ -552,17 +829,9 @@ const createMemberOp: OperationHandler<
   // must be a real data-subject id, or crypto-shredding has nothing to key on.
   const partyRef = dataSubjectId.parse(input.partyRef);
   ctx.sql.exec(
-    `INSERT INTO rally_members (id, party_ref, name, phone, tier, level, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [
-      id,
-      partyRef,
-      input.name,
-      input.phone ?? null,
-      input.tier ?? 'drop-in',
-      input.level ?? null,
-      new Date().toISOString(),
-    ],
+    `INSERT INTO rally_members (id, party_ref, name, phone, level, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, partyRef, input.name, input.phone ?? null, input.level ?? null, new Date().toISOString()],
   );
   return ctx.sql.query<MemberRow>('SELECT * FROM rally_members WHERE id = ?', [id])[0]!;
 };
@@ -608,7 +877,8 @@ export interface VenueSnapshot {
   hours: HoursRow[];
   courtHours: CourtHoursRow[];
   courts: CourtRow[];
-  tiers: TierRow[];
+  creditPacks: CreditPackRow[];
+  plans: PlanRow[];
   priceRules: PriceRuleRow[];
   closures: ClosureRow[];
 }
@@ -625,7 +895,8 @@ const getVenueOp: OperationHandler<undefined, VenueSnapshot> = async (ctx) => {
     hours: ctx.sql.query<HoursRow>('SELECT * FROM rally_venue_hours ORDER BY weekday'),
     courtHours: ctx.sql.query<CourtHoursRow>('SELECT * FROM rally_court_hours'),
     courts: ctx.sql.query<CourtRow>('SELECT * FROM rally_courts'),
-    tiers: ctx.sql.query<TierRow>('SELECT * FROM rally_tiers ORDER BY discount_pct'),
+    creditPacks: ctx.sql.query<CreditPackRow>('SELECT * FROM rally_credit_packs ORDER BY price_ore'),
+    plans: ctx.sql.query<PlanRow>('SELECT * FROM rally_plans ORDER BY monthly_ore'),
     priceRules: ctx.sql.query<PriceRuleRow>('SELECT * FROM rally_price_rules ORDER BY created_at'),
     closures: ctx.sql.query<ClosureRow>('SELECT * FROM rally_closures ORDER BY on_date'),
   };
@@ -694,7 +965,7 @@ const bookInput = z.object({
 /**
  * THE PRICING MOMENT. Validate the slot against the club's own rules (open
  * window, allowed duration), resolve the price from the rule table + the
- * member's tier, then hand the engine an absolute interval and let it arbitrate.
+ * then hand the engine an absolute interval and let it arbitrate.
  *
  * If the court is taken, the engine throws `SlotUnavailable` — this vertical
  * never checks for a clash itself, because it cannot do so correctly and the
@@ -735,7 +1006,6 @@ const bookCourtOp: OperationHandler<
     date: input.date,
     time: input.time,
     duration: input.duration,
-    tier: member.tier,
   });
 
   const now = input.now ?? new Date().toISOString();
@@ -759,21 +1029,43 @@ const bookCourtOp: OperationHandler<
   return { reservation, price, ruleLabel: label };
 };
 
+/**
+ * Confirm, optionally paying from the club balance.
+ *
+ * The debit and the confirm are ONE transaction in ONE scope, which is a single
+ * Durable Object — so "charged but not booked" and "booked but not charged" are
+ * both unrepresentable. If the wallet is short, the whole confirm rolls back and
+ * the slot stays held; if the court was taken while the hold lapsed, the engine
+ * throws and no money moves. That property is free here and expensive almost
+ * anywhere else.
+ */
 const confirmBookingOp: OperationHandler<
-  { reservationId: string; now?: string },
-  { reservation: Reservation; price: Money }
+  { reservationId: string; payWith?: 'wallet' | 'card'; now?: string },
+  { reservation: Reservation; price: Money; paidFromWallet: boolean; balance: Money | null }
 > = async (ctx, input) => {
   assertAllowed(await ctx.check(BK.confirm, reservationRef(input.reservationId)));
-  const booking = ctx.sql.query<{ price_amount: string; currency: string }>(
-    'SELECT price_amount, currency FROM rally_bookings WHERE reservation_id = ?',
+  const booking = ctx.sql.query<{ member_id: string; price_amount: string; currency: string }>(
+    'SELECT member_id, price_amount, currency FROM rally_bookings WHERE reservation_id = ?',
     [input.reservationId],
   )[0];
   if (!booking) throw new Error(`no RallyPoint booking for ${input.reservationId}`);
+
+  const price = moneyOf(booking.price_amount, booking.currency);
   const reservation = confirmReservation(ctx, {
     reservationId: input.reservationId,
     ...(input.now !== undefined ? { now: input.now } : {}),
   });
-  return { reservation, price: moneyOf(booking.price_amount, booking.currency) };
+
+  if (input.payWith !== 'wallet') {
+    return { reservation, price, paidFromWallet: false, balance: null };
+  }
+  const remaining = debitWallet(ctx, {
+    memberId: booking.member_id,
+    amountOre: oreOf(price),
+    reason: 'booking',
+    reservationId: reservation.id,
+  });
+  return { reservation, price, paidFromWallet: true, balance: kronor(remaining, price.currency) };
 };
 
 const openMatchInput = bookInput.extend({
@@ -812,7 +1104,6 @@ const createOpenMatchOp: OperationHandler<
     date: input.date,
     time: input.time,
     duration: input.duration,
-    tier: member.tier,
   });
 
   const now = input.now ?? new Date().toISOString();
@@ -1167,7 +1458,13 @@ export const rallyModule: ModuleRegistration = {
     'rally/register-court': registerCourtOp as never,
     'rally/add-closure': addClosureOp as never,
     'rally/upsert-price-rule': upsertPriceRuleOp as never,
-    'rally/upsert-tier': upsertTierOp as never,
+    'rally/upsert-pack': upsertPackOp as never,
+    'rally/upsert-plan': upsertPlanOp as never,
+    'rally/wallet': walletOp as never,
+    'rally/buy-credits': buyCreditsOp as never,
+    'rally/subscribe': subscribeOp as never,
+    'rally/cancel-subscription': cancelSubscriptionOp as never,
+    'rally/run-billing': runBillingOp as never,
     'rally/create-member': createMemberOp as never,
     'rally/list-members': listMembersOp as never,
     'rally/get-venue': getVenueOp as never,

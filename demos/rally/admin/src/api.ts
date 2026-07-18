@@ -46,7 +46,6 @@ export interface Member {
   party_ref: string;
   name: string;
   phone: string | null;
-  tier: string;
   level: string | null;
 }
 
@@ -61,11 +60,17 @@ export interface CourtConfig {
   durations: string;
   indoor: number;
 }
-export interface Tier {
+export interface CreditPack {
   key: string;
   title: string;
-  discount_pct: number;
-  monthly_amount: string;
+  price_ore: number;
+  credit_ore: number;
+}
+export interface Plan {
+  key: string;
+  title: string;
+  monthly_ore: number;
+  monthly_credit_ore: number;
 }
 export interface PriceRule {
   id: string;
@@ -74,6 +79,8 @@ export interface PriceRule {
   weekday: number | null;
   from_time: string | null;
   to_time: string | null;
+  from_date: string | null;
+  to_date: string | null;
   duration: number | null;
   amount: string;
   currency: string;
@@ -91,7 +98,8 @@ export interface VenueSnapshot {
   hours: Hours[];
   courtHours: (Hours & { resource_id: string })[];
   courts: CourtConfig[];
-  tiers: Tier[];
+  creditPacks: CreditPack[];
+  plans: Plan[];
   priceRules: PriceRule[];
   closures: Closure[];
 }
@@ -217,7 +225,7 @@ export const api = {
     toTime?: string;
     duration?: number;
   }): Promise<PriceRule> => post('/api/price-rules', input),
-  addMember: (input: { partyRef: string; name: string; tier?: string }): Promise<Member> =>
+  addMember: (input: { partyRef: string; name: string }): Promise<Member> =>
     post('/api/members', input),
 
   occupancy: (from: string, to: string): Promise<Occupancy> =>
