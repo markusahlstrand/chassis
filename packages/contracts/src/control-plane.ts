@@ -46,9 +46,18 @@ export const identityLink = z.object({
 });
 export type IdentityLink = z.infer<typeof identityLink>;
 
+/**
+ * What the directory knows about an authenticated external identity, once the caller
+ * has said WHICH tenant's pool it came from.
+ *
+ * No `tenantId` here on purpose. The lookup takes the tenant as input (§4.3: with one
+ * auth pool per white-label tenant, an external subject id is unique only *within* its
+ * pool), so echoing it back would invite the very mental model this fixes — that the
+ * directory derives the tenant from the identity. You tell it which tenant; it tells
+ * you who.
+ */
 export const resolvedIdentity = z.object({
   principal: principalId,
-  tenantId,
   scopeId: scopeId.nullable(),
 });
 export type ResolvedIdentity = z.infer<typeof resolvedIdentity>;

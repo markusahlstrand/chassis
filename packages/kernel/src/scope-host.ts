@@ -338,10 +338,33 @@ export interface HostAdmin {
   // authenticated, only WHO they are; the mechanism stays a swappable edge
   // adapter. Authentication only — authorization remains roles/grants.
 
-  /** Bind an external identity to a principal + home node. Idempotent on (provider, externalId); audited. */
+  /**
+   * Bind an external identity to a principal + home node. Audited.
+   *
+   * Keyed `(tenantId, provider, externalId)` — **not** `(provider, externalId)`.
+   * kernel-design §4.3: with one auth pool per white-label tenant, an external subject
+   * id is unique only *within* its pool, so a globally-keyed mapping is a cross-tenant
+   * identity bleed. It is also what lets one staff login belong to several tenants: one
+   * external id, one row per tenant.
+   *
+   * Idempotent when the key already maps to the SAME principal. A key already bound to a
+   * DIFFERENT principal **throws** — it means two subjects collided, and silently
+   * ignoring it would resolve the second person as the first.
+   */
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
-  /** Resolve an external identity to its principal + home node — the auth adapter's read path. */
-  resolveIdentity(provider: string, externalId: string): Promise<ResolvedIdentity | undefined>;
+  /**
+   * Resolve an external identity within a tenant — the auth adapter's read path.
+   *
+   * The tenant is an INPUT: the caller knows which pool the credential came from (its
+   * hostname, or the org claim on a pool-scoped token). It is not derived from the
+   * identity, because across per-tenant pools the same `externalId` legitimately names
+   * different people.
+   */
+  resolveIdentity(
+    tenantId: TenantId,
+    provider: string,
+    externalId: string,
+  ): Promise<ResolvedIdentity | undefined>;
 
   /**
    * The append-only admin audit trail, oldest first by default (ULID order is

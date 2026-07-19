@@ -150,9 +150,10 @@ interface ControlPlaneStub {
     createdAt: string,
   ): Promise<boolean>;
   resolveIdentity(
+    tenantId: string,
     provider: string,
     externalId: string,
-  ): Promise<{ principal: string; tenantId: string; scopeId: string | null } | undefined>;
+  ): Promise<{ principal: string; scopeId: string | null } | undefined>;
   recordAdmin(entry: AdminEntry): Promise<void>;
   auditLog(query: AuditLogQuery): Promise<AdminLogEntry[]>;
 }
@@ -697,14 +698,14 @@ export class CloudflareScopeHost implements ScopeHost {
           { provider: parsed.provider, externalId: parsed.externalId, principal: parsed.principal },
         );
       },
-      resolveIdentity: async (provider, externalId): Promise<ResolvedIdentity | undefined> => {
-        const row = await this.cp.resolveIdentity(provider, externalId);
+      resolveIdentity: async (
+        tenantId,
+        provider,
+        externalId,
+      ): Promise<ResolvedIdentity | undefined> => {
+        const row = await this.cp.resolveIdentity(tenantId, provider, externalId);
         if (!row) return undefined;
-        return resolvedIdentity.parse({
-          principal: row.principal,
-          tenantId: row.tenantId,
-          scopeId: row.scopeId,
-        });
+        return resolvedIdentity.parse({ principal: row.principal, scopeId: row.scopeId });
       },
       auditLog: async (filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
         const rows = await this.cp.auditLog({

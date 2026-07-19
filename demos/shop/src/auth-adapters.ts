@@ -74,11 +74,11 @@ export function betterAuthAdapter(auth: Auth, host: SqliteScopeHost, world: Shop
       if (!session?.user) return null;
       const user = session.user;
       const mapped =
-        (await host.admin.resolveIdentity('better-auth', user.id)) ??
+        (await host.admin.resolveIdentity(world.t1, 'better-auth', user.id)) ??
         (await provisionShopper(host, world, user));
       return {
         principal: mapped.principal,
-        tenantId: mapped.tenantId,
+        tenantId: world.t1,
         scopeId: mapped.scopeId ?? world.s1,
         via: 'better-auth',
         display: user.name ?? user.email ?? 'kund',
@@ -139,7 +139,7 @@ async function provisionShopper(
   host: SqliteScopeHost,
   world: ShopWorld,
   user: { id: string; email?: string | null; name?: string | null },
-): Promise<{ principal: PrincipalId; tenantId: TenantId; scopeId: ScopeId | null }> {
+): Promise<{ principal: PrincipalId; scopeId: ScopeId | null }> {
   const staff = platformActorId.parse(ulid());
   const principal = principalId.parse(ulid());
 
@@ -172,7 +172,7 @@ async function provisionShopper(
     scopeId: world.s1,
   });
 
-  return { principal, tenantId: world.t1, scopeId: world.s1 };
+  return { principal, scopeId: world.s1 };
 }
 
 /** Resolve a request to a principal across all mounted adapters; null if none match. */

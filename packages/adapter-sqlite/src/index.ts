@@ -336,7 +336,7 @@ export class SqliteScopeHost implements ScopeHost {
         tenant_id    TEXT NOT NULL,
         scope_id     TEXT,
         created_at   TEXT NOT NULL,
-        PRIMARY KEY (provider, external_id)
+        PRIMARY KEY (tenant_id, provider, external_id)
       );
       -- Append-only control-plane audit trail (control-plane.md §4.4). Lives in
       -- the directory, not a scope DB: it records cross-tenant staff actions and
@@ -1217,9 +1217,27 @@ export class SqliteScopeHost implements ScopeHost {
         ).map((r) => r.entitlement_key),
       linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
-        const info = this.directory
+        // Read before write. `INSERT OR IGNORE` alone cannot tell "already bound to the
+        // same principal" (idempotent) from "already bound to someone else" (a
+        // collision), and silently ignoring the second resolves one person as another.
+        const existing = this.directory
           .prepare(
-            `INSERT OR IGNORE INTO _substrat_identities
+            `SELECT principal_id FROM _substrat_identities
+             WHERE tenant_id = ? AND provider = ? AND external_id = ?`,
+          )
+          .get(parsed.tenantId, parsed.provider, parsed.externalId) as
+          | { principal_id: string }
+          | undefined;
+        if (existing) {
+          if (existing.principal_id === parsed.principal) return; // idempotent, unaudited
+          throw new Error(
+            `identity ${parsed.provider}:${parsed.externalId} in tenant ${parsed.tenantId} ` +
+              `is already bound to ${existing.principal_id}`,
+          );
+        }
+        this.directory
+          .prepare(
+            `INSERT INTO _substrat_identities
                (provider, external_id, principal_id, tenant_id, scope_id, created_at)
              VALUES (?, ?, ?, ?, ?, ?)`,
           )
@@ -1231,8 +1249,6 @@ export class SqliteScopeHost implements ScopeHost {
             parsed.scopeId ?? null,
             new Date().toISOString(),
           );
-        // Idempotent: an identity already bound is a no-op, and a no-op is not audited.
-        if (info.changes === 0) return;
         this.recordAdmin(
           actor,
           'linkIdentity',
@@ -1242,23 +1258,20 @@ export class SqliteScopeHost implements ScopeHost {
         );
       },
       resolveIdentity: async (
+        tenantId: TenantId,
         provider: string,
         externalId: string,
       ): Promise<ResolvedIdentity | undefined> => {
         const row = this.directory
           .prepare(
-            `SELECT principal_id, tenant_id, scope_id FROM _substrat_identities
-             WHERE provider = ? AND external_id = ?`,
+            `SELECT principal_id, scope_id FROM _substrat_identities
+             WHERE tenant_id = ? AND provider = ? AND external_id = ?`,
           )
-          .get(provider, externalId) as
-          | { principal_id: string; tenant_id: string; scope_id: string | null }
+          .get(tenantId, provider, externalId) as
+          | { principal_id: string; scope_id: string | null }
           | undefined;
         if (!row) return undefined;
-        return resolvedIdentity.parse({
-          principal: row.principal_id,
-          tenantId: row.tenant_id,
-          scopeId: row.scope_id,
-        });
+        return resolvedIdentity.parse({ principal: row.principal_id, scopeId: row.scope_id });
       },
       auditLog: async (filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
         const where: string[] = [];
@@ -1344,7 +1357,46 @@ export class SqliteScopeHost implements ScopeHost {
     if (!existing) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   }
 
+  /**
+   * Rebuild `_substrat_identities` when it still carries the pre-K-22 global key.
+   * A PRIMARY KEY cannot be ALTERed, so this is create-copy-drop-rename.
+   *
+   * The old shape is detected from `sqlite_master.sql` rather than `PRAGMA table_info`
+   * (which reports PK membership but not composition readably), and because the same
+   * check works on DO SQLite, where PRAGMA is restricted — so both adapters can use
+   * one detection strategy.
+   *
+   * Rows carry `tenant_id` already, so the copy is lossless: what changes is which
+   * columns are unique, not what is stored. Two pools that both issued `123` were
+   * previously ONE row (the second link silently ignored); after the rebuild the
+   * surviving row keeps its tenant and the other tenant's link can be made again.
+   */
+  private ensureIdentityKey(): void {
+    const row = this.directory
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get('_substrat_identities') as { sql: string } | undefined;
+    if (!row || row.sql.includes('PRIMARY KEY (tenant_id, provider, external_id)')) return;
+    this.directory.exec(`
+      CREATE TABLE _substrat_identities_new (
+        provider     TEXT NOT NULL,
+        external_id  TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        tenant_id    TEXT NOT NULL,
+        scope_id     TEXT,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, provider, external_id)
+      );
+      INSERT OR IGNORE INTO _substrat_identities_new
+        (provider, external_id, principal_id, tenant_id, scope_id, created_at)
+        SELECT provider, external_id, principal_id, tenant_id, scope_id, created_at
+        FROM _substrat_identities;
+      DROP TABLE _substrat_identities;
+      ALTER TABLE _substrat_identities_new RENAME TO _substrat_identities;
+    `);
+  }
+
   private ensureDirectoryColumns(): void {
+    this.ensureIdentityKey();
     // K-21's tombstone on tenant-level tuples (membership lives here).
     this.ensureColumn(this.directory, '_substrat_tenant_tuples', 'revoked_at', 'revoked_at TEXT');
     const existing = new Set(
