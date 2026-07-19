@@ -20,6 +20,7 @@ export { z } from 'zod';
 
 export * from './ids.js';
 export * from './registry.js';
+export * from './routing.js';
 export * from './tenancy.js';
 export * from './control-plane.js';
 export * from './permission.js';

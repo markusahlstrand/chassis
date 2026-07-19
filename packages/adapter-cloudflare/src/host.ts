@@ -6,7 +6,10 @@ import {
   identityPool,
   createOrgInput,
   promotionAcknowledgement,
+  bindHostnameInput,
+  hostnameBinding,
   publishVersionInput,
+  routeTarget,
   registerVerticalInput,
   vertical as verticalSchema,
   verticalChannel,
@@ -36,6 +39,8 @@ import {
   type PlatformActorId,
   type PrincipalId,
   type PromotionAcknowledgement,
+  type BindHostnameInput,
+  type HostnameBinding,
   type PublishVersionInput,
   type RegisterVerticalInput,
   type Vertical,
@@ -71,6 +76,7 @@ import type {
   AccessLogRow,
   AuditLogQuery,
   ChannelRow,
+  HostnameRow,
   OrgRow,
   RoleRow,
   ScopeRow,
@@ -148,6 +154,14 @@ interface ControlPlaneStub {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  readHostname(hostname: string): Promise<HostnameRow | undefined>;
+  demoteCanonical(scopeId: string, surface: string): Promise<void>;
+  upsertHostname(h: {
+    hostname: string; tenantId: string; scopeId: string; verticalSlug: string | null;
+    surface: string; region: string | null; canonical: boolean; createdAt: string;
+  }): Promise<void>;
+  setHostnameStatus(hostname: string, status: string, note: string | null): Promise<void>;
+  listHostnames(filter: { tenantId?: string; scopeId?: string }): Promise<HostnameRow[]>;
   readVertical(slug: string): Promise<VerticalRow | undefined>;
   insertVertical(slug: string, name: string, source: string, createdAt: string): Promise<void>;
   listVerticals(): Promise<VerticalRow[]>;
@@ -512,6 +526,20 @@ export class CloudflareScopeHost implements ScopeHost {
     // table) while the contract requires them, so this parse is where that gap is
     // held shut — and it is the same parse the pure adapter does, which is what
     // makes the shared contract suite meaningful.
+    const mapHostname = (r: HostnameRow): HostnameBinding =>
+      hostnameBinding.parse({
+        hostname: r.hostname,
+        tenantId: r.tenant_id,
+        scopeId: r.scope_id,
+        verticalSlug: r.vertical_slug,
+        surface: r.surface,
+        region: r.region,
+        status: r.status,
+        statusNote: r.status_note,
+        canonical: r.canonical === 1,
+        createdAt: r.created_at,
+      });
+
     const mapVertical = (r: VerticalRow): Vertical =>
       verticalSchema.parse({ slug: r.slug, name: r.name, source: r.source, createdAt: r.created_at });
     const mapVersion = (r: VersionRow): VerticalVersion =>
@@ -708,6 +736,80 @@ export class CloudflareScopeHost implements ScopeHost {
       },
       // -- vertical + version registry (#31) ---------------------------------
 
+      // -- the hostname map (K-26) -------------------------------------------
+
+      bindHostname: async (actor, input: BindHostnameInput) => {
+        const parsed = bindHostnameInput.parse(input);
+        const scope = await this.cp.getScopeRecord(parsed.tenantId, parsed.scopeId);
+        if (!scope) {
+          throw new Error(`unknown scope ${parsed.scopeId} in tenant ${parsed.tenantId}`);
+        }
+        const existing = await this.cp.readHostname(parsed.hostname);
+        if (existing && existing.scope_id !== parsed.scopeId) {
+          // A hostname routes to exactly one place; silently rebinding would move
+          // another tenant's traffic.
+          throw new Error(`hostname '${parsed.hostname}' is already bound to another scope`);
+        }
+        // Exactly one canonical per (scope, surface).
+        if (parsed.canonical) await this.cp.demoteCanonical(parsed.scopeId, parsed.surface);
+        await this.cp.upsertHostname({
+          hostname: parsed.hostname,
+          tenantId: parsed.tenantId,
+          scopeId: parsed.scopeId,
+          verticalSlug: scope.vertical,
+          surface: parsed.surface,
+          region: parsed.region,
+          canonical: parsed.canonical,
+          createdAt: new Date().toISOString(),
+        });
+        await this.recordAdmin(
+          actor,
+          'bindHostname',
+          { tenantId: parsed.tenantId, scopeId: parsed.scopeId, vertical: scope.vertical },
+          null,
+          parsed,
+        );
+      },
+      setHostnameStatus: async (actor, hostname: string, status, note?: string) => {
+        const row = await this.cp.readHostname(hostname);
+        if (!row) throw new Error(`unknown hostname '${hostname}'`);
+        if (row.status === status) return; // idempotent, unaudited
+        await this.cp.setHostnameStatus(hostname, status, note ?? null);
+        await this.recordAdmin(
+          actor,
+          'setHostnameStatus',
+          { tenantId: row.tenant_id as TenantId, scopeId: row.scope_id as ScopeId },
+          { status: row.status },
+          { status, note: note ?? null },
+        );
+      },
+      listHostnames: async (actor, filter) => {
+        const rows = await this.cp.listHostnames({
+          tenantId: filter?.tenantId,
+          scopeId: filter?.scopeId,
+        });
+        await this.recordAccess(
+          actor,
+          'listHostnames',
+          { tenantId: filter?.tenantId ?? null, scopeId: filter?.scopeId ?? null },
+          filter,
+          rows.length,
+        );
+        return rows.map(mapHostname);
+      },
+      resolveHostname: async (hostname: string) => {
+        // The router's per-request read. No actor, not logged — the same machine-path
+        // carve-out resolveIdentity has (K-24).
+        const r = await this.cp.readHostname(hostname);
+        if (!r || r.status !== 'active') return undefined;
+        return routeTarget.parse({
+          tenantId: r.tenant_id,
+          scopeId: r.scope_id,
+          verticalSlug: r.vertical_slug,
+          surface: r.surface,
+          region: r.region,
+        });
+      },
       registerVertical: async (actor, input: RegisterVerticalInput) => {
         const parsed = registerVerticalInput.parse(input);
         const existing = await this.cp.readVertical(parsed.slug);

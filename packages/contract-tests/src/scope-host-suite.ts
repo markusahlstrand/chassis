@@ -486,6 +486,121 @@ export function scopeHostContractSuite(
       );
     });
 
+    // -- the hostname map (K-26) ---------------------------------------------
+    // §4.2 provisions a scope; this is what finally gives it a URL. The router
+    // resolves against these rows before dispatching to a vertical's worker.
+
+    it('binds a hostname as pending, and resolves nothing until it is active', async () => {
+      await host.admin.bindHostname(staff, {
+        hostname: 'acme.example.com',
+        tenantId: t1,
+        scopeId: s1,
+        surface: 'app',
+        region: null,
+        canonical: true,
+      });
+      // A custom domain is DNS validation and cert issuance, not a string somebody
+      // sets — so it does not serve until those finish.
+      expect(await host.admin.resolveHostname('acme.example.com')).toBeUndefined();
+
+      await host.admin.setHostnameStatus(staff, 'acme.example.com', 'verifying');
+      expect(await host.admin.resolveHostname('acme.example.com')).toBeUndefined();
+
+      await host.admin.setHostnameStatus(staff, 'acme.example.com', 'active');
+      expect(await host.admin.resolveHostname('acme.example.com')).toMatchObject({
+        tenantId: t1,
+        scopeId: s1,
+        surface: 'app',
+      });
+    });
+
+    it('routes two surfaces of ONE scope to different hostnames', async () => {
+      // The reason §5.5's one-hostname-per-scope was not enough: the shop fronts a
+      // storefront and a back office from the same data, and RallyPoint a player
+      // app and a manager console.
+      for (const [hostname, surface] of [
+        ['shop.example.com', 'storefront'],
+        ['admin.shop.example.com', 'back-office'],
+      ]) {
+        await host.admin.bindHostname(staff, {
+          hostname: hostname!,
+          tenantId: t1,
+          scopeId: s1,
+          surface: surface!,
+          region: null,
+          canonical: true,
+        });
+        await host.admin.setHostnameStatus(staff, hostname!, 'active');
+      }
+      expect((await host.admin.resolveHostname('shop.example.com'))?.surface).toBe('storefront');
+      expect((await host.admin.resolveHostname('admin.shop.example.com'))?.surface).toBe(
+        'back-office',
+      );
+    });
+
+    it('keeps exactly one canonical hostname per surface', async () => {
+      // "Which one do certs and redirects use" has to have one answer, so a new
+      // canonical demotes the old rather than producing two.
+      await host.admin.bindHostname(staff, {
+        hostname: 'alias.example.com',
+        tenantId: t1,
+        scopeId: s1,
+        surface: 'app',
+        region: null,
+        canonical: true,
+      });
+      const forApp = (await host.admin.listHostnames(staff, { scopeId: s1 })).filter(
+        (h) => h.surface === 'app',
+      );
+      expect(forApp.filter((h) => h.canonical).map((h) => h.hostname)).toEqual([
+        'alias.example.com',
+      ]);
+      // The demoted one is still bound — an alias, not a deletion.
+      expect(forApp.map((h) => h.hostname)).toContain('acme.example.com');
+    });
+
+    it('refuses to move a hostname to another scope', async () => {
+      // A hostname routes to exactly one place. Silently rebinding would move
+      // another tenant's traffic.
+      await expect(
+        host.admin.bindHostname(staff, {
+          hostname: 'acme.example.com',
+          tenantId: t2,
+          scopeId: s2,
+          surface: 'app',
+          region: null,
+          canonical: false,
+        }),
+      ).rejects.toThrow(/already bound to another scope/);
+    });
+
+    it('carries the region, which is what Regional Services is set from', async () => {
+      // Residency is per hostname, which is why it lives here rather than in a
+      // router deployed per jurisdiction (K-26).
+      await host.admin.bindHostname(staff, {
+        hostname: 'eu.example.com',
+        tenantId: t1,
+        scopeId: s1,
+        surface: 'app',
+        region: 'eu',
+        canonical: false,
+      });
+      await host.admin.setHostnameStatus(staff, 'eu.example.com', 'active');
+      expect((await host.admin.resolveHostname('eu.example.com'))?.region).toBe('eu');
+    });
+
+    it('records a failed hostname with the reason, rather than losing it', async () => {
+      await host.admin.setHostnameStatus(staff, 'eu.example.com', 'failed', 'DNS validation timed out');
+      const row = (await host.admin.listHostnames(staff, { scopeId: s1 })).find(
+        (h) => h.hostname === 'eu.example.com',
+      );
+      expect(row?.status).toBe('failed');
+      expect(row?.statusNote).toContain('DNS validation');
+      // And it stops serving — "broken" and "not yet working" are different states,
+      // but neither of them routes traffic.
+      expect(await host.admin.resolveHostname('eu.example.com')).toBeUndefined();
+    });
+
     it('rejects duplicate module registration', () => {
       expect(() => host.registerModule({ manifest: testModManifest })).toThrow(/already registered/);
     });

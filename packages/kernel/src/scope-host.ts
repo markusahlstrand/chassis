@@ -1,6 +1,7 @@
 import type {
   AdminAction,
   AccessLogEntry,
+  BindHostnameInput,
   AdminLogEntry,
   CapabilityGrant,
   CreateTenantInput,
@@ -20,9 +21,12 @@ import type {
   PermissionKey,
   PlatformActorId,
   ChannelName,
+  HostnameBinding,
+  HostnameStatus,
   PromotionAcknowledgement,
   PublishVersionInput,
   RegisterVerticalInput,
+  RouteTarget,
   PrincipalId,
   ResolvedIdentity,
   RoleAssignment,
@@ -335,6 +339,43 @@ export interface HostAdmin {
     scopeId: ScopeId,
     versionId: string,
   ): Promise<void>;
+
+  // -- the hostname map (K-26; control-plane.md §4.7) -------------------------
+
+  /**
+   * Bind a hostname to a scope's surface. Lands `pending` — a custom domain is DNS
+   * validation and certificate issuance, not a string somebody sets, so the states
+   * it passes through are §4.2's business.
+   *
+   * Exactly one hostname per (scope, surface) may be canonical; binding a second
+   * canonical demotes the first, because "which one do certs and redirects use" has
+   * to have one answer.
+   */
+  bindHostname(actor: PlatformActorId, input: BindHostnameInput): Promise<void>;
+  setHostnameStatus(
+    actor: PlatformActorId,
+    hostname: string,
+    status: HostnameStatus,
+    note?: string,
+  ): Promise<void>;
+  listHostnames(
+    actor: PlatformActorId,
+    filter?: { tenantId?: TenantId; scopeId?: ScopeId },
+  ): Promise<HostnameBinding[]>;
+
+  /**
+   * Resolve a hostname for the router — the per-request read path.
+   *
+   * Takes NO actor and is not logged, for the same reason `resolveIdentity` does
+   * not: this runs on every request, by a machine, before any staff member is
+   * involved. K-24's access log records who *read the directory*, and a router
+   * dispatching traffic is not that.
+   *
+   * Returns only `active` bindings. It does **not** re-check tenant or scope
+   * suspension: `getScope` already fails closed there (§7), and a second
+   * enforcement point is a second thing that can disagree.
+   */
+  resolveHostname(hostname: string): Promise<RouteTarget | undefined>;
 
   // -- tenant registry (control-plane.md §4.1) -------------------------------
 
