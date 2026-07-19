@@ -226,7 +226,7 @@ far too small for core banking, yet handling money. **Boundary discipline:** we 
 member register, governance and obligation ledger; the money rail is a connector (§7.5).
 *Engines: membership (new), invoicing, deliberative (new).*
 
-**16. Field service and work orders.** Proven (`demos/fsm`) but crowded (§7.5). What we
+**16. Field service and work orders.** Proven (`demos/callout`) but crowded (§7.5). What we
 solve is not FSM generally — it is vertical depth at niche scale: OVK, F-gas,
 borrprotokoll→SGU, EDI grossist. The reference vertical, not the flagship market.
 *Engines: workorder, invoicing, protocol.*
@@ -243,7 +243,7 @@ The seam matters more than the category. Most of the money is here, so is most o
 | Category | Build | Integrate / avoid |
 |---|---|---|
 | **HR** | Personalakt (Art. 9 registry), rekrytering (application→decision), scheduling, tid/frånvaro, kompetens (registry-with-validity) | **Payroll** — regulatory tables + money movement (Hogia, Fortnox). Performance reviews: no invariants, no compliance, weak fit |
-| **ERP** | Operational half: order → plock → leverans → service (`demos/shop`, `demos/bike-shop`) | **Financial half** — huvudbok, reskontra, moms, konsolidering. §7.5 already drew this line |
+| **ERP** | Operational half: order → plock → leverans → service (`demos/shop`, `demos/handlebar`) | **Financial half** — huvudbok, reskontra, moms, konsolidering. §7.5 already drew this line |
 | **Document control / QMS** | ISO ledningssystem, SOP versioning, policy attestation, medtech: version → approve → distribute → attest → retain | **Publishing CMS.** The fit is "controlled documents", never "content" |
 | **CRM** | Regulated relationship management: KYC, jäv, samtycke, medlemsdialog | **Generic CRM** — few invariants, high seat counts, Salesforce owns it |
 | **Insurance ops** | Claims (application→assessment→decision), MGA workflow, warranty administration | **Underwriting maths, actuarial, capital** |
@@ -372,7 +372,7 @@ almost entirely, in this order of evidence:
    Tier 3 insurance and HR slices. The widest unmet shape in the catalog, and the one
    carrying the most legally consequential invariants (eligibility, recusal, appeal
    without history rewrite).
-2. **Registry with validity** — categories 1, 2, 12, plus behörigheter in `demos/fsm`,
+2. **Registry with validity** — categories 1, 2, 12, plus behörigheter in `demos/callout`,
    kompetens in HR, besiktningsintervall in fastighet, ledarlicenser in clubs. Small,
    sharply defined, and already appearing in four places — **closest to qualifying for
    extraction under §3's rule.**

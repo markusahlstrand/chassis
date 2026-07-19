@@ -29,7 +29,7 @@ This demo must prove **new** things or it is not worth building:
 **v1 demo** = "RallyPoint": a padel/tennis club — courts, open matches, memberships,
 coaches. **v2 skin** = "SalongTid": a hairdresser running the *same* engine with
 service-derived durations and per-stylist resources. The bike shop is a third, cheaper
-proof: the existing `CykelService` skin gains a drop-off booking, demonstrating
+proof: the existing `Handlebar` skin gains a drop-off booking, demonstrating
 `booking` + `workorder` composed in one vertical.
 
 ## 3. Tenancy setup

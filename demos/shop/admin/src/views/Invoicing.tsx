@@ -47,7 +47,7 @@ export function Invoicing({ notify }: { notify: (msg: string, ok?: boolean) => v
     <>
       <div className="sec-head">
         <div className="eyebrow">Byggt av engine-invoicing</div>
-        <h1>Fakturaunderlag</h1>
+        <h1>Invoice basis</h1>
         <p>
           Skapas automatiskt när en order betalas mot faktura — samma engine som verkstadsdemot,
           en ny händelsekälla. Ett exporterat underlag är låst och kan aldrig redigeras.

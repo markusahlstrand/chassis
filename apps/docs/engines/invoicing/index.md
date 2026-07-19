@@ -1,6 +1,6 @@
 # Invoicing engine
 
-`@substrat-run/engine-invoicing` — accumulates **invoice bases** (Swedish: *fakturaunderlag*)
+`@substrat-run/engine-invoicing` — accumulates **invoice bases** (Swedish: *invoice basis*)
 from billable events and makes them **immutable once exported**.
 
 It is the reference example of star-topology composition *and* cross-domain reuse: it builds

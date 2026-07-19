@@ -41,7 +41,7 @@ import { requireSigned } from '@substrat-run/engine-protocol';
 
 host.defineOperation('acme/workorder-complete', async (ctx, input) => {
   assertAllowed(await ctx.check(WORKORDER_PERM.complete));
-  requireSigned(ctx, input.order, 'egenkontroll-el'); // throws if not signed
+  requireSigned(ctx, input.order, 'self-inspection-electrical'); // throws if not signed
   return completeWorkOrder(ctx, input);
 });
 ```

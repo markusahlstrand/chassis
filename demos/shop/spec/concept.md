@@ -2,8 +2,8 @@
 
 Status: draft v0.1 · Last updated: 2026-07-15
 
-> A third vertical whose job is different from the first two. ServiceCo
-> ([demos/fsm](../../fsm/spec/concept.md)) and CykelService ([demos/bike-shop](../../bike-shop/spec/concept.md))
+> A third vertical whose job is different from the first two. Callout
+> ([demos/callout](../../fsm/spec/concept.md)) and Handlebar ([demos/handlebar](../../bike-shop/spec/concept.md))
 > are both **work-order-shaped** — they prove *same engine, new vocabulary*. This one is
 > a **different domain** (retail) that (a) reuses `engine-invoicing` across that domain
 > boundary and (b) introduces a **new class of invariant** the current engines don't have:
@@ -14,7 +14,7 @@ Status: draft v0.1 · Last updated: 2026-07-15
 ## 1. What this demo must prove (beyond the first two)
 
 1. **A published engine reused across a genuinely different domain.** `engine-invoicing`
-   builds a fakturaunderlag from a **retail order**, not a service work order — the
+   builds an invoice basis from a **retail order**, not a service work order — the
    star-topology reuse the two repair shops can't demonstrate.
 2. **Additive engine evolution, on stage.** Invoicing learns a *second* input event
    (`commerce.order-placed`) **additively** — new `consumes` entry + a second consumer with
@@ -34,7 +34,7 @@ Status: draft v0.1 · Last updated: 2026-07-15
 beans (variants: hela bönor / malet × 250 g / 1 kg) and brewing gear. A single roastery
 means genuinely **scarce stock** — a limited micro-lot drop is the natural setting for the
 oversell beat. Customers can check out **mot faktura** (invoice payment — ubiquitous in
-Swedish B2B/B2C via Klarna/Qliro), which is what produces a fakturaunderlag. Card/Swish
+Swedish B2B/B2C via Klarna/Qliro), which is what produces an invoice basis. Card/Swish
 would be a payment **connector**, deliberately deferred.
 
 **Bönfeber Rosteri AB** (tenant B) exists only to give the cross-tenant attack a perpetrator.
@@ -65,7 +65,7 @@ filtering), and the oversell race is between two concurrent Shopper carts.
 | Order | `shop_orders` + `shop_order_lines` | **immutable after placement** (§6) |
 | Rabattkod | `shop_discounts` | vertical vocabulary + the pricing moment (§5) |
 | Kund | `shop_customers` ref | portal grants entity-narrowed to the customer |
-| Fakturaunderlag | **`engine-invoicing` underlag** | built from `commerce.order-placed` — reuse + additive consume (§7) |
+| Invoice basis | **`engine-invoicing` underlag** | built from `commerce.order-placed` — reuse + additive consume (§7) |
 
 Link edges this vertical declares: `cart → customer` (or session), `order → customer`,
 `order → cart` (provenance). The permission walk the portal follows: `order → customer`.
@@ -166,7 +166,7 @@ timestamps ISO-8601 TEXT. Append-only migrations, prefix `shop_`.
    `on_hand = 1` for the oversell beat.
 5. Scenario test (§9) — denials and the oversell throw are the acceptance bar.
 6. App skin: storefront (browse → cart → checkout) + admin (catalog, stock, orders,
-   underlag review), copy-and-own from `demos/fsm/app`.
+   underlag review), copy-and-own from `demos/callout/app`.
 
 **Deferred, deliberately (all "provider/connector" per the landscape survey):** payment
 capture (Swish/card), tax calculation, shipping rates/carriers, multi-warehouse, returns/

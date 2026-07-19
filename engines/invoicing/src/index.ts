@@ -18,7 +18,7 @@ import {
 } from '@substrat-run/kernel';
 
 // ============================================================================
-// The invoicing engine (demos/fsm/spec/testrun.md §4.3/§5.3). Consumes
+// The invoicing engine (demos/callout/spec/testrun.md §4.3/§5.3). Consumes
 // `workorder.completed` — snapshot, not join: prices and quantities are frozen
 // from the event payload, provenance kept as EntityRef columns. Zero imports
 // from the workorder engine (star topology, D-19).
@@ -34,14 +34,14 @@ export const invoicingManifest = moduleManifest.parse({
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [
-    { key: 'invoicing:read', description: 'Read fakturaunderlag' },
-    { key: 'invoicing:export', description: 'Export a fakturaunderlag (makes it immutable)' },
+    { key: 'invoicing:read', description: 'Read invoice bases' },
+    { key: 'invoicing:export', description: 'Export an invoice basis (makes it immutable)' },
   ],
   events: {
     emits: [
       { type: 'invoicing.underlag-updated', schemaVersion: 1 },
       // v2: `total` is Money, not a bare amount string. v1 stated a number with
-      // no currency on a financial artifact — and `demos/fsm/spec/testrun.md`
+      // no currency on a financial artifact — and `demos/callout/spec/testrun.md`
       // always specified `total: Money`, so this is the code meeting its own
       // spec rather than a change of intent.
       //
@@ -122,7 +122,7 @@ const completedPayload = z.object({
 });
 
 // ADDITIVE (D-28): a SECOND input event. The engine learns to build a
-// fakturaunderlag from a retail order without touching the workorder path — new
+// invoice basis from a retail order without touching the workorder path — new
 // `consumes` entry + this parse + the consumer below, no migration, no
 // permission. Its OWN Zod view of the contract; zero imports from the producer.
 const commercePlacedPayload = z.object({

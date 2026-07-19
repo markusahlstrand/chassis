@@ -142,6 +142,6 @@ sign in as each persona and *feel* the permission model — the credentials are 
 | *sign up* | — | customer | a fresh principal, provisioned on first login |
 | *(not logged in)* | — | public | browse the catalogue only |
 
-Signing in as Gustav and watching *Fakturaunderlag* disappear from the nav — and 403 if you
+Signing in as Gustav and watching *Invoice basis* disappear from the nav — and 403 if you
 ask for it directly — is the whole thesis in one click: **Better Auth authenticated you, the
 kernel authorized you.**

@@ -7,7 +7,7 @@ a stateless coordinator that mints capability stubs.
 
 Both adapters pass the **same** [conformance suite](/reference/contract-tests) unchanged
 (decision 14), so a vertical developed and CI-tested on pure SQLite runs on Cloudflare with
-no code change. A demo vertical — [ServiceCo](https://github.com/substrat-run/substrat/tree/main/demos/fsm) —
+no code change. A demo vertical — [Callout](https://github.com/substrat-run/substrat/tree/main/demos/callout) —
 runs deployed on it today, behind Better Auth.
 
 ```sh
@@ -40,7 +40,7 @@ export { ControlPlaneDO };
 export default {
   async fetch(req, env) {
     const host = new CloudflareScopeHost({ scope: env.SCOPE, controlPlane: env.CONTROL_PLANE });
-    // authenticate → getScope → invoke (the ServiceCo demo wires a full Hono API + Better Auth)
+    // authenticate → getScope → invoke (the Callout demo wires a full Hono API + Better Auth)
     const stub = await host.getScope(principal, tenantId, scopeId);
     return Response.json(await stub.invoke('workorder/list', {}));
   },

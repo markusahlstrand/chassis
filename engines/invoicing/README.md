@@ -1,7 +1,7 @@
 # @substrat-run/engine-invoicing
 
 Invoicing engine for [Substrat](https://github.com/substrat-run/substrat) —
-accumulates **invoice bases** (Swedish: *fakturaunderlag*) from billable events and
+accumulates **invoice bases** (Swedish: *invoice basis*) from billable events and
 makes them **immutable once exported**.
 
 It produces the *basis* for an invoice: per-customer collections of billable lines

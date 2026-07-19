@@ -44,8 +44,8 @@ What *is* exported today: `INVOICING_PERM`, `invoicingManifest`, `invoicingMigra
 
 | Key | Description |
 |---|---|
-| `invoicing:read` | Read fakturaunderlag |
-| `invoicing:export` | Export a fakturaunderlag (makes it immutable) |
+| `invoicing:read` | Read invoice basis |
+| `invoicing:export` | Export an invoice basis (makes it immutable) |
 
 Two keys, and the split is the point: reading a basis is routine, and **export is
 irreversible**. Keep `invoicing:export` on a back-office role, not on whoever can see totals.
