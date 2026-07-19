@@ -32,6 +32,13 @@ Consume `invites.sent` in a connector and send whatever your product sends. The 
 carries no identifier, so the connector resolves the recipient from your own records —
 which keeps the address out of the spine.
 
+## A worked example
+
+`demos/rally` is the reference: [RallyPoint](/verticals/rallypoint#invites-joining-the-club)
+composes `sendInvite` in `rally/invite-player`, keeps the player's name and party ref in
+its own `rally_invited_player` table keyed by the invitation id, and creates its
+`rally_members` row from a consumer on `invites.accepted`.
+
 ## Extending it
 
 **Extra states** belong in your vertical as substates, not as forks of the machine.

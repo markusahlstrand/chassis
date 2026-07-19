@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import type { ScopeStub } from '@substrat-run/kernel';
+import { ulid, type ScopeStub } from '@substrat-run/kernel';
 import type { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
-import type { Money } from '@substrat-run/contracts';
+import { principalId, type Money } from '@substrat-run/contracts';
 import type { Reservation } from '@substrat-run/engine-booking';
 import {
   buildRallyHost,
@@ -51,7 +51,7 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('1. provisions and applies all three module journals', () => {
+  it('1. provisions and applies every module journal', () => {
     const db = new Database(join(dir, `${w.t1}__${w.s1}.sqlite`), { readonly: true });
     const rows = db
       .prepare('SELECT DISTINCT module_id FROM _substrat_migrations ORDER BY module_id')
@@ -60,6 +60,7 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     expect(rows.map((r) => r.module_id)).toEqual([
       '@substrat-run/demo-rally',
       '@substrat-run/engine-booking',
+      '@substrat-run/engine-invites',
       '@substrat-run/engine-invoicing',
     ]);
   });
@@ -502,5 +503,80 @@ describe('RallyPoint demo scenario (spec §11)', () => {
     const members = await astrid.invoke<MemberRow[]>('rally/list-members');
     expect(members.map((m) => m.name).sort()).toEqual(['Elin Kastberg', 'Johan Ek']);
     expect(members.find((m) => m.name === 'Elin Kastberg')!.party_ref).toBe(w.elinParty);
+  });
+});
+
+/**
+ * The invite path, end to end (#35). The first thing in the repo that exercises
+ * the whole seam at once: a vertical composes the invites engine, the engine
+ * emits rather than writing, an out-of-band executor effects the KERNEL
+ * membership, and the vertical's own consumer creates the club's member row.
+ *
+ * Two records, two owners, one acceptance — the property that could not be
+ * checked by reading the design.
+ */
+describe('RallyPoint: inviting a player', () => {
+  let dir: string;
+  let host: SqliteScopeHost;
+  let w: RallyWorld;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'rally-invite-'));
+    host = buildRallyHost(dir);
+    w = await seedRally(host, dir);
+  });
+  afterAll(async () => {
+    await host.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('turns an accepted invitation into a kernel membership AND a club member row', async () => {
+    const admin = await host.getScope(w.astrid, w.t1, w.s1);
+    const partyRef = ulid();
+    const { invitationId } = await admin.invoke<{ invitationId: string }>('rally/invite-player', {
+      orgId: w.org1,
+      identifier: 'ny.spelare@example.com',
+      name: 'Ny Spelare',
+      partyRef,
+    });
+
+    // Nothing yet: an invitation confers nothing until the recipient acts.
+    expect(await host.admin.listMembers(w.t1, w.org1)).toEqual([]);
+
+    const newcomer = principalId.parse(ulid());
+    const theirs = await host.getScope(newcomer, w.t1, w.s1);
+    await theirs.invoke('invites/accept', {
+      invitationId,
+      identifier: 'ny.spelare@example.com',
+    });
+
+    // The KERNEL membership — effected by the executor, never by the engine.
+    const members = await host.admin.listMembers(w.t1, w.org1);
+    expect(members.map((m) => m.principal)).toEqual([newcomer]);
+
+    // ...and RallyPoint's OWN record, from its consumer on the same acceptance.
+    const roster = await admin.invoke<MemberRow[]>('rally/list-members');
+    expect(roster.find((m) => m.party_ref === partyRef)?.name).toBe('Ny Spelare');
+
+    // The split trail joins: the admin row names the event that caused it.
+    const added = (await host.admin.auditLog({ tenantId: w.t1 })).find(
+      (e) => e.action === 'addMember',
+    );
+    expect(added?.causedBy).toEqual(expect.any(String));
+  });
+
+  it('does not leak whether an address has already been invited', async () => {
+    const admin = await host.getScope(w.astrid, w.t1, w.s1);
+    const invite = () =>
+      admin.invoke<{ invitationId: string }>('rally/invite-player', {
+        orgId: w.org1,
+        identifier: 'samma@example.com',
+        name: 'Samma Person',
+        partyRef: ulid(),
+      });
+    // Re-inviting must succeed and look identical, or a club can probe the
+    // platform's membership one address at a time.
+    const first = await invite();
+    expect((await invite()).invitationId).toBe(first.invitationId);
   });
 });

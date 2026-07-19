@@ -5,7 +5,7 @@
 
 # Permission snapshot — @substrat-run/demo-rally
 
-15 keys · 3 modules · 3 roles
+18 keys · 4 modules · 3 roles
 
 ## 1. Registry — every key a registered manifest declares
 
@@ -19,6 +19,9 @@
 | `booking:manage-resources` | Create, edit and deactivate bookable resources | `@substrat-run/engine-booking` |
 | `booking:move` | Reschedule a reservation to another slot or resource | `@substrat-run/engine-booking` |
 | `booking:read` | Read resources, reservations and availability | `@substrat-run/engine-booking` |
+| `invites:read` | List invitations and their state | `@substrat-run/engine-invites` |
+| `invites:revoke` | Withdraw an invitation before it is accepted | `@substrat-run/engine-invites` |
+| `invites:send` | Invite someone to an organization | `@substrat-run/engine-invites` |
 | `invoicing:export` | Export a fakturaunderlag (makes it immutable) | `@substrat-run/engine-invoicing` |
 | `invoicing:read` | Read fakturaunderlag | `@substrat-run/engine-invoicing` |
 | `rally:browse` | See courts, opening hours and free slots — free/busy only, never who booked | `@substrat-run/demo-rally` |
@@ -33,7 +36,7 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 
 | Role | Permissions |
 | --- | --- |
-| `club-admin` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:manage-resources`, `booking:move`, `booking:read`, `invoicing:export`, `invoicing:read`, `rally:browse`, `rally:manage-members`, `rally:manage-pricing`, `rally:manage-venue`, `rally:wallet` |
+| `club-admin` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:manage-resources`, `booking:move`, `booking:read`, `invites:read`, `invites:revoke`, `invites:send`, `invoicing:export`, `invoicing:read`, `rally:browse`, `rally:manage-members`, `rally:manage-pricing`, `rally:manage-venue`, `rally:wallet` |
 | `coach` | `booking:read`, `rally:browse` |
 | `receptionist` | `booking:cancel`, `booking:complete`, `booking:confirm`, `booking:create`, `booking:hold`, `booking:move`, `booking:read`, `rally:browse`, `rally:manage-members`, `rally:wallet` |
 
@@ -49,6 +52,9 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 | `booking:manage-resources` | `club-admin` |
 | `booking:move` | `club-admin`, `receptionist` |
 | `booking:read` | `club-admin`, `coach`, `receptionist` |
+| `invites:read` | `club-admin` |
+| `invites:revoke` | `club-admin` |
+| `invites:send` | `club-admin` |
 | `invoicing:export` | `club-admin` |
 | `invoicing:read` | `club-admin` |
 | `rally:browse` | `club-admin`, `coach`, `receptionist` |

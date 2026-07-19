@@ -252,7 +252,15 @@ export async function acceptInvite(
     schemaVersion: 1,
     entity: entityRef.parse({ entityType: 'invitation', entityId: row.id }),
     piiClass: 'none',
-    payload: { invitationId: row.id, orgId: row.org_id, roleKey: row.role_key },
+    // `principal` is who accepted — a ULID, not an identifier, so it names nobody
+    // outside the platform. A vertical consuming this to create its own record
+    // needs it, and without it the event describes an acceptance by no one.
+    payload: {
+      invitationId: row.id,
+      orgId: row.org_id,
+      roleKey: row.role_key,
+      principal: ctx.principal,
+    },
   });
   // Fat (D-19): the executor must never need a cross-module read to act.
   ctx.emit({

@@ -1,10 +1,13 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { z } from 'zod';
 import { join } from 'node:path';
 import {
   platformActorId,
   principalId,
   scopeId,
   tenantId,
+  orgId as orgIdSchema,
+  type OrgId,
   type PermissionKey,
   type PrincipalId,
   type RoleDefinition,
@@ -15,11 +18,14 @@ import { ulid } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { bookingModule, PERM as BK } from '@substrat-run/engine-booking';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+import { invitesModule, INVITES_PERM as INVITE } from '@substrat-run/engine-invites';
 import { rallyModule, RALLY_PERM as RP } from './module.js';
 
 export interface RallyWorld {
   t1: TenantId; // RallyPoint AB
   t2: TenantId; // Padelcenter Väst AB — the attacker's club
+  org1: OrgId; // the club's player org — what a membership tuple points at
+  org2: OrgId;
   s1: ScopeId; // Solna venue
   s1b: ScopeId; // Nacka venue (same tenant, second venue)
   s2: ScopeId; // Göteborg (t2)
@@ -50,10 +56,14 @@ export interface RallyWorld {
  * `tools/permission-diff.mts` renders the permission checkpoint from this same
  * array — emitter and running host read one object, so the artifact cannot drift.
  */
-export const MODULES = [bookingModule, invoicingModule, rallyModule];
+export const MODULES = [bookingModule, invoicingModule, invitesModule, rallyModule];
 
 const adminPerms = [
   RP.browse, RP.wallet, RP.manageVenue, RP.managePricing, RP.manageMembers,
+  // A club admin may invite players and withdraw an invitation. Accepting needs
+  // no permission at all — the recipient is not a member of anything yet, so the
+  // invitation itself is the authority.
+  INVITE.send, INVITE.read, INVITE.revoke,
   BK.create, BK.read, BK.hold, BK.confirm, BK.cancel, BK.move, BK.complete, BK.manageResources,
   INV.read, INV.export,
 ];
@@ -235,8 +245,37 @@ async function seedVenue(
 export function buildRallyHost(dir: string): SqliteScopeHost {
   const host = new SqliteScopeHost({ dir }); // default checker: the tuple engine
   for (const m of MODULES) host.registerModule(m);
+
+  /**
+   * The connector seam's out-of-band half (K-22 §4.2). Host code, not module
+   * code: it holds platform authority, which is exactly what a module must never
+   * have — an in-scope write could not reach the directory atomically anyway.
+   *
+   * A club's membership is a KERNEL fact (this principal belongs to this club);
+   * the `rally_members` row the vertical creates on the same event is RallyPoint's
+   * own — balances, level, the things a club knows about a player. Two records,
+   * two owners, one acceptance.
+   */
+  host.registerExecutor('rally-member-adder', 'member.add-requested', async (admin, event) => {
+    const p = z
+      .object({ principal: z.string(), orgId: z.string(), tenantId: z.string() })
+      .parse(event.payload);
+    await admin.addMember(
+      RALLY_PLATFORM_ACTOR,
+      tenantId.parse(p.tenantId),
+      principalId.parse(p.principal),
+      orgIdSchema.parse(p.orgId),
+    );
+  });
   return host;
 }
+
+/**
+ * The actor the executor acts as. Platform-side, because effecting a membership
+ * is a directory write — the acting PLAYER is recorded on the causing event, and
+ * the admin row carries its id (`causedBy`), so the trail still names them.
+ */
+const RALLY_PLATFORM_ACTOR = platformActorId.parse('01JZ0000000000000000RA99Y0');
 
 /** Idempotent: safe on every server start; demo data seeds only once. */
 export async function seedRally(host: SqliteScopeHost, dir: string): Promise<RallyWorld> {
@@ -244,7 +283,7 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
   const fresh = !existsSync(castPath);
   const raw: Record<string, string> = fresh
     ? {
-        t1: ulid(), t2: ulid(), s1: ulid(), s1b: ulid(), s2: ulid(),
+        t1: ulid(), t2: ulid(), org1: ulid(), org2: ulid(), s1: ulid(), s1b: ulid(), s2: ulid(),
         astrid: ulid(), ravi: ulid(), nils: ulid(), elin: ulid(), johan: ulid(), rutger: ulid(),
         court1: '', court2: '', nackaCourt1: '', nackaCourt2: '',
         elinId: '', johanId: '', elinNackaId: '', johanNackaId: '',
@@ -254,6 +293,7 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
 
   const world: RallyWorld = {
     t1: tenantId.parse(raw.t1), t2: tenantId.parse(raw.t2),
+    org1: orgIdSchema.parse(raw.org1), org2: orgIdSchema.parse(raw.org2),
     s1: scopeId.parse(raw.s1), s1b: scopeId.parse(raw.s1b), s2: scopeId.parse(raw.s2),
     astrid: principalId.parse(raw.astrid), ravi: principalId.parse(raw.ravi),
     nils: principalId.parse(raw.nils), elin: principalId.parse(raw.elin),
@@ -272,8 +312,18 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
     id: world.t2, slug: 'padelcenter-vast', name: 'Padelcenter Väst AB',
   });
 
+  // One org per club. Clubs are TENANTS here, so a player belonging to two clubs
+  // is two memberships on one identity — which is what a central identity pool
+  // buys (§4.3), and the first thing in the repo to actually need it.
+  await host.admin.createOrg(staff, {
+    id: world.org1, tenantId: world.t1, slug: 'rallypoint-players', name: 'RallyPoint players',
+  });
+  await host.admin.createOrg(staff, {
+    id: world.org2, tenantId: world.t2, slug: 'padelcenter-players', name: 'Padelcenter players',
+  });
+
   for (const t of [world.t1, world.t2]) {
-    for (const key of ['booking', 'invoicing', 'rallypoint']) {
+    for (const key of ['booking', 'invoicing', 'invites', 'rallypoint']) {
       await host.admin.grantEntitlement(staff, t, key);
     }
   }

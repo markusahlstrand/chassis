@@ -11,6 +11,12 @@ All payloads are `piiClass: 'none'` and **contain no identifier**. The event spi
 outlives the row it describes, so an address leaked here is leaked for as long as
 history is kept.
 
+`invites.accepted` carries `{ invitationId, orgId, roleKey, principal }`. The
+`principal` is who accepted — a ULID, so it names nobody outside the platform, and a
+vertical creating its own record for that person needs it. Without it the event would
+describe an acceptance by no one, which is precisely what the first vertical to consume
+it discovered.
+
 ## `member.add-requested` is the interesting one
 
 The engine cannot write a membership tuple. Membership is tenant-wide directory state,

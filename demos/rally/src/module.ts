@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { sendInvite } from '@substrat-run/engine-invites';
 import {
   dataSubjectId,
+  orgId as orgIdSchema,
   moduleManifest,
   moneyOf,
   permissionKey,
@@ -10,6 +12,7 @@ import {
 import {
   assertAllowed,
   ulid,
+  type ConsumerHandler,
   type ModuleRegistration,
   type OperationContext,
   type OperationHandler,
@@ -87,7 +90,13 @@ export const rallyManifest = moduleManifest.parse({
     { key: 'rally:manage-pricing', description: 'Manage price rules, credit packs and subscription plans' },
     { key: 'rally:manage-members', description: 'Manage club members and their records' },
   ],
-  events: { emits: [], consumes: [] },
+  events: {
+    emits: [],
+    // The vertical creates its own member record when someone accepts an
+    // invitation. The kernel membership tuple is the executor's job (K-22 §4.2);
+    // this row is RallyPoint's — balances, level, the things a club knows.
+    consumes: [{ type: 'invites.accepted', schemaVersion: 1 }],
+  },
   migrations: { journalDir: './migrations', compatibleFrom: '0.0.1' },
   attachmentTargets: [{ entityType: 'member', readPermission: 'rally:manage-members' }],
   // The portal walk is reservation → member: a player reaches their own booking
@@ -224,6 +233,20 @@ export const rallyMigrations = [
       );
     `,
   },
+  {
+    // Appended, never edited: 0001 has shipped, and migrations are ordered and
+    // append-only. What RallyPoint knows about an invitation the engine keeps
+    // deliberately opaque — the engine stores a hash, this stores the name to put
+    // on the member record when they accept.
+    version: '0002-invited-player',
+    sql: `
+      CREATE TABLE rally_invited_player (
+        invitation_id TEXT PRIMARY KEY,
+        party_ref     TEXT NOT NULL,
+        name          TEXT NOT NULL
+      );
+    `,
+  }
 ];
 
 // ---------------------------------------------------------------------------
@@ -1860,9 +1883,71 @@ const timelineOp: OperationHandler<
   );
 };
 
+/**
+ * Invite a player to this club, composing the invites engine (K-16).
+ *
+ * The engine records the invitation and keeps the identifier hashed; RallyPoint
+ * keeps what only RallyPoint knows — the name to put on the member record and the
+ * global party ref — in its OWN table, keyed by the invitation id. That is the
+ * documented extension path: the engine's table is private, and a vertical never
+ * adds a column upstream.
+ */
+const invitePlayerOp: OperationHandler<
+  { orgId: string; identifier: string; name: string; partyRef: string },
+  { invitationId: string }
+> = async (ctx, input) => {
+  assertAllowed(await ctx.check(RALLY_PERM.manageMembers));
+  const partyRef = dataSubjectId.parse(input.partyRef);
+  const { id } = await sendInvite(ctx, {
+    orgId: orgIdSchema.parse(input.orgId),
+    identifier: input.identifier,
+    roleKey: 'player',
+  });
+  // INSERT OR REPLACE: re-inviting returns the SAME invitation id (the engine
+  // refuses to reveal that it already exists), so this must be idempotent too or
+  // a repeat invite would fail on the primary key and leak that fact.
+  ctx.sql.exec(
+    `INSERT OR REPLACE INTO rally_invited_player (invitation_id, party_ref, name) VALUES (?, ?, ?)`,
+    [id, partyRef, input.name],
+  );
+  return { invitationId: id };
+};
+
+/**
+ * A player accepted — give them a member record at this venue.
+ *
+ * Idempotent on `party_ref`, which is UNIQUE: delivery is at-least-once, so this
+ * consumer will be re-run, and a second member row would give one human two
+ * wallets at the same club.
+ */
+const onInviteAccepted: ConsumerHandler = (ctx, event) => {
+  const payload = z
+    .object({ invitationId: z.string(), principal: z.string() })
+    .parse(event.payload);
+  const invited = ctx.sql.query<{ party_ref: string; name: string }>(
+    'SELECT party_ref, name FROM rally_invited_player WHERE invitation_id = ?',
+    [payload.invitationId],
+  )[0];
+  // An invitation this club did not send — another vertical's, or a direct call.
+  // Not an error: the kernel membership still stands, RallyPoint simply has no
+  // record to create.
+  if (!invited) return;
+  const existing = ctx.sql.query<{ id: string }>(
+    'SELECT id FROM rally_members WHERE party_ref = ?',
+    [invited.party_ref],
+  );
+  if (existing[0]) return;
+  ctx.sql.exec(
+    `INSERT INTO rally_members (id, party_ref, name, phone, level, created_at)
+     VALUES (?, ?, ?, NULL, NULL, ?)`,
+    [ulid(), invited.party_ref, invited.name, new Date().toISOString()],
+  );
+};
+
 export const rallyModule: ModuleRegistration = {
   manifest: rallyManifest,
   migrations: rallyMigrations,
+  consumers: { 'invites.accepted': onInviteAccepted },
   operations: {
     'rally/set-venue': setVenueOp as never,
     'rally/set-hours': setHoursOp as never,
@@ -1872,6 +1957,7 @@ export const rallyModule: ModuleRegistration = {
     'rally/upsert-price-rule': upsertPriceRuleOp as never,
     'rally/upsert-pack': upsertPackOp as never,
     'rally/upsert-plan': upsertPlanOp as never,
+    'rally/invite-player': invitePlayerOp as never,
     'rally/wallet': walletOp as never,
     'rally/buy-credits': buyCreditsOp as never,
     'rally/subscribe': subscribeOp as never,
