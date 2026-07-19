@@ -17,6 +17,7 @@ import {
   type CapabilityGrant,
   type CreateOrgInput,
   type CreateTenantInput,
+  type DomainEvent,
   type EntityRef,
   type IdentityLink,
   type IdentityPool,
@@ -41,6 +42,7 @@ import {
   resolveScopeRecord,
   ulid,
   type AuditLogFilter,
+  type ExecutorHandler,
   type HostAdmin,
   type ModuleRegistration,
   type OperationHandler,
@@ -176,6 +178,8 @@ interface AdminEntry {
   action: string;
   /** Null for platform-level actions that target no tenant (K-23). */
   tenantId: string | null;
+  /** The event that caused this action, when one did (K-22 §4.2). */
+  causedBy: string | null;
   scopeId: string | null;
   vertical: string | null;
   before: unknown;
@@ -186,6 +190,8 @@ interface AdminEntry {
 interface ScopeStubRpc {
   /** The applied-migration count if this call applied any, else null (nothing changed). */
   migrate(): Promise<number | null>;
+  pendingExecutorEvents(deliveryId: string, eventType: string): Promise<DomainEvent[]>;
+  markExecutorDelivered(eventId: string, deliveryId: string): Promise<void>;
   /** The migration that failed on this instance, read on `migrate()`'s reject path. */
   migrationFailure(): Promise<{ version: string; error: string; applied: number } | null>;
   invoke(
@@ -225,6 +231,15 @@ export class CloudflareScopeHost implements ScopeHost {
   private readonly moduleIds = new Set<string>();
   private readonly operations = new Set<string>();
   private readonly predicateNames = new Map<string, string>(); // name → module
+  /** Executor id → {eventType, handler} (K-22 §4.2). Coordinator-side, not in the DO. */
+  private readonly executors = new Map<string, { eventType: string; handler: ExecutorHandler }>();
+  /**
+   * The event currently being effected, stamped onto admin rows the executor writes.
+   * Ambient rather than threaded through every HostAdmin signature: set and cleared
+   * around one await, with executors running sequentially, so there is no window
+   * where it belongs to a different event.
+   */
+  private causedBy: string | null = null;
   private readonly withdrawn = new Map<string, string>(); // operation → module
   private readonly operationEntitlement = new Map<string, string>();
 
@@ -237,6 +252,38 @@ export class CloudflareScopeHost implements ScopeHost {
   }
 
   // -- registration mechanics (validation only) -----------------------------
+
+  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void {
+    if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
+    this.executors.set(id, { eventType, handler });
+  }
+
+  /**
+   * Drain this scope's outbox into the registered executors (K-22 §4.2).
+   *
+   * Runs on the coordinator because executors act through `HostAdmin`, which the
+   * ScopeDO cannot reach. Prompt: called inline after the operation returns, so the
+   * common case completes inside the request. A throwing executor leaves the
+   * delivery unjournaled and is retried on the next drain — the outbox is the
+   * backstop, not a substitute for idempotent handlers.
+   */
+  private async drainExecutors(scopeId: ScopeId): Promise<void> {
+    if (this.executors.size === 0) return;
+    const stub = this.scopeStub(scopeId);
+    for (const [id, executor] of this.executors) {
+      const deliveryId = `executor:${id}`;
+      const events = await stub.pendingExecutorEvents(deliveryId, executor.eventType);
+      for (const event of events) {
+        this.causedBy = event.id;
+        try {
+          await executor.handler(this.admin, event);
+        } finally {
+          this.causedBy = null;
+        }
+        await stub.markExecutorDelivered(event.id, deliveryId);
+      }
+    }
+  }
 
   registerModule(registration: ModuleRegistration): void {
     const manifest = moduleManifest.parse(registration.manifest);
@@ -385,7 +432,15 @@ export class CloudflareScopeHost implements ScopeHost {
             ),
           );
         }
-        return stub.invoke(operation, input, principal, tenantId, scopeId) as Promise<O>;
+        const result = (await stub.invoke(
+          operation,
+          input,
+          principal,
+          tenantId,
+          scopeId,
+        )) as O;
+        await this.drainExecutors(scopeId);
+        return result;
       },
     };
   }
@@ -799,6 +854,7 @@ export class CloudflareScopeHost implements ScopeHost {
       actor,
       action,
       tenantId: target.tenantId,
+      causedBy: this.causedBy,
       scopeId: target.scopeId ?? null,
       vertical: target.vertical ?? null,
       before: before ?? null,

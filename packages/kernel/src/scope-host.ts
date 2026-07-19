@@ -108,6 +108,28 @@ export interface SqlMigration {
 export type ConsumerHandler = (ctx: OperationContext, event: DomainEvent) => void | Promise<void>;
 
 /**
+ * An **executor**: out-of-band host code that effects, outside a scope, what a module
+ * asked for inside one (K-22 §4.2; D-18's triage rule — effects on the outside world
+ * are connectors).
+ *
+ * Why this rather than an in-scope capability: some effects are not scope-local.
+ * Membership tuples are tenant-wide and live in the directory, so an in-scope write
+ * would be a cross-DO write inside a scope transaction — two serialization domains,
+ * no coordinator, and an orphaned membership if the scope transaction rolls back
+ * after the directory write lands.
+ *
+ * The connector has no such hazard: the module's `ctx.emit` commits WITH its domain
+ * write, so a rollback leaves no event and nothing to effect. The executor then runs
+ * at-least-once from the outbox — so handlers must be idempotent, exactly as
+ * consumers must.
+ *
+ * It receives `HostAdmin`, not `ctx`: it acts with platform authority, which is
+ * precisely what module code must never hold. Admin writes it makes are stamped with
+ * the causing event's id (`causedBy`), so the split trail joins.
+ */
+export type ExecutorHandler = (admin: HostAdmin, event: DomainEvent) => void | Promise<void>;
+
+/**
  * A named, manifest-wired pre-condition on an operation (K-17; engine-protocol
  * §6, open question 11). One module CONTRIBUTES a predicate under a name; a
  * (usually different) module's manifest WIRES it to an operation via
@@ -496,6 +518,20 @@ export interface ScopeHost {
 
   /** Register a module: validates the manifest, applies migrations lazily per scope. */
   registerModule(registration: ModuleRegistration): void;
+
+  /**
+   * Register an executor for an event type (K-22 §4.2). Host code, not module code:
+   * `id` names the delivery target in the kernel's at-least-once journal, the same
+   * way a module id does for a consumer, so an executor is redelivered until it
+   * succeeds and never runs twice for one event once it has.
+   *
+   * Executors are dispatched **inline after commit**, with the outbox as the
+   * durability and retry backstop. The contract stays eventually consistent — that
+   * is what makes it correct under crash — but the common case completes inside the
+   * originating request, so "requested but not yet effected" is a rare-case fallback
+   * rather than the normal experience.
+   */
+  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void;
 
   /** Bare operation registration (tests, glue). Names are module-namespaced: 'workorder/create'. */
   defineOperation<I, O>(name: string, handler: OperationHandler<I, O>): void;

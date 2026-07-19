@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { instant, orgId, platformActorId, principalId, scopeId, tenantId } from './ids.js';
+import {
+  eventId,
+  instant,
+  orgId,
+  platformActorId,
+  principalId,
+  scopeId,
+  tenantId,
+} from './ids.js';
 
 // The control plane — the shared layer across N per-vertical deployments (D-30,
 // control-plane.md). This file carries the audit contract that every effecting
@@ -138,6 +146,21 @@ export const adminLogEntry = z.object({
   vertical: z.string().nullable(),
   before: z.unknown().nullable(), // prior state where cheaply readable (e.g. a redefined role)
   after: z.unknown().nullable(), // the applied payload
+  /**
+   * The domain event that caused this action, when one did (K-22 §4.2).
+   *
+   * The connector seam splits a change across two halves: a module emits inside its
+   * own transaction, and a privileged executor outside module code effects it. That
+   * splits the trail too — control-plane.md §3 named it as the main thing the pattern
+   * worsens. This is the join, and it is the EVENT ID rather than a new correlation
+   * field: the envelope already carries a kernel-stamped unique id that is the
+   * idempotency key downstream, so reusing it avoids widening a frozen contract
+   * (D-5/D-28) to say something it already says.
+   *
+   * Null for the ordinary case — a staff member acting directly caused nothing but
+   * themselves.
+   */
+  causedBy: eventId.nullable(),
   at: instant,
 });
 export type AdminLogEntry = z.infer<typeof adminLogEntry>;

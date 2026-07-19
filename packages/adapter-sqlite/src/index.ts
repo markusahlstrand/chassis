@@ -53,6 +53,7 @@ import {
   ulid,
   type AuditLogFilter,
   type ConsumerHandler,
+  type ExecutorHandler,
   type GuardPredicate,
   type HostAdmin,
   type ModuleRegistration,
@@ -203,11 +204,12 @@ interface AdminLogRow {
   id: string;
   actor: string;
   action: string;
-  tenant_id: string;
+  tenant_id: string | null;
   scope_id: string | null;
   vertical: string | null;
   before: string | null;
   after: string | null;
+  caused_by: string | null;
   at: string;
 }
 
@@ -245,6 +247,15 @@ export class SqliteScopeHost implements ScopeHost {
   /** operation name → its owning module's entitlementKey (§4.3 gate). */
   private readonly operationEntitlement = new Map<string, string>();
   private readonly roles = new Map<string, RoleDefinition>(); // 'tenantId/roleKey'
+  /** Executor id → {eventType, handler} (K-22 §4.2). Host code, not module code. */
+  private readonly executors = new Map<string, { eventType: string; handler: ExecutorHandler }>();
+  /**
+   * The event currently being effected by an executor, stamped onto any admin rows
+   * it writes. Ambient rather than threaded through every HostAdmin signature: it is
+   * set and cleared immediately around one `await`, and executors run sequentially,
+   * so there is no window where it belongs to a different event.
+   */
+  private causedBy: string | null = null;
   private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
 
   constructor(options: SqliteScopeHostOptions) {
@@ -363,6 +374,10 @@ export class SqliteScopeHost implements ScopeHost {
         vertical TEXT,
         before TEXT,
         after TEXT,
+        -- The event that caused this action, when one did (K-22 §4.2). This is
+        -- what joins the connector seam's two halves: the module's emit and the
+        -- executor's effect. Null for a staff member acting directly.
+        caused_by TEXT,
         at TEXT NOT NULL
       );
       -- Read-path indexes for the console (control-plane.md §4.5). The admin log
@@ -385,6 +400,11 @@ export class SqliteScopeHost implements ScopeHost {
         getRole: (tenantId, key) => this.roles.get(`${tenantId}/${key}`),
       });
     this.admin = this.buildAdmin();
+  }
+
+  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void {
+    if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
+    this.executors.set(id, { eventType, handler });
   }
 
   registerModule(registration: ModuleRegistration): void {
@@ -612,8 +632,12 @@ export class SqliteScopeHost implements ScopeHost {
             rt.db.exec('ROLLBACK');
             throw err;
           }
-          // Post-commit, still inside the actor task: drain outbox → consumers.
+          // Post-commit, still inside the actor task: drain outbox → consumers,
+          // then → executors. Prompt dispatch (K-22 §4.2): the common case
+          // completes inside this request, with the outbox as the retry backstop
+          // if it does not.
           await this.dispatch(rt);
+          await this.dispatchExecutors(rt);
           return structuredClone(result);
         });
       },
@@ -660,6 +684,51 @@ export class SqliteScopeHost implements ScopeHost {
   // Event dispatch (testrun spec §9.2.3): at-least-once, kernel-journaled,
   // consumers run as system-actor operations in their own transactions.
   // -------------------------------------------------------------------------
+
+  /**
+   * Run executors over this scope's outbox (K-22 §4.2) — the connector half of the
+   * seam. Same at-least-once journal as consumers, keyed on a distinct delivery id
+   * so an executor and a module consumer on the same event do not shadow each other.
+   *
+   * Runs OUTSIDE the scope's transaction, and deliberately so: the executor acts on
+   * the directory, which is not part of the scope's serialization domain. The
+   * atomicity that matters already happened — the event only exists because the
+   * emitting transaction committed.
+   *
+   * A throwing executor leaves the delivery unjournaled, so it is retried on the
+   * next dispatch. That is the backstop; it is not a substitute for idempotent
+   * handlers, which at-least-once still requires.
+   */
+  private async dispatchExecutors(rt: ScopeRuntime): Promise<void> {
+    for (const [id, executor] of this.executors) {
+      const deliveryId = `executor:${id}`;
+      const rows = rt.db
+        .prepare(
+          `SELECT * FROM _substrat_outbox o
+           WHERE o.type = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM _substrat_deliveries d
+               WHERE d.event_id = o.id AND d.consumer_module = ?
+             )
+           ORDER BY o.id`,
+        )
+        .all(executor.eventType, deliveryId) as OutboxRow[];
+      for (const row of rows) {
+        const event = this.parseOutboxRow(row);
+        this.causedBy = event.id;
+        try {
+          await executor.handler(this.admin, event);
+        } finally {
+          this.causedBy = null;
+        }
+        rt.db
+          .prepare(
+            'INSERT OR IGNORE INTO _substrat_deliveries (event_id, consumer_module, delivered_at) VALUES (?, ?, ?)',
+          )
+          .run(row.id, deliveryId, new Date().toISOString());
+      }
+    }
+  }
 
   private async dispatch(rt: ScopeRuntime): Promise<void> {
     for (let round = 0; round < 50; round++) {
@@ -748,8 +817,8 @@ export class SqliteScopeHost implements ScopeHost {
     this.directory
       .prepare(
         `INSERT INTO _substrat_admin_log
-           (id, actor, action, tenant_id, scope_id, vertical, before, after, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, actor, action, tenant_id, scope_id, vertical, before, after, caused_by, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         ulid(),
@@ -760,6 +829,7 @@ export class SqliteScopeHost implements ScopeHost {
         target.vertical ?? null,
         before == null ? null : JSON.stringify(before),
         after == null ? null : JSON.stringify(after),
+        this.causedBy,
         new Date().toISOString(),
       );
   }
@@ -1421,6 +1491,7 @@ export class SqliteScopeHost implements ScopeHost {
             vertical: r.vertical,
             before: r.before === null ? null : JSON.parse(r.before),
             after: r.after === null ? null : JSON.parse(r.after),
+            causedBy: r.caused_by,
             at: r.at,
           }),
         );
@@ -1523,6 +1594,7 @@ export class SqliteScopeHost implements ScopeHost {
   private ensureDirectoryColumns(): void {
     this.ensureIdentityKey();
     this.ensureAdminLogTenantNullable();
+    this.ensureColumn(this.directory, '_substrat_admin_log', 'caused_by', 'caused_by TEXT');
     // K-21's tombstone on tenant-level tuples (membership lives here).
     this.ensureColumn(this.directory, '_substrat_tenant_tuples', 'revoked_at', 'revoked_at TEXT');
     const existing = new Set(

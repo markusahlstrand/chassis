@@ -16,6 +16,7 @@ import {
 import type {
   ConsumerHandler,
   ModuleRegistration,
+  OperationContext,
   OperationHandler,
 } from '@substrat-run/kernel';
 
@@ -437,6 +438,67 @@ export const permMod: ModuleRegistration = {
   },
 };
 
+export const connectorModManifest = moduleManifest.parse({
+  id: '@test/connector',
+  version: '1.0.0',
+  kernelContract: '^0.0.1',
+  permissions: [{ key: 'connector:use', description: 'connector permission' }],
+  events: { emits: [{ type: 'member.add-requested', schemaVersion: 1 }], consumes: [] },
+  migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
+  attachmentTargets: [],
+  entitlementKey: 'connector',
+});
+
+/**
+ * The module half of the connector seam (K-22 §4.2). It records its own domain row
+ * and emits a FAT event asking for a membership it cannot itself effect — membership
+ * is tenant-wide and lives in the directory, outside this scope's transaction.
+ *
+ * `request-and-throw` exists to prove the property the seam is chosen for: the emit
+ * commits WITH the domain write, so a rollback leaves no event and therefore nothing
+ * for the executor to effect. An in-scope cross-DO write could not offer that.
+ */
+export const connectorMod: ModuleRegistration = {
+  manifest: connectorModManifest,
+  migrations: [
+    {
+      version: '0001-init',
+      sql: 'CREATE TABLE connector_requests (id TEXT PRIMARY KEY, principal TEXT NOT NULL)',
+    },
+  ],
+  operations: {
+    'connector/request-member': ((ctx: OperationContext, input: { principal: string; orgId: string }) => {
+      ctx.sql.exec('INSERT INTO connector_requests (id, principal) VALUES (?, ?)', [
+        input.principal,
+        input.principal,
+      ]);
+      ctx.emit({
+        type: 'member.add-requested',
+        schemaVersion: 1,
+        entity: { entityType: 'membership', entityId: input.principal },
+        piiClass: 'none',
+        // Fat: the executor must never need a cross-module read to act.
+        payload: { principal: input.principal, orgId: input.orgId, tenantId: ctx.tenantId },
+      });
+    }) as unknown as OperationHandler<never, unknown>,
+    'connector/request-and-throw': ((ctx: OperationContext, input: { principal: string; orgId: string }) => {
+      ctx.emit({
+        type: 'member.add-requested',
+        schemaVersion: 1,
+        entity: { entityType: 'membership', entityId: input.principal },
+        piiClass: 'none',
+        payload: { principal: input.principal, orgId: input.orgId, tenantId: ctx.tenantId },
+      });
+      throw new Error('deliberate failure after emit');
+    }) as unknown as OperationHandler<never, unknown>,
+    'connector/requests': ((ctx: OperationContext) =>
+      ctx.sql.query('SELECT id FROM connector_requests')) as unknown as OperationHandler<
+      never,
+      unknown
+    >,
+  },
+};
+
 /**
  * The modules the scope-host suite's `beforeAll` registers, in the exact order
  * the original inline registration used — order carries meaning: the early
@@ -444,6 +506,7 @@ export const permMod: ModuleRegistration = {
  * guarded module precedes the gate that supplies its predicate.
  */
 export const contractTestInitialModules: ModuleRegistration[] = [
+  connectorMod,
   testMod,
   flowMod,
   guardedMod,
@@ -464,6 +527,7 @@ export const contractTestModules: ModuleRegistration[] = [
   lateMod,
   billedMod,
   permMod,
+  connectorMod,
 ];
 
 export const brokenModManifest = moduleManifest.parse({
