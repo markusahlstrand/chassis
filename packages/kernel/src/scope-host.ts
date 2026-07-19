@@ -1,5 +1,6 @@
 import type {
   AdminAction,
+  AccessLogEntry,
   AdminLogEntry,
   CapabilityGrant,
   CreateTenantInput,
@@ -202,7 +203,7 @@ export interface HostAdmin {
    * registry, so this is a read. A grant is a tuple in the scope's own database
    * and needs §5.4's admin-query RPC — the two are not the same size of problem.
    */
-  listRoles(filter?: RoleFilter): Promise<TenantRole[]>;
+  listRoles(actor: PlatformActorId, filter?: RoleFilter): Promise<TenantRole[]>;
   assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
   grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
@@ -245,6 +246,7 @@ export interface HostAdmin {
    * write-only before this (#34).
    */
   listMembers(
+    actor: PlatformActorId,
     tenantId: TenantId,
     orgId: OrgId,
     options?: { includeRevoked?: boolean },
@@ -263,8 +265,8 @@ export interface HostAdmin {
    * grant reached a phantom nothing would ever resolve to.
    */
   createOrg(actor: PlatformActorId, input: CreateOrgInput): Promise<void>;
-  listOrgs(tenantId: TenantId): Promise<Org[]>;
-  getOrg(tenantId: TenantId, orgId: OrgId): Promise<Org | undefined>;
+  listOrgs(actor: PlatformActorId, tenantId: TenantId): Promise<Org[]>;
+  getOrg(actor: PlatformActorId, tenantId: TenantId, orgId: OrgId): Promise<Org | undefined>;
 
   // -- tenant registry (control-plane.md §4.1) -------------------------------
 
@@ -286,8 +288,8 @@ export interface HostAdmin {
     status: TenantStatus,
   ): Promise<void>;
   /** The tenant registry — the directory's inventory (control-plane.md §4.5 console item 1). */
-  listTenants(): Promise<Tenant[]>;
-  getTenant(tenantId: TenantId): Promise<Tenant | undefined>;
+  listTenants(actor: PlatformActorId): Promise<Tenant[]>;
+  getTenant(actor: PlatformActorId, tenantId: TenantId): Promise<Tenant | undefined>;
 
   // -- the scope directory, read side (control-plane.md §3.2/§4.5) -----------
   // §3.2 calls the directory "the ONLY complete inventory of tenants and scopes,
@@ -296,13 +298,18 @@ export interface HostAdmin {
   // was complete and the read side did not exist. These two methods are that
   // sentence becoming true.
   //
-  // Read-only and unaudited, deliberately: a durable record of who READ the
-  // directory is a different feature (staff access logging) with a different
-  // retention story, and conflating it with §4.4's mutation trail would make the
-  // trail's "every row is an effect" property false.
+  // Every read below takes an ACTOR, and records into the staff access log
+  // (K-24). That is the point of the parameter: a read the log cannot attribute
+  // is unrepresentable, which is the same property the write side has had since
+  // K-20. Machine paths — `resolveIdentity`, called by the auth adapter before
+  // there IS an actor — deliberately take none and are not logged.
+  //
+  // The separate log is why: conflating reads with §4.4's mutation trail would
+  // make that trail's "every row is an effect" property false, and would force
+  // one retention policy onto two things that need different ones.
 
   /** The scope inventory. Ordered by scope_id (ULID = chronological). */
-  listScopes(filter?: ScopeFilter): Promise<Scope[]>;
+  listScopes(actor: PlatformActorId, filter?: ScopeFilter): Promise<Scope[]>;
   /**
    * One scope's directory record. Cross-checks the (tenantId, scopeId) pair and
    * returns undefined on a mismatch rather than another tenant's scope (K-3) —
@@ -312,7 +319,11 @@ export interface HostAdmin {
    * principal and grants no read of the record. This returns the record and
    * grants no execution.
    */
-  getScopeRecord(tenantId: TenantId, scopeId: ScopeId): Promise<Scope | undefined>;
+  getScopeRecord(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    scopeId: ScopeId,
+  ): Promise<Scope | undefined>;
 
   // -- scope lifecycle (control-plane.md §4.2) -------------------------------
   // The §3.3 transitions that existed only on paper. Each fails closed on an
@@ -352,7 +363,7 @@ export interface HostAdmin {
     entitlementKey: string,
   ): Promise<void>;
   /** The tenant's held SKU flags (control-plane.md §5 meter 2). */
-  listEntitlements(tenantId: TenantId): Promise<string[]>;
+  listEntitlements(actor: PlatformActorId, tenantId: TenantId): Promise<string[]>;
 
   // -- identity (D-16; control-plane.md §6) ----------------------------------
   // The neutral seam an auth adapter maps into. An external identity
@@ -384,7 +395,7 @@ export interface HostAdmin {
    * since changing a live pool's topology silently reinterprets every row it owns.
    */
   registerIdentityPool(actor: PlatformActorId, pool: IdentityPool): Promise<void>;
-  getIdentityPool(provider: string): Promise<IdentityPool | undefined>;
+  getIdentityPool(actor: PlatformActorId, provider: string): Promise<IdentityPool | undefined>;
 
   /**
    * Which tenants this login exists in — the cross-tenant question, kept distinct
@@ -395,7 +406,11 @@ export interface HostAdmin {
    * tenant list; this throws there rather than returning the single obvious answer,
    * because asking at all is a category error the caller should see.
    */
-  listIdentityTenants(provider: string, externalId: string): Promise<TenantId[]>;
+  listIdentityTenants(
+    actor: PlatformActorId,
+    provider: string,
+    externalId: string,
+  ): Promise<TenantId[]>;
   /**
    * Resolve an external identity within a tenant — the auth adapter's read path.
    *
@@ -417,7 +432,24 @@ export interface HostAdmin {
    * `before`/`after`: a redefined role captures its old and new shape there, and
    * that diff IS the checkpoint.
    */
-  auditLog(filter?: AuditLogFilter): Promise<AdminLogEntry[]>;
+  auditLog(actor: PlatformActorId, filter?: AuditLogFilter): Promise<AdminLogEntry[]>;
+
+  /**
+   * The staff access log (K-24) — who READ the directory, when, and how much came
+   * back. Reading it is itself recorded: who examined the record of who looked is
+   * the question an incident asks second.
+   */
+  accessLog(actor: PlatformActorId, filter?: AccessLogFilter): Promise<AccessLogEntry[]>;
+
+  /**
+   * Prune access-log rows already shipped to Tier 2, oldest first, up to `limit`.
+   *
+   * **Only drained rows.** Pruning on age alone would destroy evidence while calling
+   * itself a retention policy — the failure K-21 rejected for tuples, one layer up.
+   * Nothing drains yet, so today this prunes nothing and the log grows: a stated
+   * limitation, not a policy, and the reason `drainedAt` ships before the sink.
+   */
+  pruneAccessLog(actor: PlatformActorId, limit: number): Promise<number>;
 }
 
 export interface ProvisionScopeInput {
@@ -468,6 +500,13 @@ export interface ScopeFilter {
  * conjunctive AND; omitting all of them reads the whole log, which is why `limit`
  * exists — the table is append-only and only grows.
  */
+export interface AccessLogFilter {
+  actor?: PlatformActorId;
+  tenantId?: TenantId;
+  method?: string;
+  limit?: number;
+}
+
 export interface AuditLogFilter {
   tenantId?: TenantId;
   scopeId?: ScopeId;

@@ -1,3 +1,4 @@
+import { RALLY_PLATFORM_ACTOR } from './seed.js';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { principalId, type PrincipalId } from '@substrat-run/contracts';
@@ -270,7 +271,7 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
    */
   app.get('/api/clubs', async (c) => {
     principalOf(c); // authenticated, but the directory is not per-principal
-    const scopes = await host.admin.listScopes({ status: 'active' });
+    const scopes = await host.admin.listScopes(RALLY_PLATFORM_ACTOR, { status: 'active' });
     const byScope = new Map(Object.entries(VENUES).map(([k, v]) => [v.scopeId as string, k]));
     // Deliberately NOT filtered by principal. Discovery and access are different
     // questions: every club exists to everyone, and `/api/my-venues` answers
@@ -397,7 +398,7 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
     await s.invoke('rally/can-admin'); // throws PermissionDenied for anyone else
     const key = c.req.header('x-venue') ?? 'solna';
     const venue = VENUES[key]!;
-    const roles = await host.admin.listRoles({ tenantId: venue.tenantId });
+    const roles = await host.admin.listRoles(RALLY_PLATFORM_ACTOR, { tenantId: venue.tenantId });
     return c.json(roles);
   });
 

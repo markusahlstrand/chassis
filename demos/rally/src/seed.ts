@@ -275,7 +275,7 @@ export function buildRallyHost(dir: string): SqliteScopeHost {
  * is a directory write — the acting PLAYER is recorded on the causing event, and
  * the admin row carries its id (`causedBy`), so the trail still names them.
  */
-const RALLY_PLATFORM_ACTOR = platformActorId.parse('01JZ0000000000000000RA99Y0');
+export const RALLY_PLATFORM_ACTOR = platformActorId.parse('01JZ0000000000000000RA99Y0');
 
 /** Idempotent: safe on every server start; demo data seeds only once. */
 export async function seedRally(host: SqliteScopeHost, dir: string): Promise<RallyWorld> {

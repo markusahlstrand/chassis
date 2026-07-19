@@ -22,8 +22,8 @@
 | `invites:read` | List invitations and their state | `@substrat-run/engine-invites` |
 | `invites:revoke` | Withdraw an invitation before it is accepted | `@substrat-run/engine-invites` |
 | `invites:send` | Invite someone to an organization | `@substrat-run/engine-invites` |
-| `invoicing:export` | Export a fakturaunderlag (makes it immutable) | `@substrat-run/engine-invoicing` |
-| `invoicing:read` | Read fakturaunderlag | `@substrat-run/engine-invoicing` |
+| `invoicing:export` | Export an invoice basis (makes it immutable) | `@substrat-run/engine-invoicing` |
+| `invoicing:read` | Read invoice bases | `@substrat-run/engine-invoicing` |
 | `rally:browse` | See courts, opening hours and free slots — free/busy only, never who booked | `@substrat-run/demo-rally` |
 | `rally:manage-members` | Manage club members and their records | `@substrat-run/demo-rally` |
 | `rally:manage-pricing` | Manage price rules, credit packs and subscription plans | `@substrat-run/demo-rally` |

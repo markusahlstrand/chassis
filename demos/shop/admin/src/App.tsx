@@ -21,7 +21,7 @@ function useHashRoute(): string {
 // what actually enforces them. Hiding a link is convenience; the operation still
 // says no. `warehouse` holds stock:manage and order:fulfil without
 // catalog:manage or invoicing:read, so it reaches the catalogue screen but not
-// its publish control, and never sees Fakturaunderlag at all.
+// its publish control, and never sees Invoice basis at all.
 const STAFF = ['shop-admin', 'warehouse'];
 const isStaff = (r: string) => STAFF.includes(r);
 const canManageCatalog = (r: string) => r === 'shop-admin';
@@ -115,7 +115,7 @@ export default function App() {
           {link('/', '◧', 'Översikt')}
           {link('/orders', '▤', 'Ordrar')}
           {link('/catalog', '◍', 'Katalog')}
-          {link('/invoicing', '❋', 'Fakturaunderlag', canSeeInvoicing(role))}
+          {link('/invoicing', '❋', 'Invoice basis', canSeeInvoicing(role))}
         </nav>
 
         <div className="foot">

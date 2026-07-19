@@ -196,7 +196,7 @@ for (const name of names) {
         `  Without it this vertical is skipped and CI goes green over a permission surface\n` +
         `  nobody reviewed — worse than having no checkpoint at all.\n` +
         `  Remedy: export the array buildHost registers as MODULES, and the role table\n` +
-        `  seed defines as ROLES. See demos/fsm/src/seed.ts.`,
+        `  seed defines as ROLES. See demos/callout/src/seed.ts.`,
     );
   }
 

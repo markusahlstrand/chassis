@@ -1,4 +1,5 @@
 import {
+  accessLogEntry,
   adminLogEntry,
   createTenantInput,
   identityLink,
@@ -13,6 +14,7 @@ import {
   tenant as tenantSchema,
   tenantRole,
   type AdminAction,
+  type AccessLogEntry,
   type AdminLogEntry,
   type CapabilityGrant,
   type CreateOrgInput,
@@ -41,6 +43,7 @@ import {
 import {
   resolveScopeRecord,
   ulid,
+  type AccessLogFilter,
   type AuditLogFilter,
   type ExecutorHandler,
   type HostAdmin,
@@ -53,7 +56,7 @@ import {
   type ScopeHost,
   type ScopeStub,
 } from '@substrat-run/kernel';
-import type { AuditLogQuery, OrgRow, RoleRow, ScopeRow } from './control-plane-do.js';
+import type { AccessLogRow, AuditLogQuery, OrgRow, RoleRow, ScopeRow } from './control-plane-do.js';
 
 /**
  * `CloudflareScopeHost` — the coordinator (design doc §5.7). It runs in the
@@ -168,6 +171,23 @@ interface ControlPlaneStub {
     provider: string,
     externalId: string,
   ): Promise<{ principal: string; scopeId: string | null } | undefined>;
+  recordAccess(entry: {
+    id: string;
+    actor: string;
+    method: string;
+    tenantId: string | null;
+    scopeId: string | null;
+    params: string | null;
+    resultCount: number;
+    at: string;
+  }): Promise<void>;
+  accessLog(query: {
+    actor?: string;
+    tenantId?: string;
+    method?: string;
+    limit?: number;
+  }): Promise<AccessLogRow[]>;
+  pruneAccessLog(limit: number): Promise<number>;
   recordAdmin(entry: AdminEntry): Promise<void>;
   auditLog(query: AuditLogQuery): Promise<AdminLogEntry[]>;
 }
@@ -564,8 +584,9 @@ export class CloudflareScopeHost implements ScopeHost {
         const before = await this.cp.defineRole(tenantId, parsed);
         await this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
       },
-      listRoles: async (filter?: RoleFilter): Promise<TenantRole[]> => {
+      listRoles: async (actor, filter?: RoleFilter): Promise<TenantRole[]> => {
         const rows = await this.cp.listRoles({ tenantId: filter?.tenantId, source: filter?.source });
+        await this.recordAccess(actor, 'listRoles', { tenantId: filter?.tenantId ?? null }, filter, rows.length);
         // Parsed, not cast — the same parse the pure adapter does, which is what
         // makes the shared contract suite mean anything.
         return rows.map((r) =>
@@ -645,9 +666,14 @@ export class CloudflareScopeHost implements ScopeHost {
         if (!created) return; // idempotent, and a no-op is not audited
         await this.recordAdmin(actor, 'createOrg', { tenantId: parsed.tenantId }, null, parsed);
       },
-      listOrgs: async (tenantId: TenantId) => (await this.cp.listOrgs(tenantId)).map(mapOrg),
-      getOrg: async (tenantId: TenantId, orgId: OrgId) => {
+      listOrgs: async (actor, tenantId: TenantId) => {
+        const orgs = (await this.cp.listOrgs(tenantId)).map(mapOrg);
+        await this.recordAccess(actor, 'listOrgs', { tenantId }, null, orgs.length);
+        return orgs;
+      },
+      getOrg: async (actor, tenantId: TenantId, orgId: OrgId) => {
         const r = await this.cp.readOrg(tenantId, orgId);
+        await this.recordAccess(actor, 'getOrg', { tenantId }, { orgId }, r ? 1 : 0);
         return r ? mapOrg(r) : undefined;
       },
       addMember: async (actor, tenantId, principal, orgId) => {
@@ -674,13 +700,14 @@ export class CloudflareScopeHost implements ScopeHost {
         if (!changed) return;
         await this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
       },
-      listMembers: async (tenantId, orgId, options) => {
+      listMembers: async (actor, tenantId, orgId, options) => {
         await requireOrg(tenantId, orgId);
         const rows = await this.cp.listMembers(
           tenantId,
           `org:${orgId}`,
           options?.includeRevoked ?? false,
         );
+        await this.recordAccess(actor, 'listMembers', { tenantId }, { orgId, ...options }, rows.length);
         return rows.map((r) =>
           orgMembership.parse({
             principal: r.subject.slice('principal:'.length),
@@ -705,13 +732,18 @@ export class CloudflareScopeHost implements ScopeHost {
         const before = await this.cp.setTenantStatus(tenantId, status);
         await this.recordAdmin(actor, 'setTenantStatus', { tenantId }, { status: before }, { status });
       },
-      listTenants: async (): Promise<Tenant[]> =>
-        (await this.cp.listTenants()).map((t) => tenantSchema.parse(t)),
-      getTenant: async (tenantId): Promise<Tenant | undefined> => {
+      listTenants: async (actor): Promise<Tenant[]> => {
+        const tenants = (await this.cp.listTenants()).map((t) => tenantSchema.parse(t));
+        // Enumerating every tenant on the platform is the read this log exists for.
+        await this.recordAccess(actor, 'listTenants', {}, null, tenants.length);
+        return tenants;
+      },
+      getTenant: async (actor, tenantId): Promise<Tenant | undefined> => {
         const t = await this.cp.getTenant(tenantId);
+        await this.recordAccess(actor, 'getTenant', { tenantId }, null, t ? 1 : 0);
         return t ? tenantSchema.parse(t) : undefined;
       },
-      listScopes: async (filter?: ScopeFilter): Promise<Scope[]> => {
+      listScopes: async (actor, filter?: ScopeFilter): Promise<Scope[]> => {
         const rows = await this.cp.listScopes({
           tenantId: filter?.tenantId,
           status: filter?.status
@@ -721,10 +753,12 @@ export class CloudflareScopeHost implements ScopeHost {
             : undefined,
           vertical: filter?.vertical,
         });
+        await this.recordAccess(actor, 'listScopes', { tenantId: filter?.tenantId ?? null }, filter, rows.length);
         return rows.map(mapScope);
       },
-      getScopeRecord: async (tenantId, scopeId): Promise<Scope | undefined> => {
+      getScopeRecord: async (actor, tenantId, scopeId): Promise<Scope | undefined> => {
         const row = await this.cp.getScopeRecord(tenantId, scopeId);
+        await this.recordAccess(actor, 'getScopeRecord', { tenantId, scopeId }, null, row ? 1 : 0);
         return row ? mapScope(row) : undefined;
       },
       suspendScope: async (actor, tenantId, scopeId) =>
@@ -745,7 +779,11 @@ export class CloudflareScopeHost implements ScopeHost {
         if (!changed) return; // nothing held, nothing changed
         await this.recordAdmin(actor, 'revokeEntitlement', { tenantId }, { entitlementKey }, null);
       },
-      listEntitlements: async (tenantId): Promise<string[]> => this.cp.listEntitlements(tenantId),
+      listEntitlements: async (actor, tenantId): Promise<string[]> => {
+        const keys = await this.cp.listEntitlements(tenantId);
+        await this.recordAccess(actor, 'listEntitlements', { tenantId }, null, keys.length);
+        return keys;
+      },
       registerIdentityPool: async (actor, input: IdentityPool) => {
         const parsed = identityPool.parse(input);
         const created = await this.cp.registerIdentityPool(
@@ -759,13 +797,14 @@ export class CloudflareScopeHost implements ScopeHost {
         // what made the admin log's tenantId nullable.
         await this.recordAdmin(actor, 'registerIdentityPool', { tenantId: parsed.tenantId }, null, parsed);
       },
-      getIdentityPool: async (provider: string) => {
+      getIdentityPool: async (actor, provider: string) => {
         const r = await this.cp.readPool(provider);
+        await this.recordAccess(actor, 'getIdentityPool', {}, { provider }, r ? 1 : 0);
         return r
           ? identityPool.parse({ provider: r.provider, topology: r.topology, tenantId: r.tenant_id })
           : undefined;
       },
-      listIdentityTenants: async (provider: string, externalId: string) => {
+      listIdentityTenants: async (actor, provider: string, externalId: string) => {
         const r = await this.cp.readPool(provider);
         if (!r) throw new Error(`identity pool '${provider}' is not registered`);
         if (r.topology !== 'central') {
@@ -774,7 +813,9 @@ export class CloudflareScopeHost implements ScopeHost {
               `meaningful on a central pool, where the same externalId is the same person`,
           );
         }
-        return (await this.cp.identityTenants(provider, externalId)) as TenantId[];
+        const tenants = (await this.cp.identityTenants(provider, externalId)) as TenantId[];
+        await this.recordAccess(actor, 'listIdentityTenants', {}, { provider }, tenants.length);
+        return tenants;
       },
       linkIdentity: async (actor, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
@@ -818,7 +859,38 @@ export class CloudflareScopeHost implements ScopeHost {
         if (!row) return undefined;
         return resolvedIdentity.parse({ principal: row.principal, scopeId: row.scopeId });
       },
-      auditLog: async (filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
+      accessLog: async (actor, filter?: AccessLogFilter): Promise<AccessLogEntry[]> => {
+        const rows = await this.cp.accessLog({
+          actor: filter?.actor,
+          tenantId: filter?.tenantId,
+          method: filter?.method,
+          limit: filter?.limit,
+        });
+        // Reading the access log is itself a read. Recorded before returning, so
+        // the row describing this call is not in its own result.
+        await this.recordAccess(actor, 'accessLog', { tenantId: filter?.tenantId ?? null }, filter, rows.length);
+        return rows.map((r) =>
+          accessLogEntry.parse({
+            id: r.id,
+            actor: r.actor,
+            method: r.method,
+            tenantId: r.tenant_id,
+            scopeId: r.scope_id,
+            params: r.params,
+            resultCount: r.result_count,
+            drainedAt: r.drained_at,
+            at: r.at,
+          }),
+        );
+      },
+      pruneAccessLog: async (actor, limit: number): Promise<number> => {
+        const pruned = await this.cp.pruneAccessLog(limit);
+        if (pruned > 0) {
+          await this.recordAdmin(actor, 'pruneAccessLog', { tenantId: null }, { pruned }, null);
+        }
+        return pruned;
+      },
+      auditLog: async (actor, filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
         const rows = await this.cp.auditLog({
           tenantId: filter?.tenantId,
           scopeId: filter?.scopeId,
@@ -835,12 +907,43 @@ export class CloudflareScopeHost implements ScopeHost {
           cursor: filter?.cursor,
           order: filter?.order,
         });
+        // Reading the audit trail is itself audited.
+        await this.recordAccess(
+          actor,
+          'auditLog',
+          { tenantId: filter?.tenantId ?? null, scopeId: filter?.scopeId ?? null },
+          filter,
+          rows.length,
+        );
         return rows.map((r) => adminLogEntry.parse(r));
       },
     };
   }
 
   // -- helpers --------------------------------------------------------------
+
+  /**
+   * Record a staff read (K-24). `params` is a bounded summary, capped so one query
+   * cannot write an unbounded row.
+   */
+  private async recordAccess(
+    actor: PlatformActorId,
+    method: string,
+    target: { tenantId?: TenantId | null; scopeId?: ScopeId | null },
+    params: unknown,
+    resultCount: number,
+  ): Promise<void> {
+    await this.cp.recordAccess({
+      id: ulid(),
+      actor,
+      method,
+      tenantId: target.tenantId ?? null,
+      scopeId: target.scopeId ?? null,
+      params: params == null ? null : JSON.stringify(params).slice(0, 500),
+      resultCount,
+      at: new Date().toISOString(),
+    });
+  }
 
   private async recordAdmin(
     actor: PlatformActorId,

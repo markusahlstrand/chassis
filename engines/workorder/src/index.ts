@@ -19,7 +19,7 @@ import {
 } from '@substrat-run/kernel';
 
 // ============================================================================
-// The work-order engine (demos/fsm/spec/testrun.md §4.2/§5.2). Owns the state
+// The work-order engine (demos/callout/spec/testrun.md §4.2/§5.2). Owns the state
 // machine and the append-only invariants; knows NOTHING about pricing (the
 // vertical's job) or invoicing (a sibling engine, reached only via events).
 // ============================================================================

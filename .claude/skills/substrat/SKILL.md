@@ -76,7 +76,7 @@ Imported directly; their in-scope functions run in **your** transaction.
 
 **No import.** You emit; they consume. This is the star topology.
 
-- **`@substrat-run/engine-invoicing`** — invoice basis (`fakturaunderlag`) and lines,
+- **`@substrat-run/engine-invoicing`** — invoice basis (`invoice basis`) and lines,
   immutable after export. It consumes `workorder.completed` **and**
   `commerce.order-placed`. So an e-commerce vertical that imports zero engines still gets
   invoicing by emitting an event.
@@ -114,7 +114,7 @@ If it's a bad fit, say so, say why, name a better tool, and stop. Do not scaffol
 Short. Recommend a default and move.
 
 - **Auth.** Local dev uses an `x-principal` header — a dev seam, not a login. Offer to
-  wire Better Auth (the `demos/fsm` pattern) if they want a real login now; otherwise
+  wire Better Auth (the `demos/callout` pattern) if they want a real login now; otherwise
   default to the dev header and say it must be replaced before anything real. Real auth
   gates *exposing* the app, not *building* it.
 - **The cast.** Confirm the personas and their roles — e.g. `office-admin`,
@@ -266,7 +266,7 @@ see other customers' data?*
 Only if the user asks. Local-first is a legitimate stopping point.
 
 Substrat runs on Cloudflare via `@substrat-run/adapter-cloudflare` (Durable Objects), and
-`demos/fsm` in the Substrat repo is the reference for the Worker topology. Be honest about
+`demos/callout` in the Substrat repo is the reference for the Worker topology. Be honest about
 the state of it: **custom hostname provisioning is not built yet** — a deploy lands on a
 `workers.dev` URL, not `theirbrand.com`. Say that before they ask.
 

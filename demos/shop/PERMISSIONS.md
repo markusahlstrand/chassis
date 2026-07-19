@@ -15,8 +15,8 @@
 | `catalog:manage` | Manage products, variants and publishing | `@substrat-run/demo-shop` |
 | `customer:manage` | Manage customer records | `@substrat-run/demo-shop` |
 | `discount:manage` | Create and manage discount codes | `@substrat-run/demo-shop` |
-| `invoicing:export` | Export a fakturaunderlag (makes it immutable) | `@substrat-run/engine-invoicing` |
-| `invoicing:read` | Read fakturaunderlag | `@substrat-run/engine-invoicing` |
+| `invoicing:export` | Export an invoice basis (makes it immutable) | `@substrat-run/engine-invoicing` |
+| `invoicing:read` | Read invoice bases | `@substrat-run/engine-invoicing` |
 | `order:fulfil` | Advance an order from placed → fulfilled → closed | `@substrat-run/demo-shop` |
 | `order:read` | Read orders (admin); portal customers hold an entity-narrowed grant | `@substrat-run/demo-shop` |
 | `shop:browse` | Read the published catalogue | `@substrat-run/demo-shop` |

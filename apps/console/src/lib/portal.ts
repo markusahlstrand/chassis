@@ -9,7 +9,7 @@ import type { Scope } from '@substrat-run/contracts';
  * vertical)` router (control-plane.md §4.2/§5.5, the "Domains" capability that is
  * not built yet). Until that exists there is no authoritative per-scope origin,
  * so locally we read a single base from `VITE_PORTAL_BASE` (the root `pnpm dev`
- * points it at the ServiceCo app) and carry the tenant/scope as query params so a
+ * points it at the Callout app) and carry the tenant/scope as query params so a
  * vertical that wants to deep-link can. When the directory can answer "where does
  * this scope live", this function reads that instead of an env var.
  */

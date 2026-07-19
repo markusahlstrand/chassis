@@ -68,8 +68,8 @@ export const moduleManifest = z.object({
   // Keyed on operations, never on engine transitions: the kernel sees
   // operations, and must not learn engine internals (star topology). Policy
   // that is CONDITIONAL on vertical data (e.g. "only montage orders need an
-  // egenkontroll") stays vertical-composed glue inside the operation — see
-  // demos/fsm. Guards live here so that adding or DROPPING a compliance gate
+  // self-inspection") stays vertical-composed glue inside the operation — see
+  // demos/callout. Guards live here so that adding or DROPPING a compliance gate
   // lands in the reviewable manifest diff.
   //
   // Optional: every pre-milestone-C manifest still parses unchanged (D-28,

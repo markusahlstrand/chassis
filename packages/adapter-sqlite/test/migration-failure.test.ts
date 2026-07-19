@@ -50,7 +50,7 @@ describe('migration failure is recorded in the directory', () => {
 
   it('records which module@version failed, and why', async () => {
     await expect(host.getScope(alice, t, s)).rejects.toThrow();
-    const record = await host.admin.getScopeRecord(t, s);
+    const record = await host.admin.getScopeRecord(staff, t, s);
     expect(record?.migrationFailure).not.toBeNull();
     expect(record?.migrationFailure?.version).toBe('@test/broken@0002-broken');
     expect(record?.migrationFailure?.error).toMatch(/./);
@@ -60,14 +60,14 @@ describe('migration failure is recorded in the directory', () => {
   it('projects the count that actually landed, not the pre-attempt value', async () => {
     // `0001-ok` applied and journaled; `0002-broken` rolled back. A stale '0'
     // here is the exact symptom #32 describes — the scope looking untouched.
-    const record = await host.admin.getScopeRecord(t, s);
+    const record = await host.admin.getScopeRecord(staff, t, s);
     expect(record?.schemaVersion).toBe('1');
   });
 
   it('counts consecutive attempts, so a sweep can back off (#49)', async () => {
-    const before = (await host.admin.getScopeRecord(t, s))?.migrationFailure?.attempts ?? 0;
+    const before = (await host.admin.getScopeRecord(staff, t, s))?.migrationFailure?.attempts ?? 0;
     await expect(host.getScope(alice, t, s)).rejects.toThrow();
-    const after = (await host.admin.getScopeRecord(t, s))?.migrationFailure?.attempts ?? 0;
+    const after = (await host.admin.getScopeRecord(staff, t, s))?.migrationFailure?.attempts ?? 0;
     expect(after).toBeGreaterThan(before);
   });
 
@@ -79,7 +79,7 @@ describe('migration failure is recorded in the directory', () => {
       await healthy.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
       await healthy.provisionScope(staff, { tenantId: t, scopeId: ok, jurisdiction: 'eu' });
       await healthy.getScope(alice, t, ok);
-      const record = await healthy.admin.getScopeRecord(t, ok);
+      const record = await healthy.admin.getScopeRecord(staff, t, ok);
       expect(record?.migrationFailure).toBeNull();
     } finally {
       await healthy.close();

@@ -17,9 +17,9 @@ import {
 
 // ============================================================================
 // The protocol engine (docs/design/engine-protocol.md, extracted at milestone
-// B per decision 27: the second vertical's shape — CykelService's per-bike
+// B per decision 27: the second vertical's shape — Handlebar's per-bike
 // condition report with a customer counter-signature at pickup — forced the
-// invariants out of ServiceCo's vertical code). The engine owns ONLY the
+// invariants out of Callout's vertical code). The engine owns ONLY the
 // invariants; template CONTENT (which protocols exist, what they contain)
 // is 100% vertical-owned:
 //
@@ -281,7 +281,7 @@ export async function protocolContentHash(
 //  pole 1 — VERTICAL-COMPOSED (milestone A): the vertical calls requireSigned()
 //    inside its own operation before the engine transition. Right when the
 //    policy is CONDITIONAL on vertical data ("only montage orders need an
-//    egenkontroll" — demos/fsm): the condition is vertical vocabulary, and the
+//    self-inspection" — demos/callout): the condition is vertical vocabulary, and the
 //    kernel must never learn it. Weakness: it is glue an edit can silently drop.
 //
 //  pole 2 — MANIFEST-DECLARED (milestone C): the engine contributes the named
@@ -289,7 +289,7 @@ export async function protocolContentHash(
 //    operation (`guards: [{ before, predicate, config }]`) and the kernel runs
 //    it inside that operation's transaction, before the handler. Right when the
 //    gate is UNCONDITIONAL ("a repair cannot be closed until the customer
-//    counter-signed the tillståndsrapport" — demos/bike-shop). Adding or
+//    counter-signed the tillståndsrapport" — demos/handlebar). Adding or
 //    DROPPING the gate is then a manifest diff: human-checkpoint material.
 //
 // Both poles are the same read against the same engine-owned tables. Star

@@ -1,18 +1,18 @@
 ---
 name: new-vertical
-description: Scaffold a complete Substrat vertical (manifest, migrations, operations, seed world, server, app skin, scenario test) from a concept + the ServiceCo reference. Use when asked to build, scaffold, or skin a new vertical or demo vertical on the Substrat platform.
+description: Scaffold a complete Substrat vertical (manifest, migrations, operations, seed world, server, app skin, scenario test) from a concept + the Callout reference. Use when asked to build, scaffold, or skin a new vertical or demo vertical on the Substrat platform.
 ---
 
 # Scaffold a Substrat vertical
 
 A vertical is a private package under `demos/<name>/` that composes the published
 engines with its own vocabulary, tables, pricing, roles, and screens. The reference
-is **ServiceCo** (`demos/fsm`) — read these five files before writing anything:
+is **Callout** (`demos/callout`) — read these five files before writing anything:
 
-1. `demos/fsm/src/module.ts` — manifest, migrations, operations, the pricing moment
-2. `demos/fsm/src/seed.ts` — host construction, roles, grants, seed world
-3. `demos/fsm/src/server.ts` — thin Hono wrapper, one route per operation
-4. `demos/fsm/test/scenario.test.ts` — the headless end-to-end scenario
+1. `demos/callout/src/module.ts` — manifest, migrations, operations, the pricing moment
+2. `demos/callout/src/seed.ts` — host construction, roles, grants, seed world
+3. `demos/callout/src/server.ts` — thin Hono wrapper, one route per operation
+4. `demos/callout/test/scenario.test.ts` — the headless end-to-end scenario
 5. `packages/kernel/src/scope-host.ts` — the contract your module code runs against
 
 Also load the repo rules in `CLAUDE.md` (three-layer rule, module code rules, the two
@@ -33,7 +33,7 @@ price list, roles, screens** — nothing that belongs to an engine's state machi
 
 ### 2. Package skeleton
 
-Copy the shape of `demos/fsm/package.json`, `tsconfig.json`, `vitest.config.ts`.
+Copy the shape of `demos/callout/package.json`, `tsconfig.json`, `vitest.config.ts`.
 Package name `@substrat-run/demo-<name>`, `"private": true`. Register the dev script
 pass-through in the root `package.json` only if asked. Workspace globs already cover
 `demos/*` and `demos/*/app`.
@@ -80,7 +80,7 @@ machine can't skip. Denial assertions are not optional — they are the demo.
 
 ### 6. App skin (`app/`)
 
-Copy-and-own from `demos/fsm/app`: Vite + React, hash routing, principal picker in
+Copy-and-own from `demos/callout/app`: Vite + React, hash routing, principal picker in
 the top bar, views renamed to the vertical's vocabulary. Change brand, labels, and
 which columns matter; keep the api.ts pattern (typed wrappers over the server routes).
 

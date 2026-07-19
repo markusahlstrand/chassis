@@ -124,19 +124,19 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
 
   // -- tenant registry (§4.1) ------------------------------------------------
 
-  app.get('/tenants', async (c) => c.json(await admin.listTenants()));
+  app.get('/tenants', async (c) => c.json(await admin.listTenants(c.get('actor'))));
 
   app.post('/tenants', async (c) => {
     const input = createTenantInput.parse(await c.req.json());
     await admin.createTenant(c.get('actor'), input);
     // Idempotent (§4.1): re-creating an existing tenant is a no-op, not an error,
     // so this reads back rather than reporting a create that may not have happened.
-    return c.json(await admin.getTenant(input.id), 201);
+    return c.json(await admin.getTenant(c.get('actor'), input.id), 201);
   });
 
   app.get('/tenants/:tenantId', async (c) => {
     const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
-    const tenant = await admin.getTenant(tenantId);
+    const tenant = await admin.getTenant(c.get('actor'), tenantId);
     if (!tenant) return c.json({ error: `unknown tenant: ${tenantId}` }, 404);
     return c.json(tenant);
   });
@@ -148,25 +148,25 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     // under the tenant. The blast radius is the console's to show; the audit row
     // is this layer's to guarantee.
     await admin.setTenantStatus(c.get('actor'), tenantId, status);
-    return c.json(await admin.getTenant(tenantId));
+    return c.json(await admin.getTenant(c.get('actor'), tenantId));
   });
 
   // -- entitlements (§4.3) ---------------------------------------------------
 
   app.get('/tenants/:tenantId/entitlements', async (c) =>
-    c.json(await admin.listEntitlements(tenantIdSchema.parse(c.req.param('tenantId')))),
+    c.json(await admin.listEntitlements(c.get('actor'), tenantIdSchema.parse(c.req.param('tenantId')))),
   );
 
   app.put('/tenants/:tenantId/entitlements/:key', async (c) => {
     const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
     await admin.grantEntitlement(c.get('actor'), tenantId, c.req.param('key'));
-    return c.json(await admin.listEntitlements(tenantId));
+    return c.json(await admin.listEntitlements(c.get('actor'), tenantId));
   });
 
   app.delete('/tenants/:tenantId/entitlements/:key', async (c) => {
     const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
     await admin.revokeEntitlement(c.get('actor'), tenantId, c.req.param('key'));
-    return c.json(await admin.listEntitlements(tenantId));
+    return c.json(await admin.listEntitlements(c.get('actor'), tenantId));
   });
 
   // -- the scope directory (§3.2/§4.2) ---------------------------------------
@@ -177,20 +177,20 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       status: c.req.queries('status'),
       vertical: c.req.query('vertical'),
     });
-    return c.json(await admin.listScopes(filter));
+    return c.json(await admin.listScopes(c.get('actor'), filter));
   });
 
   app.post('/scopes', async (c) => {
     const input = provisionScopeBody.parse(await c.req.json());
     await host.provisionScope(c.get('actor'), input as Parameters<ScopeHost['provisionScope']>[1]);
-    const record = await admin.getScopeRecord(input.tenantId, input.scopeId);
+    const record = await admin.getScopeRecord(c.get('actor'), input.tenantId, input.scopeId);
     return c.json(record, 201);
   });
 
   app.get('/tenants/:tenantId/scopes/:scopeId', async (c) => {
     const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
     const scopeId = scopeIdSchema.parse(c.req.param('scopeId'));
-    const record = await admin.getScopeRecord(tenantId, scopeId);
+    const record = await admin.getScopeRecord(c.get('actor'), tenantId, scopeId);
     // Absent, or present under another tenant — indistinguishable on purpose (K-3).
     if (!record) return c.json({ error: `unknown scope for tenant: (${tenantId}, ${scopeId})` }, 404);
     return c.json(record);
@@ -212,7 +212,7 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
       const scopeId = scopeIdSchema.parse(c.req.param('scopeId'));
       await run(c.get('actor'), tenantId, scopeId);
-      return c.json(await admin.getScopeRecord(tenantId, scopeId));
+      return c.json(await admin.getScopeRecord(c.get('actor'), tenantId, scopeId));
     });
   }
 
@@ -226,7 +226,7 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       tenantId: c.req.query('tenantId'),
       source: c.req.query('source'),
     });
-    return c.json(await admin.listRoles(filter));
+    return c.json(await admin.listRoles(c.get('actor'), filter));
   });
 
   // -- the admin log (§4.4/§4.5) ---------------------------------------------
@@ -243,7 +243,7 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       cursor: c.req.query('cursor'),
       order: c.req.query('order'),
     });
-    const entries = await admin.auditLog(filter as Parameters<typeof admin.auditLog>[0]);
+    const entries = await admin.auditLog(c.get('actor'), filter as Parameters<typeof admin.auditLog>[1]);
     // The cursor IS the last entry's id (ULID order is chronological), so the
     // page carries its own continuation and the console never assembles one.
     return c.json({ entries, nextCursor: entries.at(-1)?.id ?? null });

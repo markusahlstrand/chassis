@@ -17,7 +17,7 @@ dist-worker/
 # Local dev secrets for wrangler (BETTER_AUTH_SECRET etc.)
 .dev.vars
 **/.dev.vars
-demos/fsm/wrangler.jsonc
+demos/callout/wrangler.jsonc
 
 # demo runtime data (seeded on every server start)
 demos/rally/.data/

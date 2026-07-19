@@ -370,7 +370,7 @@ Two consequences:
 
 1. **Real auth gates *exposing* the console, not *building* it.** Nothing with cross-tenant
    reach goes anywhere non-local on a stub. The demo's `x-principal` header
-   (`demos/fsm/src/server.ts`) is a dev affordance; a super-admin on top of it is a
+   (`demos/callout/src/server.ts`) is a dev affordance; a super-admin on top of it is a
    liability, not a milestone.
 2. **Platform-staff auth is a different regime from tenant-user auth.** Staff: SSO, MFA, no
    self-service signup, short sessions, a small closed population, plausibly its own IdP

@@ -53,7 +53,7 @@ export default {
 (`new_sqlite_classes`). Run it on real `workerd` with `wrangler dev` (no account needed);
 deploy with `wrangler deploy` (DO SQLite needs a Workers Paid plan).
 
-A demo vertical — [ServiceCo](https://github.com/substrat-run/substrat/tree/main/demos/fsm) —
+A demo vertical — [Callout](https://github.com/substrat-run/substrat/tree/main/demos/callout) —
 runs deployed on it today, behind Better Auth.
 
 ## How the semantics map

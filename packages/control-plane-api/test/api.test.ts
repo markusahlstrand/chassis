@@ -51,7 +51,7 @@ describe('control-plane API', () => {
       body: JSON.stringify({ id: tenantId.parse(ulid()), slug: 'ghost', name: 'Ghost' }),
     });
     expect(write.status).toBe(401);
-    expect(await host.admin.listTenants()).toHaveLength(0);
+    expect(await host.admin.listTenants(staff)).toHaveLength(0);
   });
 
   it('refuses a malformed actor rather than writing it to the log', async () => {
@@ -72,7 +72,7 @@ describe('control-plane API', () => {
     });
     expect(res.status).toBe(201);
 
-    const rows = (await host.admin.auditLog({ tenantId: t1 })).filter(
+    const rows = (await host.admin.auditLog(staff, { tenantId: t1 })).filter(
       (r) => r.action === 'createTenant',
     );
     expect(rows).toHaveLength(1);

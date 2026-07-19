@@ -1,0 +1,34 @@
+{
+  "name": "@substrat-run/demo-handlebar",
+  "version": "0.0.6",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Handlebar demo vertical — the v2 bike-shop skin, see spec/concept.md",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "server": "tsx src/server.ts",
+    "dev": "concurrently -n api,web -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\"",
+    "demo": "pnpm run dev"
+  },
+  "dependencies": {
+    "@substrat-run/adapter-sqlite": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/engine-invoicing": "workspace:^",
+    "@substrat-run/engine-protocol": "workspace:^",
+    "@substrat-run/engine-workorder": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
+    "@hono/node-server": "^1.13.0",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.6.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "concurrently": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
