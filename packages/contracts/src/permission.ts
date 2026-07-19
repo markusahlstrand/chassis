@@ -68,6 +68,11 @@ export type CapabilityGrant = z.infer<typeof capabilityGrant>;
 
 // 'principal:<ulid>' | 'org:<ulid>' | 'tenant:<ulid>' | 'scope:<ulid>' |
 // '<entityType>:<entityId>' — namespace:id
+//
+// The regex is deliberately loose on the id half: entity ids are vertical-owned and
+// need not be ULIDs. The kernel-owned namespaces above ARE all branded ULIDs at their
+// own boundary — `org:` became one in K-22, which is when this comment stopped being
+// aspirational.
 export const objectRef = z
   .string()
   .regex(/^[a-z0-9_-]+:[^\s]+$/)

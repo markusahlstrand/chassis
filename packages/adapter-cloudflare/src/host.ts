@@ -2,7 +2,9 @@ import {
   adminLogEntry,
   createTenantInput,
   identityLink,
+  createOrgInput,
   moduleManifest,
+  org as orgSchema,
   orgMembership,
   resolvedIdentity,
   roleDefinition,
@@ -12,10 +14,13 @@ import {
   type AdminAction,
   type AdminLogEntry,
   type CapabilityGrant,
+  type CreateOrgInput,
   type CreateTenantInput,
   type EntityRef,
   type IdentityLink,
   type Node,
+  type Org,
+  type OrgId,
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
@@ -44,7 +49,7 @@ import {
   type ScopeHost,
   type ScopeStub,
 } from '@substrat-run/kernel';
-import type { AuditLogQuery, RoleRow, ScopeRow } from './control-plane-do.js';
+import type { AuditLogQuery, OrgRow, RoleRow, ScopeRow } from './control-plane-do.js';
 
 /**
  * `CloudflareScopeHost` — the coordinator (design doc §5.7). It runs in the
@@ -116,6 +121,15 @@ interface ControlPlaneStub {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  readOrg(tenantId: string, orgId: string): Promise<OrgRow | undefined>;
+  createOrg(
+    orgId: string,
+    tenantId: string,
+    slug: string,
+    name: string,
+    createdAt: string,
+  ): Promise<boolean>;
+  listOrgs(tenantId: string): Promise<OrgRow[]>;
   /** K-21 tombstone. Returns whether anything changed (idempotent revoke). */
   revokeMember(tenantId: string, subject: string, object: string, at: string): Promise<boolean>;
   listMembers(
@@ -374,6 +388,26 @@ export class CloudflareScopeHost implements ScopeHost {
     // table) while the contract requires them, so this parse is where that gap is
     // held shut — and it is the same parse the pure adapter does, which is what
     // makes the shared contract suite meaningful.
+    const mapOrg = (r: OrgRow): Org =>
+      orgSchema.parse({
+        id: r.org_id,
+        tenantId: r.tenant_id,
+        slug: r.slug,
+        name: r.name,
+        createdAt: r.created_at,
+      });
+
+    /**
+     * Fail closed on an org that does not exist in this tenant. Scoped by tenant, not
+     * just by id: an org from another tenant must read as absent, or grantToOrg would
+     * reach across the boundary the record exists to make explicit.
+     */
+    const requireOrg = async (tenant: TenantId, id: OrgId): Promise<void> => {
+      if (!(await this.cp.readOrg(tenant, id))) {
+        throw new Error(`unknown org ${id} in tenant ${tenant}`);
+      }
+    };
+
     const mapScope = (r: ScopeRow): Scope =>
       scopeSchema.parse({
         id: r.scope_id,
@@ -518,6 +552,9 @@ export class CloudflareScopeHost implements ScopeHost {
         );
       },
       grantToOrg: async (actor, orgId, permission, node, entity) => {
+        // The org must exist in the node's tenant. A grant to a phantom org looks
+        // applied, resolves for nobody, and still shows up in the permission diff.
+        await requireOrg(node.tenantId, orgId);
         await writeGrant(`org:${orgId}`, permission, node, entity);
         await this.recordAdmin(
           actor,
@@ -527,7 +564,25 @@ export class CloudflareScopeHost implements ScopeHost {
           { orgId, permission, node, entity },
         );
       },
+      createOrg: async (actor: PlatformActorId, input: CreateOrgInput) => {
+        const parsed = createOrgInput.parse(input);
+        const created = await this.cp.createOrg(
+          parsed.id,
+          parsed.tenantId,
+          parsed.slug,
+          parsed.name,
+          new Date().toISOString(),
+        );
+        if (!created) return; // idempotent, and a no-op is not audited
+        await this.recordAdmin(actor, 'createOrg', { tenantId: parsed.tenantId }, null, parsed);
+      },
+      listOrgs: async (tenantId: TenantId) => (await this.cp.listOrgs(tenantId)).map(mapOrg),
+      getOrg: async (tenantId: TenantId, orgId: OrgId) => {
+        const r = await this.cp.readOrg(tenantId, orgId);
+        return r ? mapOrg(r) : undefined;
+      },
       addMember: async (actor, tenantId, principal, orgId) => {
+        await requireOrg(tenantId, orgId);
         await this.cp.writeTenantTuple(
           tenantId,
           `principal:${principal}`,
@@ -538,6 +593,7 @@ export class CloudflareScopeHost implements ScopeHost {
         await this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
       },
       removeMember: async (actor, tenantId, principal, orgId) => {
+        await requireOrg(tenantId, orgId);
         // Tombstone (K-21), never DELETE. The DO reports whether anything changed
         // so a repeat revoke stays a silent no-op rather than a second audit row.
         const changed = await this.cp.revokeMember(
@@ -550,6 +606,7 @@ export class CloudflareScopeHost implements ScopeHost {
         await this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
       },
       listMembers: async (tenantId, orgId, options) => {
+        await requireOrg(tenantId, orgId);
         const rows = await this.cp.listMembers(
           tenantId,
           `org:${orgId}`,

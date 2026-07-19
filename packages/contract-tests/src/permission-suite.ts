@@ -3,11 +3,13 @@ import {
   moduleId,
   permissionKey,
   platformActorId,
+  orgId,
   principalId,
   scopeId,
   tenantId,
   type EntityRef,
   type PermissionKey,
+  type OrgId,
   type PrincipalId,
 } from '@substrat-run/contracts';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
@@ -39,6 +41,13 @@ export function permissionContractSuite(
     const carol: PrincipalId = principalId.parse(ulid()); // entity-narrowed grant
     const dave: PrincipalId = principalId.parse(ulid()); // expired grant
     const erin: PrincipalId = principalId.parse(ulid()); // via org membership
+    // Orgs are real records with branded ULID ids (K-22) — `acme` as a bare string
+    // used to BE the org, so a typo silently addressed a different one.
+    const acme: OrgId = orgId.parse(ulid());
+    const beta: OrgId = orgId.parse(ulid());
+    const gamma: OrgId = orgId.parse(ulid());
+    const delta: OrgId = orgId.parse(ulid());
+    const epsilon: OrgId = orgId.parse(ulid());
     const staff = platformActorId.parse(ulid()); // control-plane dev actor (§6)
 
     const probe = async (
@@ -97,8 +106,9 @@ export function permissionContractSuite(
         expiresAt: (await import('@substrat-run/contracts')).instant.parse('2000-01-01T00:00:00Z'),
         grantedBy: alice,
       });
-      await host.admin.grantToOrg(staff, 'acme', PERM_READ, { tenantId: t1, scopeId: s1 });
-      await host.admin.addMember(staff, t1, erin, 'acme');
+      await host.admin.createOrg(staff, { id: acme, tenantId: t1, slug: 'acme', name: 'Acme' });
+      await host.admin.grantToOrg(staff, acme, PERM_READ, { tenantId: t1, scopeId: s1 });
+      await host.admin.addMember(staff, t1, erin, acme);
     });
 
     afterAll(async () => {
@@ -142,7 +152,7 @@ export function permissionContractSuite(
     it('org membership reaches org grants (rule 4), membership tuple in the proof', async () => {
       const d = await probe(erin, s1, PERM_READ);
       expect(d.allowed).toBe(true);
-      expect(JSON.stringify(d.proof)).toContain('org:acme');
+      expect(JSON.stringify(d.proof)).toContain(`org:${acme}`);
     });
 
     // -- revocation tombstones (K-21) ----------------------------------------
@@ -151,11 +161,12 @@ export function permissionContractSuite(
 
     it('revoking a membership stops it granting, but keeps it readable as evidence', async () => {
       const frank: PrincipalId = principalId.parse(ulid());
-      await host.admin.grantToOrg(staff, 'beta', PERM_READ, { tenantId: t1, scopeId: s1 });
-      await host.admin.addMember(staff, t1, frank, 'beta');
+      await host.admin.createOrg(staff, { id: beta, tenantId: t1, slug: 'beta', name: 'Beta' });
+      await host.admin.grantToOrg(staff, beta, PERM_READ, { tenantId: t1, scopeId: s1 });
+      await host.admin.addMember(staff, t1, frank, beta);
       await expect(probe(frank, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
 
-      await host.admin.removeMember(staff, t1, frank, 'beta');
+      await host.admin.removeMember(staff, t1, frank, beta);
 
       // The walk skips it — access is gone.
       await expect(probe(frank, s1, PERM_READ)).resolves.toMatchObject({ allowed: false });
@@ -163,8 +174,8 @@ export function permissionContractSuite(
       // And the row is still here. This is the entire reason K-21 chose a
       // tombstone over a DELETE: a tuple that once granted access is the evidence
       // of why an access was allowed (K-4), which a deleted row cannot provide.
-      expect(await host.admin.listMembers(t1, 'beta')).toEqual([]);
-      const withRevoked = await host.admin.listMembers(t1, 'beta', { includeRevoked: true });
+      expect(await host.admin.listMembers(t1, beta)).toEqual([]);
+      const withRevoked = await host.admin.listMembers(t1, beta, { includeRevoked: true });
       expect(withRevoked).toHaveLength(1);
       expect(withRevoked[0]!.principal).toBe(frank);
       expect(typeof withRevoked[0]!.revokedAt).toBe('string');
@@ -173,46 +184,101 @@ export function permissionContractSuite(
     it('enumerates live members of an org', async () => {
       const gina: PrincipalId = principalId.parse(ulid());
       const hank: PrincipalId = principalId.parse(ulid());
-      await host.admin.addMember(staff, t1, gina, 'gamma');
-      await host.admin.addMember(staff, t1, hank, 'gamma');
-      await host.admin.removeMember(staff, t1, hank, 'gamma');
+      await host.admin.createOrg(staff, { id: gamma, tenantId: t1, slug: 'gamma', name: 'Gamma' });
+      await host.admin.addMember(staff, t1, gina, gamma);
+      await host.admin.addMember(staff, t1, hank, gamma);
+      await host.admin.removeMember(staff, t1, hank, gamma);
 
-      const live = await host.admin.listMembers(t1, 'gamma');
+      const live = await host.admin.listMembers(t1, gamma);
       expect(live.map((m) => m.principal)).toEqual([gina]);
       expect(live[0]!.revokedAt).toBeNull();
-      expect(await host.admin.listMembers(t1, 'gamma', { includeRevoked: true })).toHaveLength(2);
+      expect(await host.admin.listMembers(t1, gamma, { includeRevoked: true })).toHaveLength(2);
     });
 
     it('re-adding a revoked member clears the tombstone', async () => {
       const iris: PrincipalId = principalId.parse(ulid());
-      await host.admin.grantToOrg(staff, 'delta', PERM_READ, { tenantId: t1, scopeId: s1 });
-      await host.admin.addMember(staff, t1, iris, 'delta');
-      await host.admin.removeMember(staff, t1, iris, 'delta');
+      await host.admin.createOrg(staff, { id: delta, tenantId: t1, slug: 'delta', name: 'Delta' });
+      await host.admin.grantToOrg(staff, delta, PERM_READ, { tenantId: t1, scopeId: s1 });
+      await host.admin.addMember(staff, t1, iris, delta);
+      await host.admin.removeMember(staff, t1, iris, delta);
       await expect(probe(iris, s1, PERM_READ)).resolves.toMatchObject({ allowed: false });
 
-      await host.admin.addMember(staff, t1, iris, 'delta');
+      await host.admin.addMember(staff, t1, iris, delta);
       await expect(probe(iris, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
-      const rows = await host.admin.listMembers(t1, 'delta', { includeRevoked: true });
+      const rows = await host.admin.listMembers(t1, delta, { includeRevoked: true });
       expect(rows.find((m) => m.principal === iris)?.revokedAt).toBeNull();
     });
 
     it('revoking is idempotent — no timestamp drift, no second audit row', async () => {
       const jack: PrincipalId = principalId.parse(ulid());
-      await host.admin.addMember(staff, t1, jack, 'epsilon');
-      await host.admin.removeMember(staff, t1, jack, 'epsilon');
-      const first = (await host.admin.listMembers(t1, 'epsilon', { includeRevoked: true }))[0]!
+      await host.admin.createOrg(staff, { id: epsilon, tenantId: t1, slug: 'epsilon', name: 'Eps' });
+      await host.admin.addMember(staff, t1, jack, epsilon);
+      await host.admin.removeMember(staff, t1, jack, epsilon);
+      const first = (await host.admin.listMembers(t1, epsilon, { includeRevoked: true }))[0]!
         .revokedAt;
 
-      await host.admin.removeMember(staff, t1, jack, 'epsilon');
-      await host.admin.removeMember(staff, t1, jack, 'never-a-member');
+      await host.admin.removeMember(staff, t1, jack, epsilon);
+      await host.admin.removeMember(staff, t1, jack, gamma); // real org, never a member
 
-      const after = (await host.admin.listMembers(t1, 'epsilon', { includeRevoked: true }))[0]!
+      const after = (await host.admin.listMembers(t1, epsilon, { includeRevoked: true }))[0]!
         .revokedAt;
       expect(after).toBe(first);
       const removals = (await host.admin.auditLog({ tenantId: t1 })).filter(
         (r) => r.action === 'removeMember',
       );
       expect(removals.filter((r) => JSON.stringify(r.before).includes(jack))).toHaveLength(1);
+    });
+
+    // -- organizations are a real record (K-22) ------------------------------
+
+    it('refuses membership and grants for an org that does not exist', async () => {
+      const ghost: OrgId = orgId.parse(ulid());
+      const kim: PrincipalId = principalId.parse(ulid());
+      // This is what the record buys. Before it, every one of these silently
+      // succeeded and produced a tuple pointing at a phantom — granting nothing,
+      // appearing in no listing, and reading in the permission diff as if access
+      // had been conferred.
+      await expect(host.admin.addMember(staff, t1, kim, ghost)).rejects.toThrow(/unknown org/);
+      await expect(
+        host.admin.grantToOrg(staff, ghost, PERM_READ, { tenantId: t1, scopeId: s1 }),
+      ).rejects.toThrow(/unknown org/);
+      await expect(host.admin.listMembers(t1, ghost)).rejects.toThrow(/unknown org/);
+    });
+
+    it("scopes orgs by tenant — another tenant's org reads as absent", async () => {
+      // The other tenant's org must not be reachable from t1, or the record would
+      // not be the boundary it exists to make explicit.
+      const other = tenantId.parse(ulid());
+      await host.admin.createTenant(staff, { id: other, slug: `o-${other.toLowerCase()}`, name: 'O' });
+      const foreign: OrgId = orgId.parse(ulid());
+      await host.admin.createOrg(staff, { id: foreign, tenantId: other, slug: 'foreign', name: 'F' });
+      expect(await host.admin.getOrg(other, foreign)).toMatchObject({ slug: 'foreign' });
+      expect(await host.admin.getOrg(t1, foreign)).toBeUndefined();
+      const stranger: PrincipalId = principalId.parse(ulid());
+      await expect(host.admin.addMember(staff, t1, stranger, foreign)).rejects.toThrow(
+        /unknown org/,
+      );
+    });
+
+    it('creates orgs idempotently and enumerates them per tenant', async () => {
+      const dup: OrgId = orgId.parse(ulid());
+      await host.admin.createOrg(staff, { id: dup, tenantId: t1, slug: 'dup', name: 'Dup' });
+      await host.admin.createOrg(staff, { id: dup, tenantId: t1, slug: 'dup', name: 'Dup' });
+      const orgs = await host.admin.listOrgs(t1);
+      expect(orgs.filter((o) => o.id === dup)).toHaveLength(1);
+      expect(orgs.every((o) => o.tenantId === t1)).toBe(true);
+    });
+
+    it('rejects a slug already taken by a different org in the tenant', async () => {
+      const first: OrgId = orgId.parse(ulid());
+      const second: OrgId = orgId.parse(ulid());
+      await host.admin.createOrg(staff, { id: first, tenantId: t1, slug: 'taken', name: 'One' });
+      // Fails closed rather than swallowing it: a silent no-op here would report
+      // success while not creating the org the caller asked for.
+      await expect(
+        host.admin.createOrg(staff, { id: second, tenantId: t1, slug: 'taken', name: 'Two' }),
+      ).rejects.toThrow(/already taken/);
+      expect(await host.admin.getOrg(t1, second)).toBeUndefined();
     });
 
     // -- control-plane audit trail (control-plane.md §4.4) --------------------

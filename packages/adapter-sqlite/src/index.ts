@@ -10,7 +10,9 @@ import {
   identityLink,
   instant,
   moduleManifest,
+  createOrgInput,
   objectRef,
+  org as orgSchema,
   orgMembership,
   principalId,
   resolvedIdentity,
@@ -25,8 +27,11 @@ import {
   type DomainEvent,
   type DomainEventInput,
   type EntityRef,
+  type CreateOrgInput,
   type IdentityLink,
   type Node,
+  type Org,
+  type OrgId,
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
@@ -184,6 +189,14 @@ function mapMigrationFailure(r: {
   };
 }
 
+interface OrgRow {
+  org_id: string;
+  tenant_id: string;
+  slug: string;
+  name: string;
+  created_at: string;
+}
+
 interface AdminLogRow {
   id: string;
   actor: string;
@@ -273,6 +286,17 @@ export class SqliteScopeHost implements ScopeHost {
         migration_error TEXT,
         migration_attempts INTEGER NOT NULL DEFAULT 0,
         migration_last_attempt_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      -- Organizations inside a tenant (K-22). Membership tuples point at these and
+      -- grantToOrg targets them. Before this the id was a free-form string with no
+      -- record, so a typo addressed a phantom org. The tenant_id column is also
+      -- kernel-design §4.3's required orgId <-> tenantId join.
+      CREATE TABLE IF NOT EXISTS orgs (
+        org_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS _substrat_tenant_tuples (
@@ -751,6 +775,37 @@ export class SqliteScopeHost implements ScopeHost {
       return r ? mapTenant(r) : undefined;
     };
 
+    const mapOrg = (r: OrgRow): Org =>
+      orgSchema.parse({
+        id: r.org_id,
+        tenantId: r.tenant_id,
+        slug: r.slug,
+        name: r.name,
+        createdAt: r.created_at,
+      });
+
+    // Scoped by tenant, not just by id: an org id from another tenant must read as
+    // absent here, or `grantToOrg` would reach across the boundary the record exists
+    // to make explicit.
+    const readOrg = (tenant: TenantId, id: OrgId): Org | undefined => {
+      const r = this.directory
+        .prepare('SELECT * FROM orgs WHERE tenant_id = ? AND org_id = ?')
+        .get(tenant, id) as OrgRow | undefined;
+      return r ? mapOrg(r) : undefined;
+    };
+
+    /**
+     * Fail closed on an org that does not exist in this tenant. This is what the
+     * record buys: before it, membership and grants accepted any string, so a typo
+     * produced a tuple pointing at a phantom that silently granted nothing and
+     * appeared in no listing.
+     */
+    const requireOrg = (tenant: TenantId, id: OrgId): void => {
+      if (!readOrg(tenant, id)) {
+        throw new Error(`unknown org ${id} in tenant ${tenant}`);
+      }
+    };
+
     // The directory row → the `scope` contract. Parsed, not cast: the columns are
     // nullable in SQLite (ALTER TABLE cannot add NOT NULL to a populated table)
     // while the contract requires them, so this parse is where that gap is held
@@ -959,6 +1014,10 @@ export class SqliteScopeHost implements ScopeHost {
         );
       },
       grantToOrg: async (actor, orgId, permission, node, entity) => {
+        // The org must exist in the node's tenant. A grant to a phantom org is
+        // worse than an error: it looks applied, resolves for nobody, and shows up
+        // in the permission diff as though access were conferred.
+        requireOrg(node.tenantId, orgId);
         writeGrant(`org:${orgId}`, permission, node, entity);
         this.recordAdmin(
           actor,
@@ -968,7 +1027,36 @@ export class SqliteScopeHost implements ScopeHost {
           { orgId, permission, node, entity },
         );
       },
+      createOrg: async (actor: PlatformActorId, input: CreateOrgInput) => {
+        const parsed = createOrgInput.parse(input);
+        if (readOrg(parsed.tenantId, parsed.id)) return; // idempotent, unaudited
+        // Checked explicitly rather than left to the UNIQUE index: OR IGNORE would
+        // swallow a collision from a DIFFERENT id and report success, silently not
+        // creating the org the caller asked for. Fail closed instead (as createTenant).
+        const slugOwner = this.directory
+          .prepare('SELECT org_id FROM orgs WHERE tenant_id = ? AND slug = ?')
+          .get(parsed.tenantId, parsed.slug) as { org_id: string } | undefined;
+        if (slugOwner) {
+          throw new Error(
+            `org slug '${parsed.slug}' already taken by ${slugOwner.org_id} (slugs are unique per tenant)`,
+          );
+        }
+        this.directory
+          .prepare(
+            'INSERT INTO orgs (org_id, tenant_id, slug, name, created_at) VALUES (?, ?, ?, ?, ?)',
+          )
+          .run(parsed.id, parsed.tenantId, parsed.slug, parsed.name, new Date().toISOString());
+        this.recordAdmin(actor, 'createOrg', { tenantId: parsed.tenantId }, null, parsed);
+      },
+      listOrgs: async (tenantId: TenantId) =>
+        (
+          this.directory
+            .prepare('SELECT * FROM orgs WHERE tenant_id = ? ORDER BY slug')
+            .all(tenantId) as OrgRow[]
+        ).map(mapOrg),
+      getOrg: async (tenantId: TenantId, orgId: OrgId) => readOrg(tenantId, orgId),
       addMember: async (actor, tenantId, principal, orgId) => {
+        requireOrg(tenantId, orgId);
         // INSERT OR REPLACE, so re-adding a revoked member clears the tombstone —
         // they are a member again. The add/revoke history is not lost: it lives in
         // the append-only admin log, which is where "what happened" belongs. The
@@ -977,6 +1065,7 @@ export class SqliteScopeHost implements ScopeHost {
         this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
       },
       removeMember: async (actor, tenantId, principal, orgId) => {
+        requireOrg(tenantId, orgId);
         // Tombstone (K-21), never DELETE. Guarded on `revoked_at IS NULL` so a
         // repeat revoke neither moves the timestamp nor writes a second audit row.
         const info = this.directory
@@ -995,6 +1084,7 @@ export class SqliteScopeHost implements ScopeHost {
         this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
       },
       listMembers: async (tenantId, orgId, options) => {
+        requireOrg(tenantId, orgId);
         const rows = this.directory
           .prepare(
             `SELECT subject, revoked_at FROM _substrat_tenant_tuples
@@ -1288,6 +1378,9 @@ export class SqliteScopeHost implements ScopeHost {
       'CREATE UNIQUE INDEX IF NOT EXISTS scopes_tenant_slug ON scopes (tenant_id, slug)',
     );
     this.directory.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug ON tenants (slug)');
+    this.directory.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS orgs_tenant_slug ON orgs (tenant_id, slug)',
+    );
   }
 
   private loadRoles(): void {

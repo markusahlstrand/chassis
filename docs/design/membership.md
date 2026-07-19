@@ -2,12 +2,13 @@
 
 **Status:** proposed. Implements plan decision 31; takes the option
 [control-plane](control-plane.md) §3 deferred ("decide it at the second vertical").
-Nothing here is built.
+Partly built: the tombstone, `removeMember` and `listMembers` shipped in #53.
 
-The two forks §4 and §5.1 left open are settled by **K-21**: revocation tombstones rather
-than deletes, and assignment authority is one kernel-resolved set comparison rather than N
-checks. Both sections record the answers inline; the seam itself (#34) is buildable
-against them.
+**K-21** settled revocation (tombstone, never delete) and assignment authority (one
+kernel-resolved set comparison, not N checks); both shipped or are recorded inline.
+**K-22** settles the seam itself, and **corrects this document**: §4's original sketch of an
+in-scope `ctx.members.*` write was wrong, because membership tuples are not scope-local. The
+seam is a connector. §4.1 keeps the correction visible rather than quietly rewriting it.
 
 **What this is:** the decision that the Substrat admin's record-keeping half becomes a
 vertical, and that the engines it needs — membership, invites, entitlements-as-plan — are
@@ -105,33 +106,101 @@ Three things are wrong with that for self-service, in increasing order of severi
    platform actor, which destroys the distinction the admin log exists to record. Adding
    `removeMember`/`listMembers` alongside it inherits the same defect.
 
-So the seam is not an HTTP route. It is **membership as an in-scope capability**, on the
-same pattern `ctx.link` already establishes: the kernel owns the tuple write, the module
-triggers it, the acting subject is the scope's own principal and the check is an ordinary
-`ctx.check`.
+So the seam is not an HTTP route. But it is **not an in-scope tuple write either** —
+which is what the first draft of this section proposed, and it was wrong.
 
-```ts
-// sketch, not a signature
-ctx.members.add(principal, org)     // kernel writes the tuple; ctx.check gates it
-ctx.members.remove(principal, org)  // revocation, honouring the tombstone question below
-ctx.members.list(org)               // enumeration
+### 4.1 Why not `ctx.members.*` (the correction)
+
+The original sketch was `ctx.members.add/remove/list`, "on the same pattern `ctx.link`
+already establishes". That reasoning does not survive contact with where the tuples live.
+
+`ctx.link` works **because entity tuples are scope-local** — same database, same
+transaction, same serialization domain, so the write and the next `ctx.check` are trivially
+consistent. **Membership tuples are not scope-local.** They are tenant-wide facts living in
+the directory ([kernel-design](kernel-design.md) §3.2: the tenant-root DO holds
+"directory · membership · entitlements"), and on the Cloudflare adapter the checker reaches
+them by RPC to a separate Durable Object.
+
+So an in-scope `ctx.members.add` would be a **cross-DO write from inside a scope
+transaction**: two writes, two serialization domains, no coordinator. If the membership
+write lands and the scope transaction then rolls back, someone is a member of an org for a
+work order that never existed, and nothing unwinds it. That is a partial-failure hazard,
+not merely a weaker guarantee.
+
+Moving membership *into* the scope to recover the transaction is worse still: membership is
+tenant-wide, so a scope-local copy means N copies of one access fact, and N copies is a
+revocation hazard — miss one and access survives. It also breaks the checker, whose rule-4
+resolution happens at the tenant level and would need to know which scope to consult before
+it knows what the principal belongs to.
+
+### 4.2 The seam is a connector (K-22)
+
+The engine owns the invariant; the effect is a connector — **D-18's triage rule**, and the
+same bridge [control-plane](control-plane.md) §3 already specifies between the admin's
+effecting and record-keeping halves.
+
+An invite engine owns the state machine and, on accept, emits a fat event inside its own
+transaction. A privileged executor outside module code consumes it and effects the
+membership through the host admin surface.
+
+```
+invite engine (module code)                  executor (out-of-band host code)
+  accept()                                     consumes invite.accepted
+  └─ ctx.emit('invite.accepted', …)  ──────▶   └─ admin.addMember(…)
+     commits WITH the domain write                 writes the admin-log row
 ```
 
-**Revocation: settled by K-21 — tombstone, never delete.** A revoked tuple keeps its row
-and gains a `revoked_at` the checker's walk skips. This is now decided for *every*
-relation, membership included, so there is one revocation mechanism rather than one per
-relation, and `ctx.members.remove` implements it rather than choosing it.
+This is atomic on the side that matters: the event enters the outbox in the same
+transaction as the domain write, so a rollback leaves no event and no membership change.
+The executor then applies it at-least-once. Module code still never obtains a cross-tenant
+stub, so K-3 and K-8 are untouched.
+
+**Prompt dispatch, not a timer.** The executor is driven **inline after commit**, with the
+outbox as the durability and retry backstop — the shape local consumer dispatch already
+has (in-process after commit, journaled in `_substrat_deliveries`, K-16). The contract stays
+eventually consistent, because that is what makes it correct under crash; but the common
+case completes inside the request, so "accepted but not yet a member" is a rare-case
+fallback rather than the normal experience. A design that answered this with a UI spinner
+would be papering over the latency instead of removing it.
+
+**Correlation is specified, not deferred.** The emitted event carries a correlation id and
+the executor's admin-log row carries it back, so the two halves of the trail join by
+construction. §3 named the split trail as the main thing that gets worse under this
+pattern; joining it is cheap to design now and impossible to reconstruct after two years of
+uncorrelated rows — which is exactly when someone asks.
+
+### 4.3 Revocation: tombstone, never delete (K-21, shipped)
+
+A revoked tuple keeps its row and gains a `revoked_at` the checker's walk skips. Decided
+for *every* relation, membership included, so there is one revocation mechanism rather than
+one per relation.
 
 The reasoning is D-32 rather than taste: an operated compliance product pursuing ISO 27001
 and SOC 2 Type II has to show both that access was revoked *and* the trail proving it was
-once granted, and deletion cannot produce the second. What remains open in
-[kernel-design](kernel-design.md) §13's question 15 is only whether the kernel offers
-`relink` for entity parent edges — which composes on top of the tombstone (tombstone the
-old edge, link the new, emit a spine event) rather than competing with it, and has no
-membership analogue. The original framing of the trade is kept below because the cost is
-real: deletion is simple but destroys the audit property K-4 rests on — a tuple that once granted access is evidence of why an access was allowed. The
-candidates there are a tombstone or `revoked_at` the checker's walk skips. Membership
-removal must take whichever answer that question takes; it must not invent a second one.
+once granted, and deletion cannot produce the second. Open question 15's remaining half —
+whether the kernel offers `relink` for entity parent edges — composes on top of the
+tombstone rather than competing with it, and has no membership analogue.
+
+`removeMember`, `listMembers` and the tombstone shipped in #53. What remains is the org
+record (§4.4) and the connector seam above.
+
+### 4.4 `OrgId` is a branded ULID (K-22)
+
+Every id in the system is a branded ULID — `TenantId`, `ScopeId`, `PrincipalId`,
+`PlatformActorId`, `EventId`, `DataSubjectId`, `ModuleId`. **`orgId` is the sole exception**,
+a bare `string` on all four membership/grant methods, with no record behind it. Two callers
+disagreeing about `acme` versus `Acme` silently address two different orgs, and a typo in
+`grantToOrg` grants to a phantom nothing will ever reach.
+
+Orgs become a real directory record keyed by a branded `OrgId`, with slug and name as
+*attributes* rather than as the identity. That also gives §4.3 of kernel-design the row it
+requires — *"the `orgId ↔ tenantId` join is an explicit, stable directory row, one per
+tenant, never reconstructed from names or slugs"* — which is why this is shared with #48
+rather than local to membership.
+
+Doing it now costs a day. Doing it after production data exists means rewriting every
+membership tuple and every org grant, and auditing every access that ever resolved through
+one.
 
 ## 5. Role definition vs. role assignment
 
@@ -247,19 +316,22 @@ discovered.
 
 ## 8. Sequencing
 
-1. **This decision** (D-31) and §5's definition/assignment split — the gate on the rest.
-2. **Failed-migration visibility (#32).** Promoted above its position in #44. Self-service
-   means scopes are provisioned without a human watching; a migration that fails silently
-   means a tenant signs up, receives a broken scope, and the fleet renders it healthy.
-   Cheap, and it scales linearly with signups.
-3. **The membership seam + org record (#34, reshaped).** A kernel change, not a
-   control-plane one: in-scope add/remove/list, a real org entity replacing the free-form
-   `orgId`, revocation following §4's tombstone answer.
-4. **The invites engine (#35, engine half).**
-5. **The tenant-admin surface (#35, app half; #33).** Its own app, its own auth — the
+1. ~~**This decision** (D-31) and §5's definition/assignment split~~ — done; §5.1's bound
+   and K-21 settled the two forks that gated the rest.
+2. ~~**Failed-migration visibility (#32)**~~ — shipped (#50). Self-service provisions
+   scopes with no human watching, so a silent migration failure meant a tenant signed up,
+   received a broken scope, and the fleet rendered it healthy.
+3. ~~**Revocation (K-21)**~~ — shipped (#53): the tombstone, `removeMember`, `listMembers`.
+   Membership was write-only before it.
+4. **The org record (#34, remainder).** `OrgId` becomes a branded ULID and orgs become a
+   real directory record (§4.4). Shared with #48, which needs the same
+   `orgId ↔ tenantId` row — so these two are done adjacently, not in sequence.
+5. **The connector seam (§4.2) + the invites engine (#35, engine half).** The executor and
+   its correlated audit trail land here; the engine emits, the executor effects.
+6. **The tenant-admin surface (#35, app half; #33).** Its own app, its own auth — the
    authhero path, self-service, org membership. Not bolted into the staff console: §6's
    two-regimes point means that would be a category error.
-6. **The admin vertical itself** — the platform tenant composing the same engines. This is
+7. **The admin vertical itself** — the platform tenant composing the same engines. This is
    where dogfooding is actually collected.
 
 Deferred: metering and billing (#38, #39) per §7. Opportunistic: per-person staff actors

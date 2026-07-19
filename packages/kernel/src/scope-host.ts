@@ -10,7 +10,10 @@ import type {
   IdentityLink,
   Jurisdiction,
   ModuleManifest,
+  CreateOrgInput,
   Node,
+  Org,
+  OrgId,
   OrgMembership,
   PermissionKey,
   PlatformActorId,
@@ -182,7 +185,7 @@ export interface HostAdmin {
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
   grantToOrg(
     actor: PlatformActorId,
-    orgId: string,
+    orgId: OrgId,
     permission: PermissionKey,
     node: Node,
     entity?: EntityRef,
@@ -191,7 +194,7 @@ export interface HostAdmin {
     actor: PlatformActorId,
     tenantId: TenantId,
     principal: PrincipalId,
-    orgId: string,
+    orgId: OrgId,
   ): Promise<void>;
   /**
    * Revoke a membership (K-21). **Tombstones, never deletes**: the tuple keeps its
@@ -209,7 +212,7 @@ export interface HostAdmin {
     actor: PlatformActorId,
     tenantId: TenantId,
     principal: PrincipalId,
-    orgId: string,
+    orgId: OrgId,
   ): Promise<void>;
   /**
    * The members of an org. Live members only unless `includeRevoked` — the
@@ -220,9 +223,25 @@ export interface HostAdmin {
    */
   listMembers(
     tenantId: TenantId,
-    orgId: string,
+    orgId: OrgId,
     options?: { includeRevoked?: boolean },
   ): Promise<OrgMembership[]>;
+
+  // -- organizations (K-22) --------------------------------------------------
+
+  /**
+   * Register an org. Idempotent on the id — re-creating is a no-op, not an error
+   * (as `createTenant`). Slugs are unique within the tenant; a collision from a
+   * DIFFERENT id fails closed rather than silently doing nothing.
+   *
+   * Membership and `grantToOrg` both refuse an org that does not exist here. That
+   * refusal is the point of the record: before it, `addMember(…, 'acme')` and
+   * `addMember(…, 'Acme')` silently addressed two different orgs and a typo in a
+   * grant reached a phantom nothing would ever resolve to.
+   */
+  createOrg(actor: PlatformActorId, input: CreateOrgInput): Promise<void>;
+  listOrgs(tenantId: TenantId): Promise<Org[]>;
+  getOrg(tenantId: TenantId, orgId: OrgId): Promise<Org | undefined>;
 
   // -- tenant registry (control-plane.md §4.1) -------------------------------
 

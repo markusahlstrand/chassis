@@ -15,6 +15,13 @@ export type ScopeId = z.infer<typeof scopeId>;
 export const principalId = z.string().regex(ULID).brand<'PrincipalId'>();
 export type PrincipalId = z.infer<typeof principalId>;
 
+// An organization inside a tenant — the subject of membership tuples and the target
+// of `grantToOrg` (K-22). Branded like every other id: `orgId` was a free-form string
+// until orgs became a real record, so `acme` and `Acme` silently addressed different
+// orgs and a typo in a grant reached a phantom nothing would ever resolve to.
+export const orgId = z.string().regex(ULID).brand<'OrgId'>();
+export type OrgId = z.infer<typeof orgId>;
+
 // A platform-staff actor — the subject of every control-plane mutation (D-30, K-20).
 // Branded DISTINCTLY from PrincipalId on purpose: a platform actor is not a principal
 // in any tenant, and the compiler must refuse to confuse the two.

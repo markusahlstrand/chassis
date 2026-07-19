@@ -69,6 +69,14 @@ export interface ScopeRow {
   created_at: string;
 }
 
+export interface OrgRow {
+  org_id: string;
+  tenant_id: string;
+  slug: string;
+  name: string;
+  created_at: string;
+}
+
 interface AdminLogRow {
   id: string;
   actor: string;
@@ -139,6 +147,13 @@ const DIRECTORY_DDL = `
     migration_error TEXT,
     migration_attempts INTEGER NOT NULL DEFAULT 0,
     migration_last_attempt_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS orgs (
+    org_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _substrat_tenant_tuples (
@@ -262,6 +277,9 @@ export class ControlPlaneDO extends DurableObject {
       'CREATE UNIQUE INDEX IF NOT EXISTS scopes_tenant_slug ON scopes (tenant_id, slug)',
     );
     this.sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug ON tenants (slug)');
+    this.sql.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS orgs_tenant_slug ON orgs (tenant_id, slug)',
+    );
   }
 
   // -- tenant registry (control-plane.md §4.1) --------------------------------
@@ -591,6 +609,42 @@ export class ControlPlaneDO extends DurableObject {
       object,
       expiresAt,
     );
+  }
+
+  // -- organizations (K-22) ---------------------------------------------------
+
+  readOrg(tenantId: string, orgId: string): OrgRow | undefined {
+    return this.sql
+      .exec('SELECT * FROM orgs WHERE tenant_id = ? AND org_id = ?', tenantId, orgId)
+      .toArray()[0] as unknown as OrgRow | undefined;
+  }
+
+  /** Returns false when the org already exists (idempotent); throws on slug collision. */
+  createOrg(orgId: string, tenantId: string, slug: string, name: string, createdAt: string): boolean {
+    if (this.readOrg(tenantId, orgId)) return false;
+    const slugOwner = this.sql
+      .exec('SELECT org_id FROM orgs WHERE tenant_id = ? AND slug = ?', tenantId, slug)
+      .toArray()[0] as unknown as { org_id: string } | undefined;
+    if (slugOwner) {
+      throw new Error(
+        `org slug '${slug}' already taken by ${slugOwner.org_id} (slugs are unique per tenant)`,
+      );
+    }
+    this.sql.exec(
+      'INSERT INTO orgs (org_id, tenant_id, slug, name, created_at) VALUES (?, ?, ?, ?, ?)',
+      orgId,
+      tenantId,
+      slug,
+      name,
+      createdAt,
+    );
+    return true;
+  }
+
+  listOrgs(tenantId: string): OrgRow[] {
+    return this.sql
+      .exec('SELECT * FROM orgs WHERE tenant_id = ? ORDER BY slug', tenantId)
+      .toArray() as unknown as OrgRow[];
   }
 
   /**
