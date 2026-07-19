@@ -92,8 +92,15 @@ export type StaffSessionReader = (
   headers: Headers,
 ) => Promise<StaffIdentity | null> | StaffIdentity | null;
 
-/** Maps an authenticated staff identity to its audited `PlatformActorId`, or null to refuse. */
-export type StaffActorResolver = (identity: StaffIdentity) => PlatformActorId | null;
+/**
+ * Maps an authenticated staff identity to its audited `PlatformActorId`, or null to
+ * refuse. May be async: a roster that lives in a database — which is what makes
+ * "who has platform access" answerable and revocable without a deploy — cannot
+ * answer synchronously.
+ */
+export type StaffActorResolver = (
+  identity: StaffIdentity,
+) => PlatformActorId | null | Promise<PlatformActorId | null>;
 
 /**
  * The real `PlatformActorAuth`: an authenticated session → a platform actor. This
@@ -112,7 +119,7 @@ export function sessionPlatformAuth(
   return async (request) => {
     const identity = await readSession(request.headers);
     if (!identity) return null;
-    return resolveActor(identity);
+    return await resolveActor(identity);
   };
 }
 

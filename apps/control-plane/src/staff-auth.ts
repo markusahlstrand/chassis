@@ -9,7 +9,7 @@ import * as schema from './auth-schema.js';
  * worker counterpart of the dev server's staff auth, on Cloudflare D1 via
  * Drizzle (the demo's `auth.ts` pattern, for platform staff instead of tenant
  * users). Authentication only: who counts as staff, and under which actor id, is
- * the `staffAllowlist` in the worker — Better Auth just proves the email.
+ * the D1 staff roster (`staff-roster.ts`) — Better Auth just proves the email.
  *
  * workerd-safe (no `node:*`, no better-sqlite3). Rebuilt per request; durable
  * state lives in D1. `origin` is the request origin, trusted as baseURL so the
