@@ -5,9 +5,11 @@ import {
   identityLink,
   identityPool,
   createOrgInput,
+  promotionAcknowledgement,
   publishVersionInput,
   registerVerticalInput,
   vertical as verticalSchema,
+  verticalChannel,
   verticalVersion,
   moduleManifest,
   org as orgSchema,
@@ -33,6 +35,7 @@ import {
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
+  type PromotionAcknowledgement,
   type PublishVersionInput,
   type RegisterVerticalInput,
   type Vertical,
@@ -67,6 +70,7 @@ import {
 import type {
   AccessLogRow,
   AuditLogQuery,
+  ChannelRow,
   OrgRow,
   RoleRow,
   ScopeRow,
@@ -156,6 +160,9 @@ interface ControlPlaneStub {
   listVersions(verticalSlug: string): Promise<VersionRow[]>;
   setAdmission(id: string, admission: string, note: string | null): Promise<void>;
   bindScopeVersion(scopeId: string, versionId: string, verticalSlug: string): Promise<void>;
+  readChannel(verticalSlug: string, channel: string): Promise<ChannelRow | undefined>;
+  setChannel(verticalSlug: string, channel: string, versionId: string, updatedAt: string): Promise<void>;
+  listChannels(verticalSlug: string): Promise<ChannelRow[]>;
   readOrg(tenantId: string, orgId: string): Promise<OrgRow | undefined>;
   createOrg(
     orgId: string,
@@ -749,6 +756,65 @@ export class CloudflareScopeHost implements ScopeHost {
         if (v.admission === 'rejected') return;
         await this.cp.setAdmission(versionId, 'rejected', note);
         await this.recordAdmin(actor, 'rejectVersion', { tenantId: null }, { admission: v.admission }, { admission: 'rejected', note });
+      },
+      promoteVersion: async (
+        actor,
+        verticalSlug: string,
+        channel,
+        versionId: string,
+        acknowledge?: PromotionAcknowledgement,
+      ) => {
+        const incoming = await this.cp.readVersion(versionId);
+        if (!incoming) throw new Error(`unknown version ${versionId}`);
+        if (incoming.vertical_slug !== verticalSlug) {
+          throw new Error(`version ${versionId} belongs to '${incoming.vertical_slug}'`);
+        }
+        if (incoming.admission !== 'admitted') {
+          throw new Error(
+            `version ${versionId} is ${incoming.admission}, not admitted — it cannot be promoted`,
+          );
+        }
+        const current = await this.cp.readChannel(verticalSlug, channel);
+        const outgoing = current ? await this.cp.readVersion(current.version_id) : undefined;
+        const ack = promotionAcknowledgement.parse(acknowledge ?? {});
+
+        // §4's checkpoints, at the moment of exposure. A first promotion has
+        // nothing to diff against — the gate is about change, not existence.
+        if (outgoing) {
+          if (outgoing.permission_digest !== incoming.permission_digest && !ack.permissionChange) {
+            throw new Error(
+              `promotion changes the permission surface (${outgoing.permission_digest} → ` +
+                `${incoming.permission_digest}) — acknowledge it explicitly to promote`,
+            );
+          }
+          if (outgoing.migration_digest !== incoming.migration_digest && !ack.migrationChange) {
+            throw new Error(
+              `promotion changes migrations (${outgoing.migration_digest} → ` +
+                `${incoming.migration_digest}) — acknowledge it explicitly to promote`,
+            );
+          }
+        }
+
+        await this.cp.setChannel(verticalSlug, channel, versionId, new Date().toISOString());
+        await this.recordAdmin(
+          actor,
+          'promoteVersion',
+          { tenantId: null, vertical: verticalSlug },
+          outgoing ? { versionId: outgoing.id, version: outgoing.version } : null,
+          { channel, versionId, version: incoming.version, acknowledged: ack },
+        );
+      },
+      listChannels: async (actor, verticalSlug: string) => {
+        const rows = await this.cp.listChannels(verticalSlug);
+        await this.recordAccess(actor, 'listChannels', {}, { verticalSlug }, rows.length);
+        return rows.map((r) =>
+          verticalChannel.parse({
+            verticalSlug: r.vertical_slug,
+            channel: r.channel,
+            versionId: r.version_id,
+            updatedAt: r.updated_at,
+          }),
+        );
       },
       bindScopeVersion: async (actor, tenantId, scopeId, versionId: string) => {
         const v = await this.cp.readVersion(versionId);

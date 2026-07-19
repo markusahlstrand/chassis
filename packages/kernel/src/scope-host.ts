@@ -19,6 +19,8 @@ import type {
   OrgMembership,
   PermissionKey,
   PlatformActorId,
+  ChannelName,
+  PromotionAcknowledgement,
   PublishVersionInput,
   RegisterVerticalInput,
   PrincipalId,
@@ -33,6 +35,7 @@ import type {
   TenantId,
   TenantRole,
   Vertical,
+  VerticalChannel,
   VerticalVersion,
   TenantStatus,
 } from '@substrat-run/contracts';
@@ -296,6 +299,28 @@ export interface HostAdmin {
   admitVersion(actor: PlatformActorId, versionId: string): Promise<void>;
   /** Reject a pending version, with the reason. Rejected is terminal: publish a new one. */
   rejectVersion(actor: PlatformActorId, versionId: string, note: string): Promise<void>;
+
+  /**
+   * Promote a version to a channel (#31 step 2) — the moment a change reaches
+   * anyone, and therefore where §4's two human checkpoints belong.
+   *
+   * **Refuses when a digest differs and the change is not acknowledged.** The
+   * migration and permission diffs are a merge-time convention today: CI renders
+   * them and a human is expected to look, but nothing ties that looking to the
+   * moment of exposure. Here it is tied — and the acknowledgement is recorded, so
+   * "someone reviewed it" becomes evidence rather than a claim.
+   *
+   * Only admitted versions may be promoted, for the same reason they are the only
+   * ones bindable.
+   */
+  promoteVersion(
+    actor: PlatformActorId,
+    verticalSlug: string,
+    channel: ChannelName,
+    versionId: string,
+    acknowledge?: PromotionAcknowledgement,
+  ): Promise<void>;
+  listChannels(actor: PlatformActorId, verticalSlug: string): Promise<VerticalChannel[]>;
 
   /**
    * Point a scope at a version.
