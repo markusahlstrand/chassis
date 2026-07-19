@@ -783,6 +783,12 @@ living requirements spec, and migration-tooling test target. Every friction Prop
 hits in it is an observed, prioritized backlog item. Acceptance test for switching: **run both systems in parallel for
 one full month-end and diff the fakturaunderlag.**
 
+**Under review as of 2026-07-19** (§11, first bullet): the friend is weighing building the
+FSM instead of subscribing. Decision 8 stands until re-ratified at a human checkpoint —
+what needs answering first is what then plays the roles the subscription was bought for
+(production system, requirements spec, diff target for the parallel run), and what the
+fallback is if the engine is not field-ready in time.
+
 Customer-zero bias to guard: PropCo validates the FSM core, not the regulated
 branschmoduler (F-gas, OVK, borr) — those need a design partner from that world later; keep
 the core honestly generic.
@@ -816,10 +822,12 @@ commercial relationships. The FSM vendor sells single-company tools; a beställa
 different category, only available to someone who *is* a large beställare. Technically it is
 §5.4 productized.
 
-**If "buy the FSM vendor" means acquiring the company outright** (long-established,
-presumably founder-owned, legacy tech, loyal install base): different and potentially better
-play — buy decades of vertical knowledge and distribution, re-platform over years. 10x the commitment. Establish which game
-is being played before fall.
+**Settled 2026-07-19 (§11): no acquisition.** The "buy the vendor outright and re-platform
+over years" branch — decades of vertical knowledge and distribution at 10x the commitment —
+is closed, not deferred. The live question moved in the other direction: **build the FSM
+rather than subscribe to it**, then resell. That is this section's engine arriving earlier
+and without decision 8's bridge underneath it; the reselling half is unchanged. The cost is
+carried in §8.1 and §11, not here.
 
 ### 8.5 Sequencing (staggered, never parallel greenfields)
 
@@ -927,7 +935,11 @@ now; a negotiation after PropCo runs on it.
     kernel-fluent person is a named milestone **before** the parallel-run test — once
     PropCo runs on the kernel, bus factor 1 is a customer's problem.
 11. **Single-relationship demand**: all four cases — demand, validation, and network-wedge
-    distribution — route through one friendship. Distinct from risk 7 (friction): if the
+    distribution — route through one friendship, and as of 2026-07-19 that friendship has a
+    mapped perimeter (§11): a single owner group of ~five companies — PropCo (förvaltning),
+    HouseCo, POSCo, a property-owning arm, and an e-commerce business. Concrete, and
+    therefore concretely correlated: they share owners, so they wobble
+    together. Distinct from risk 7 (friction): if the
     relationship or the friend's businesses wobble, the entire market side disappears at
     once. Mitigation: §9 framing (b) (auth-platform convergence) is a real second leg, not
     a fallback; document-product re-platforming (decision 17) gives the kernel a consumer
@@ -935,12 +947,138 @@ now; a negotiation after PropCo runs on it.
 
 ## 11. Open questions
 
-- Does "buy the FSM vendor" mean subscribing or acquiring the company outright? (Changes case 4 entirely.)
-- Who, concretely, are the friend's builders? Names, hours, stack fluency.
-- Kernel legal home: new entity, the auth platform's umbrella, or the existing holding company?
-- Storage shape for förvaltar-OS confirmed as Shape B? Benchmark DO-SQLite limits first.
-- R2 SQL benchmark (≈50M events / 500 scopes) — pass/fail criteria and date.
-- Which Nordic SMS + email providers (transport buy list).
+- ~~Does "buy the FSM vendor" mean subscribing or acquiring the company outright?~~
+  **Answered 2026-07-19: neither.** No acquisition — §8.4's "10x commitment" branch is
+  closed. But the friend is now considering **building** the FSM rather than subscribing to
+  the vendor, and reselling it. Read narrowly this changes less than it sounds: the FSM he
+  would build *is* case 1's arbetsorder/tid/protokoll engine reaching the field, and
+  reselling it is case 4 exactly as written (§8.4, network wedge included). What it removes
+  is the **bridge** — and decision 8 bought three things with one signature: a production
+  system for PropCo this fall, a living requirements spec (every friction an observed
+  backlog item), and the parallel-run month-end acceptance test. Replacing them is now the
+  open question, and D-8 needs re-ratifying at a human checkpoint rather than lapsing by
+  drift. Candidate replacement for all three: **PropCo's existing internal system** —
+  work orders, hour registration, and its board portal are a real incumbent with real
+  fakturaunderlag, so the month-end diff has a target that costs nothing and exports no
+  data to a competitor. What it cannot replace is decision 8's actual rationale — *don't
+  run a business on a half-built tool* — so name the fallback before the build starts: if
+  the engine is not field-ready by month X, does PropCo sign the vendor after all?
+- Who, concretely, are the friend's builders? Names, hours, stack fluency. **Partially
+  answered 2026-07-19** (identifying detail is deliberately kept out of this repo — the
+  companies are real and this document is public; pseudonyms only): the group is one
+  ownership structure of ~five companies — PropCo, a house factory (case 2), a
+  POS-software company (case 3), a property-owning arm, and an **e-commerce business no
+  case covers**. §8.1's "several offices" resolves to five. Two things this pins down:
+  PropCo sells *both* ekonomisk and teknisk förvaltning, so decision 10 (ekonomisk out of
+  v1) means part of the customer's own P&L is out of scope for v1 — the migration story
+  must not assume the whole company moves; and §8.1's "self-built board portal" is a
+  shipped product with real board users, making case 1 a portal *migration*, not a
+  greenfield portal. Still open, and §9's "who builds the verticals" cannot be priced
+  without it: names, hours, stack fluency. Note this **sharpens rather than softens risk
+  11** — mapping the group does not diversify it; five businesses inside one ownership
+  structure fail together.
+- ~~Kernel legal home~~ **Answered 2026-07-19: a new legal entity.** Three consequences to
+  execute rather than assume: it must be the **single copyright holder** decision 25's
+  AGPL + commercial dual license depends on (no single holder, no commercial grant), so
+  contributions from the group's companies need CLA or assignment **from the first commit**
+  — retrofitting an assignment across five companies' payroll is the expensive version; it
+  is the natural home for decision 32's explicitly-undecided "hosting-org legal home" and
+  for §9's escrow party, so decide whether the hosting entity is the same company or a
+  subsidiary before certification scoping starts (the ISMS is scoped to a legal entity);
+  and IP created by group staff on group time must be assigned in **before** code, not
+  during a later diligence.
+- Storage shape for förvaltar-OS: **Shape A proposed 2026-07-19** (was: Shape B presumed).
+  The benchmark still gates it, but its *question changes*, because the
+  [documented limits](https://developers.cloudflare.com/durable-objects/platform/limits/)
+  settle the sizing half outright: 10 GB per DO, unlimited objects, ~1,000 req/s soft limit
+  per object — against a scope that is **one BRF**. Size was never going to bind. What
+  actually binds, and what the benchmark must now price:
+  - **There is no export.** No `wrangler` export, no import, no HTTP query API — Cloudflare
+    states plainly that with SQLite-in-DO "you may also need to build some of your own
+    database tooling that comes out-of-the-box with D1." Data leaves a DO only through code
+    we write. This lands on three promises at once: §5.7's exit story ("self-host in a
+    pinch" requires getting data *out*), decision 32's auditor-facing evidence export, and
+    GDPR portability/erasure. **Consequence, and arguably the right one anyway:** per-scope
+    export becomes a **kernel contract** (`exportScope`-shaped) on `ScopeStub`, exercised by
+    the contract tests on both adapters. Shape A does not create that requirement — the
+    escrow story already did — it only removes the free implementation.
+  - **PITR is better than D1's, and untestable locally.** 30 days, bookmark-addressed, and
+    the recovery itself is undoable. But "not supported in local development", so the
+    recovery guarantee is the one kernel promise the contract-test suite structurally
+    cannot cover. Say so out loud rather than implying coverage.
+  - **No documented migration path in either direction**, DO-SQLite ↔ D1. This is
+    kernel-design open question 13 with the vendor half removed: if Shape A ships, the
+    A→B escape hatch is entirely our code, unassisted. Either prove it once on a throwaway
+    scope early, or accept that B is not a hatch we actually have.
+  - **The prize for Shape A is not shipping Shape B at v1.** One backend, one set of
+    contract tests — and it *retires* kernel-design questions 7 (D1 EU-residency wording:
+    DO jurisdictions are a hard guarantee, D1 offers hints) and 10 (D1 physical layout).
+    The EU claim gets stronger, not weaker. Against the §10 platform trap, building both
+    storage backends before either has a second consumer is exactly the kind of unconsumed
+    kernel feature the plan says not to build.
+  - Smaller edges to design around, not decide on: 100 columns/table, 2 MB max row/BLOB,
+    **100 bound parameters per query** (caps batch size in §8.1's import-from-incumbents
+    tooling), single-threaded writer, no read replicas. Cold-start/wake latency is
+    **undocumented** — so kernel-design question 8's latency budgets must be measured, not
+    looked up, and the benchmark is the only way to learn them.
+  - Cost model to watch: DO SQLite bills **rows written** ($1.00/M beyond 50 M/mo), and
+    every indexed column adds ≥1 row written per insert, every `setAlarm()` is one row. A
+    kernel where every mutation emits a fat event, an outbox row and an audit entry makes
+    rows-written the dominant meter. §9's meter 3 says usage fees track cost — this is the
+    cost they must track.
+- R2 SQL benchmark (≈50M events / 500 scopes) — **limits answered 2026-07-19; criteria and
+  date proposed below.** Status is still **open beta** ("supported SQL grammar may change
+  over time"), so the decision-17 fallback — DuckDB over the same Iceberg catalog — stays
+  live and this remains a *scheduling* question, not an architectural one.
+  - The **SQL surface is no longer the risk**: all standard JOIN types, window functions,
+    CTEs, subqueries, GROUPING SETS/ROLLUP/CUBE, QUALIFY, 163 scalar + 33 aggregate
+    functions. Read-only, Parquet only. Notable absences: **`OFFSET` is unsupported**,
+    UNNEST/PIVOT, LATERAL, named `WINDOW` clauses.
+  - **Hard row cap: `LIMIT` maxes at 10,000, and with no `OFFSET` there is no pagination.**
+    You cannot walk past 10,000 rows. Aggregate reporting is unaffected; anything wanting
+    row-level output at volume — a fakturaunderlag reconciliation dump, an audit extract —
+    needs a different path (a job reading the Iceberg tables directly). §5.3 claims Tier 2
+    serves "reporting, reconciliation, audit"; the first is fine, the other two need this
+    checked against real queries.
+  - **Duration, concurrency and rate limits are undocumented.** What exists instead is a
+    pre-flight **budget gate**: memory-heavy queries are rejected with a 400 before running,
+    and that gate covers `MEDIAN`, `PERCENTILE_CONT`, `ARRAY_AGG`, `STRING_AGG`, every
+    `DISTINCT` aggregate, and **all window functions**. Resource exhaustion mid-flight
+    surfaces as a 502. So the honest pass/fail criterion is not a latency number we could
+    look up — it is *do our real queries clear the gate*.
+  - **Pricing: $0.0025/GB scanned ($2.50/TB), 10 GB/month included, minimum 10 MB billed
+    per query**, failed queries free; billing not yet enabled, with 30 days' notice
+    promised — so benchmarking now is nearly free. That **10 MB minimum has a design
+    consequence**: a per-scope dashboard query costs 10 MB whatever it scans, so 500 scopes
+    is 5 GB per sweep — half the monthly included allowance for *one* refresh. Per-scope
+    dashboards must therefore never hit Tier 2 directly; they need a read model. That makes
+    kernel-design question 3's optional read-model sink **not optional** if scope-level
+    dashboards are a product requirement — which §8.1's styrelse/boende portals imply.
+  - Proposed pass/fail, in place of the unspecified one: (1) the three reports PropCo
+    actually needs each run without a 400 (budget gate) or 502; (2) each is expressible as
+    an aggregation returning ≤10,000 rows, with anything that isn't explicitly routed to a
+    direct-Iceberg export job; (3) bytes scanned × refresh frequency priced against
+    $2.50/TB stays under the usage fee §9 meter 3 would charge. Date: run it against a
+    synthetic generated from **case 1's real event shapes**, once those exist — a synthetic
+    invented before the event schema tests nothing — and gate it before the first
+    cross-scope report reaches a customer.
+  - Catalog maintenance (relevant to the same benchmark): compaction targets are
+    configurable 64–512 MB; snapshot expiration defaults to 30 days *and* retain-last-5,
+    both conditions required. Orphaned files are never cleaned. Run frequency is
+    **undocumented** — measure it empirically via the `r2CatalogTableMaintenanceAdaptiveGroups`
+    GraphQL dataset rather than assuming a cadence.
+- ~~Which Nordic SMS + email providers~~ **Answered 2026-07-19, but off-question**:
+  Twilio / SendGrid / Resend / Postmark are the proposed list. All four are viable and all
+  four are **US-owned**, which is the criterion the question was actually about — once
+  decision 32 lands, every transport is a named sub-processor with a GDPR Art. 28 transfer
+  story, and the trust page inherits whatever the register says. The list also drops the
+  leg §6's buy table named: **Nordic SMS** (46elks-class), where alphanumeric sender-ID
+  registration and Swedish operator handling are the whole reason a local provider exists.
+  Proposal: default **Resend** (email) + one Nordic SMS provider, verify per-vendor EU
+  residency and DPA terms before any trust-page claim (D-32: trajectory, not claim), and
+  ship **two** implementations of the transport adapter from day one — an adapter with a
+  single implementation is a wrapper, and §5.7's per-tenant selectability is what an
+  enterprise tenant will demand anyway.
 - Techy friend: advisor, collaborator, or competitor? Decide what role the RFC recruits for.
 - Public brand trademark/domain pass for "Substrat" before launch (Groundplane as fallback).
 - Prompt-to-app channel (§7.4): if/when the demo exists, which entry first — a builder
