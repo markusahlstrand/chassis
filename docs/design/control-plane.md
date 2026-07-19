@@ -16,7 +16,8 @@ queue over runtime permission changes.
 §4.6's **staff access log** is decided (K-24) and not yet built — reads remain
 unaudited until it lands (#43).
 
-Still unbuilt: hostname provisioning and the `hostname → (tenant, scope, vertical)` map
+§4.7 decides the router and the hostname map (K-26); it is not yet built. Still
+unbuilt: hostname provisioning and the `hostname → (tenant, scope, vertical)` map
 (§4.2, §5.5); §5's meters; **capability-grant enumeration** — a grant is a tuple in the
 scope's own database, so listing them needs §5.4's admin-query RPC, unlike roles which are
 directory-local (this is the sharpest remaining consequence of §7's "no back door into scope
@@ -334,6 +335,80 @@ cannot be sharded. That argues for the marker, not against the DO.
 **The §7 bound stays.** There is no admin-query RPC into scope databases, so this covers
 directory metadata and never tenant business data. The exposure being closed is the
 directory — adding logging must not be the moment that limit quietly widens.
+
+### 4.7 The router and the hostname map (K-26)
+
+§4.2 provisions a scope. Nothing yet gives it a URL, so "validate it works in
+production" has nowhere to point — the console fakes it with a `VITE_PORTAL_BASE`
+env var. This is what #31 step 4 builds.
+
+**One router for the whole environment.** A kernel-owned worker resolves
+`hostname → (tenant, scope, vertical, surface, region)` from directory data and
+dispatches to the vertical's worker.
+
+Not one router per vertical: cert and DNS lifecycle in one place means a new
+vertical gets custom domains for free instead of repeating the Cloudflare for SaaS
+dance. And **not one per jurisdiction** — see residency below.
+
+This does not erode D-30, and it is worth saying why, because a shared component in
+front of every vertical resembles the shortcut D-30 rejects. That shortcut is one
+DO class per customer's code, which forces lockstep engine upgrades across verticals
+owned by different companies. A router forwards; deployments stay separate.
+
+#### `surface` — a scope can front two apps
+
+§5.5 specified `hostname → (tenant, scope, vertical)`. One hostname per scope is
+already wrong: the shop serves a **storefront** and a **back office** from one scope,
+and RallyPoint a **player app** and a **manager console**. Same data, different
+audience and chrome — the split is deliberate and it is not a second source of truth.
+
+So the map says which app answers. Adding that once hostnames are issued and DNS
+records exist is the retrofit `OrgId` and the identity key already paid for.
+
+#### The trust boundary
+
+Vertical workers get **no public route** — only a service binding from the router.
+
+Otherwise the router's assertion of `(tenant, scope)` is a header, and anyone who can
+reach the worker directly can forge it. There is precedent: the Callout worker
+already reaches the control plane by service binding rather than public URL.
+
+#### Residency is configuration, not topology
+
+A router per jurisdiction is the intuitive answer and the wrong one. Cloudflare
+covers both halves without deploying anything per region:
+
+| Half | Mechanism | Granularity |
+|---|---|---|
+| Processing, TLS termination | **Regional Services** ("Regional Hostnames") | per hostname |
+| Storage, execution | **DO jurisdiction** (`eu` / `us` / `fedramp`) | fixed at id creation (K-7) |
+
+Hostname is already the key the router indexes on, so `region` is one more column
+rather than a second topology.
+
+Two costs, stated:
+
+- **Regional Services is an Enterprise add-on.** The EU-residency claim carries a
+  plan dependency, which belongs in D-32's cost model rather than in a procurement
+  conversation.
+- Cloudflare logs a `DurableObjectId` outside its jurisdiction for billing and
+  debugging. The ID design already anticipated this — `contracts/src/ids.ts` requires
+  ids to encode nothing precisely because of it.
+
+The contract currently allows `jurisdiction: 'eu' | null`. Cloudflare offers `us` and
+`fedramp` too; widening is additive when a customer needs it.
+
+#### Two things this defers
+
+**Hostname provisioning is scope lifecycle, not a string.** The custom-hostnames API,
+DNS validation and certificate issuance are states a scope passes through (§4.2), not
+a column someone sets.
+
+**Cache invalidation gets open question 5's answer, not a second one.** Routing puts
+the directory on the request hot path, so a cached route that keeps serving a
+suspended tenant blunts what §7 calls "a live weapon". That is the same tension as
+the entitlement check — hot path or cached with event invalidation — and it should be
+settled once, for both.
 
 ## 5. Billing: meter, do not bill
 
