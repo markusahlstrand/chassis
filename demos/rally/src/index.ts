@@ -22,6 +22,8 @@ export {
 export {
   buildRallyHost,
   seedRally,
+  provisionRally,
+  type RallyInstance,
   RALLY_PLATFORM_ACTOR,
   MODULES,
   ROLES,

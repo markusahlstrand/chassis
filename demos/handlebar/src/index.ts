@@ -10,4 +10,10 @@ export {
   type ProtocolSummary,
   type ProtocolTemplateRow,
 } from '@substrat-run/engine-protocol';
-export { buildBikeShopHost, seedBikeShop, type BikeShopWorld } from './seed.js';
+export {
+  buildBikeShopHost,
+  seedBikeShop,
+  provisionHandlebar,
+  type HandlebarInstance,
+  type BikeShopWorld,
+} from './seed.js';

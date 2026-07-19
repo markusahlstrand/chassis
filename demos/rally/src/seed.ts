@@ -21,7 +21,25 @@ import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-inv
 import { invitesModule, INVITES_PERM as INVITE } from '@substrat-run/engine-invites';
 import { rallyModule, RALLY_PERM as RP } from './module.js';
 
-export interface RallyWorld {
+/**
+ * What ANY instance of this vertical has: one tenant, one scope, an owner.
+ *
+ * The boundary #31 blocker 3 is about — everything in RallyWorld beyond these three
+ * is the DEMO STORY, which a customer must not receive. Separate types make that
+ * structural: `provisionRally` cannot return a cast, because its return type has no
+ * room for one.
+ */
+export interface RallyInstance {
+  tenantId: TenantId;
+  scopeId: ScopeId;
+  /** The first club-admin — whoever provisioned it. */
+  owner: PrincipalId;
+  /** The club's player org: what membership tuples point at. */
+  orgId: OrgId;
+}
+
+/** The demo world: an instance, plus the cast and fixtures the story needs. */
+export interface RallyWorld extends RallyInstance {
   t1: TenantId; // RallyPoint AB
   t2: TenantId; // Padelcenter Väst AB — the attacker's club
   org1: OrgId; // the club's player org — what a membership tuple points at
@@ -35,20 +53,20 @@ export interface RallyWorld {
   elin: PrincipalId; // player / portal principal
   johan: PrincipalId; // player / portal principal
   rutger: PrincipalId; // club-admin @ t2 — the cross-tenant attacker
-  court1: string; // Solna, Bana 1
-  court2: string; // Solna, Bana 2
-  nackaCourt1: string; // Nacka, Bana A
-  nackaCourt2: string; // Nacka, Bana B
-  elinId: string; // Elin's member record AT SOLNA
-  johanId: string;
-  elinNackaId: string; // …and her separate record at Nacka
-  johanNackaId: string;
+  court1?: string; // Solna, Bana 1
+  court2?: string; // Solna, Bana 2
+  nackaCourt1?: string; // Nacka, Bana A
+  nackaCourt2?: string; // Nacka, Bana B
+  elinId?: string; // Elin's member record AT SOLNA
+  johanId?: string;
+  elinNackaId?: string; // …and her separate record at Nacka
+  johanNackaId?: string;
   /**
    * The global player refs. One per human, shared across every club they play
    * at — the member rows differ per scope, this does not.
    */
-  elinParty: string;
-  johanParty: string;
+  elinParty?: string;
+  johanParty?: string;
 }
 
 /**
@@ -278,6 +296,64 @@ export function buildRallyHost(dir: string): SqliteScopeHost {
 export const RALLY_PLATFORM_ACTOR = platformActorId.parse('01JZ0000000000000000RA99Y0');
 
 /** Idempotent: safe on every server start; demo data seeds only once. */
+/**
+ * Provision ONE instance of this vertical — what a customer gets (#31 blocker 3).
+ *
+ * Tenant, scope, entitlements, roles, identity pool, and an owner holding
+ * `club-admin`. No cast, no fixtures, no second company. Idempotent, so it is
+ * safe on every start and safe against an instance that already exists.
+ *
+ * This is the function an instantiate button calls.
+ */
+export async function provisionRally(
+  host: SqliteScopeHost,
+  input: {
+    tenantId: TenantId;
+    scopeId: ScopeId;
+    owner: PrincipalId;
+    orgId: OrgId;
+    slug: string;
+    name: string;
+  },
+): Promise<RallyInstance> {
+  const staff = platformActorId.parse(ulid());
+
+  await host.admin.createTenant(staff, { id: input.tenantId, slug: input.slug, name: input.name });
+  // K-23: a provider declares its topology before it may link an identity.
+  await host.admin.registerIdentityPool(staff, {
+    provider: 'better-auth',
+    topology: 'central',
+    tenantId: null,
+  });
+  // Entitlements (§4.3) are default-deny, so the SKU flags for the modules this
+  // vertical runs must be granted before any of its operations resolve.
+  for (const key of ['booking', 'invoicing', 'invites', 'rallypoint']) {
+    await host.admin.grantEntitlement(staff, input.tenantId, key);
+  }
+  await host.provisionScope(staff, {
+    tenantId: input.tenantId,
+    scopeId: input.scopeId,
+    jurisdiction: 'eu',
+  });
+  for (const role of ROLES) await host.admin.defineRole(staff, input.tenantId, role);
+  await host.admin.assignRole(staff, {
+    principalId: input.owner,
+    roleKey: 'club-admin',
+    node: { tenantId: input.tenantId, scopeId: null },
+  });
+  // A club's player org is part of the instance, not the story: membership tuples
+  // point at it and `grantToOrg` targets it, so a club without one cannot admit
+  // anybody. Clubs are TENANTS here, which is why each gets its own.
+  await host.admin.createOrg(staff, {
+    id: input.orgId,
+    tenantId: input.tenantId,
+    slug: `${input.slug}-players`,
+    name: `${input.name} players`,
+  });
+
+  return { tenantId: input.tenantId, scopeId: input.scopeId, owner: input.owner, orgId: input.orgId };
+}
+
 export async function seedRally(host: SqliteScopeHost, dir: string): Promise<RallyWorld> {
   const castPath = join(dir, 'cast.json');
   const fresh = !existsSync(castPath);
@@ -292,6 +368,10 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
     : (JSON.parse(readFileSync(castPath, 'utf8')) as Record<string, string>);
 
   const world: RallyWorld = {
+    tenantId: tenantId.parse(raw.t1),
+    scopeId: scopeId.parse(raw.s1),
+    owner: principalId.parse(raw.astrid),
+    orgId: orgIdSchema.parse(raw.org1),
     t1: tenantId.parse(raw.t1), t2: tenantId.parse(raw.t2),
     org1: orgIdSchema.parse(raw.org1), org2: orgIdSchema.parse(raw.org2),
     s1: scopeId.parse(raw.s1), s1b: scopeId.parse(raw.s1b), s2: scopeId.parse(raw.s2),
@@ -307,30 +387,24 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
 
   const staff = platformActorId.parse(ulid());
 
-  await host.admin.createTenant(staff, { id: world.t1, slug: 'rallypoint', name: 'RallyPoint AB' });
-  await host.admin.createTenant(staff, {
-    id: world.t2, slug: 'padelcenter-vast', name: 'Padelcenter Väst AB',
+  // The real instance — everything a customer would get, and nothing else.
+  await provisionRally(host, {
+    tenantId: world.t1, scopeId: world.s1, owner: world.astrid, orgId: world.org1,
+    slug: 'rallypoint', name: 'RallyPoint AB',
   });
-
-  // One org per club. Clubs are TENANTS here, so a player belonging to two clubs
-  // is two memberships on one identity — which is what a central identity pool
-  // buys (§4.3), and the first thing in the repo to actually need it.
-  await host.admin.createOrg(staff, {
-    id: world.org1, tenantId: world.t1, slug: 'rallypoint-players', name: 'RallyPoint players',
-  });
-  await host.admin.createOrg(staff, {
-    id: world.org2, tenantId: world.t2, slug: 'padelcenter-players', name: 'Padelcenter players',
-  });
-
-  for (const t of [world.t1, world.t2]) {
-    for (const key of ['booking', 'invoicing', 'invites', 'rallypoint']) {
-      await host.admin.grantEntitlement(staff, t, key);
-    }
-  }
-
-  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
+  // A second venue in the SAME club. Provisioning creates one scope because that
+  // is what an instance needs; more venues are the club's to add.
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1b, jurisdiction: 'eu' });
-  await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
+
+  // ---------------------------------------------------------------------------
+  // DEMO ONLY, below. A second club and an admin nobody hired, so the scenario
+  // can watch the tenant boundary turn them away (#31 blocker 4). Never reachable
+  // from provisioning.
+  // ---------------------------------------------------------------------------
+  await provisionRally(host, {
+    tenantId: world.t2, scopeId: world.s2, owner: world.rutger, orgId: world.org2,
+    slug: 'padelcenter-vast', name: 'Padelcenter Väst AB',
+  });
 
   for (const t of [world.t1, world.t2]) {
     for (const role of ROLES) await host.admin.defineRole(staff, t, role);

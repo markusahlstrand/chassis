@@ -1,3 +1,4 @@
+import { shopProvider } from './seed.js';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
@@ -74,7 +75,7 @@ export function betterAuthAdapter(auth: Auth, host: SqliteScopeHost, world: Shop
       if (!session?.user) return null;
       const user = session.user;
       const mapped =
-        (await host.admin.resolveIdentity(world.t1, 'better-auth', user.id)) ??
+        (await host.admin.resolveIdentity(world.t1, shopProvider('kallkalla'), user.id)) ??
         (await provisionShopper(host, world, user));
       return {
         principal: mapped.principal,
@@ -116,7 +117,7 @@ export async function seedPersonaLogins(
       }
       if (userId) {
         await host.admin.linkIdentity(staff, {
-          provider: 'better-auth',
+          provider: shopProvider('kallkalla'),
           externalId: userId,
           principal: world[p.key],
           tenantId: world.t1,
