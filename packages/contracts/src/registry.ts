@@ -74,3 +74,40 @@ export const publishVersionInput = verticalVersion.pick({
   deploymentRef: true,
 });
 export type PublishVersionInput = z.infer<typeof publishVersionInput>;
+
+/**
+ * Where a version is promoted to (#31 step 2).
+ *
+ * A channel is a named pointer per vertical. Promotion moves it. Dev, staging and
+ * prod are therefore the same vertical at different versions, which is the sentence
+ * the registry existed to make sayable.
+ */
+export const channelName = z.enum(['dev', 'staging', 'prod']);
+export type ChannelName = z.infer<typeof channelName>;
+
+export const verticalChannel = z.object({
+  verticalSlug: slug,
+  channel: channelName,
+  versionId: z.string().min(1),
+  updatedAt: instant,
+});
+export type VerticalChannel = z.infer<typeof verticalChannel>;
+
+/**
+ * What a promoter must acknowledge, per §4's two human checkpoints.
+ *
+ * Today the migration and permission diffs are a MERGE-time convention: CI renders
+ * them and a human is expected to read them, but nothing connects that reading to
+ * the moment the change reaches anyone. Promotion is that moment — the blast radius
+ * is here, not at the merge.
+ *
+ * So promotion refuses when a digest differs and the corresponding flag is unset,
+ * naming both digests in the error. The flag is one deliberate act rather than a
+ * gate that can be passed by not noticing, and the acknowledgement lands in the
+ * admin log — which turns "someone reviewed it" from a claim into evidence.
+ */
+export const promotionAcknowledgement = z.object({
+  permissionChange: z.boolean().optional(),
+  migrationChange: z.boolean().optional(),
+});
+export type PromotionAcknowledgement = z.infer<typeof promotionAcknowledgement>;

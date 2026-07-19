@@ -387,6 +387,105 @@ export function scopeHostContractSuite(
       ).rejects.toThrow(/unknown vertical/);
     });
 
+    // -- channels and promotion-time checkpoints (#31 step 2) ----------------
+    // Promotion is the moment a change reaches anyone, so it is where §4's two
+    // human checkpoints belong. Today they are a merge-time convention: CI renders
+    // the diffs and a human is expected to look, but nothing ties that looking to
+    // the moment of exposure.
+
+    const publish = async (version: string, digests: { perm: string; mig: string }) => {
+      const id = ulid();
+      await host.admin.publishVersion(staff, {
+        id,
+        verticalSlug: 'callout',
+        version,
+        manifestDigest: `man-${version}`,
+        permissionDigest: digests.perm,
+        migrationDigest: digests.mig,
+        deploymentRef: null,
+      });
+      await host.admin.admitVersion(staff, id);
+      return id;
+    };
+
+    it('promotes a first version with nothing to acknowledge', async () => {
+      // The gate is about CHANGE, not existence. A first promotion has no
+      // predecessor to diff against, so demanding an acknowledgement would be
+      // ceremony rather than review.
+      const v1 = await publish('2.0.0', { perm: 'pA', mig: 'gA' });
+      await host.admin.promoteVersion(staff, 'callout', 'prod', v1);
+      const channels = await host.admin.listChannels(staff, 'callout');
+      expect(channels.find((c) => c.channel === 'prod')?.versionId).toBe(v1);
+    });
+
+    it('refuses a promotion that changes permissions until it is acknowledged', async () => {
+      const v2 = await publish('2.1.0', { perm: 'pB', mig: 'gA' }); // permissions moved
+      await expect(host.admin.promoteVersion(staff, 'callout', 'prod', v2)).rejects.toThrow(
+        /changes the permission surface/,
+      );
+      // Still pointing at the old one — a refused promotion changes nothing.
+      const before = await host.admin.listChannels(staff, 'callout');
+      expect(before.find((c) => c.channel === 'prod')?.versionId).not.toBe(v2);
+
+      await host.admin.promoteVersion(staff, 'callout', 'prod', v2, { permissionChange: true });
+      const after = await host.admin.listChannels(staff, 'callout');
+      expect(after.find((c) => c.channel === 'prod')?.versionId).toBe(v2);
+    });
+
+    it('refuses a promotion that changes migrations until it is acknowledged', async () => {
+      const v3 = await publish('2.2.0', { perm: 'pB', mig: 'gB' }); // migrations moved
+      await expect(host.admin.promoteVersion(staff, 'callout', 'prod', v3)).rejects.toThrow(
+        /changes migrations/,
+      );
+      await host.admin.promoteVersion(staff, 'callout', 'prod', v3, { migrationChange: true });
+      expect(
+        (await host.admin.listChannels(staff, 'callout')).find((c) => c.channel === 'prod')
+          ?.versionId,
+      ).toBe(v3);
+    });
+
+    it('records the acknowledgement, so review is evidence rather than a claim', async () => {
+      const promotions = (await host.admin.auditLog(staff, {})).filter(
+        (e) => e.action === 'promoteVersion',
+      );
+      const acknowledged = promotions.filter((e) =>
+        JSON.stringify(e.after).includes('"permissionChange":true'),
+      );
+      // D-32's compliance product has to produce evidence that a control operated.
+      // "Someone reviewed the permission change" is exactly such a control, and
+      // this row is what makes it checkable after the fact.
+      expect(acknowledged.length).toBeGreaterThan(0);
+      expect(acknowledged[0]!.actor).toBe(staff);
+    });
+
+    it('promotes per channel — dev moving does not move prod', async () => {
+      // The whole point of channels: the same vertical at different versions.
+      const preview = await publish('2.3.0-preview', { perm: 'pC', mig: 'gC' });
+      const prodBefore = (await host.admin.listChannels(staff, 'callout')).find(
+        (c) => c.channel === 'prod',
+      )?.versionId;
+      await host.admin.promoteVersion(staff, 'callout', 'dev', preview);
+      const channels = await host.admin.listChannels(staff, 'callout');
+      expect(channels.find((c) => c.channel === 'dev')?.versionId).toBe(preview);
+      expect(channels.find((c) => c.channel === 'prod')?.versionId).toBe(prodBefore);
+    });
+
+    it('refuses to promote a version that was never admitted', async () => {
+      const pending = ulid();
+      await host.admin.publishVersion(staff, {
+        id: pending,
+        verticalSlug: 'callout',
+        version: '9.9.9',
+        manifestDigest: 'm',
+        permissionDigest: 'p',
+        migrationDigest: 'g',
+        deploymentRef: null,
+      });
+      await expect(host.admin.promoteVersion(staff, 'callout', 'dev', pending)).rejects.toThrow(
+        /pending, not admitted/,
+      );
+    });
+
     it('rejects duplicate module registration', () => {
       expect(() => host.registerModule({ manifest: testModManifest })).toThrow(/already registered/);
     });

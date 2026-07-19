@@ -90,6 +90,13 @@ export interface VersionRow {
   created_at: string;
 }
 
+export interface ChannelRow {
+  vertical_slug: string;
+  channel: string;
+  version_id: string;
+  updated_at: string;
+}
+
 export interface OrgRow {
   org_id: string;
   tenant_id: string;
@@ -205,6 +212,13 @@ const DIRECTORY_DDL = `
     admission_note    TEXT,
     created_at        TEXT NOT NULL,
     UNIQUE (vertical_slug, version)
+  );
+  CREATE TABLE IF NOT EXISTS vertical_channels (
+    vertical_slug TEXT NOT NULL,
+    channel       TEXT NOT NULL,
+    version_id    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (vertical_slug, channel)
   );
   CREATE TABLE IF NOT EXISTS orgs (
     org_id TEXT PRIMARY KEY,
@@ -819,6 +833,30 @@ export class ControlPlaneDO extends DurableObject {
       'UPDATE scopes SET vertical_version_id = ?, vertical = ? WHERE scope_id = ?',
       versionId, verticalSlug, scopeId,
     );
+  }
+
+  readChannel(verticalSlug: string, channel: string): ChannelRow | undefined {
+    return this.sql
+      .exec(
+        'SELECT * FROM vertical_channels WHERE vertical_slug = ? AND channel = ?',
+        verticalSlug, channel,
+      )
+      .toArray()[0] as unknown as ChannelRow | undefined;
+  }
+
+  setChannel(verticalSlug: string, channel: string, versionId: string, updatedAt: string): void {
+    this.sql.exec(
+      `INSERT INTO vertical_channels (vertical_slug, channel, version_id, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (vertical_slug, channel) DO UPDATE SET version_id = ?, updated_at = ?`,
+      verticalSlug, channel, versionId, updatedAt, versionId, updatedAt,
+    );
+  }
+
+  listChannels(verticalSlug: string): ChannelRow[] {
+    return this.sql
+      .exec('SELECT * FROM vertical_channels WHERE vertical_slug = ? ORDER BY channel', verticalSlug)
+      .toArray() as unknown as ChannelRow[];
   }
 
   // -- organizations (K-22) ---------------------------------------------------

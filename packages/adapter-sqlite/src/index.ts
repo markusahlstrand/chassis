@@ -13,9 +13,11 @@ import {
   instant,
   moduleManifest,
   createOrgInput,
+  promotionAcknowledgement,
   publishVersionInput,
   registerVerticalInput,
   vertical as verticalSchema,
+  verticalChannel,
   verticalVersion,
   objectRef,
   org as orgSchema,
@@ -43,6 +45,7 @@ import {
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
+  type PromotionAcknowledgement,
   type PublishVersionInput,
   type RegisterVerticalInput,
   type Vertical,
@@ -224,6 +227,13 @@ interface VersionRow {
   created_at: string;
 }
 
+interface ChannelRow {
+  vertical_slug: string;
+  channel: string;
+  version_id: string;
+  updated_at: string;
+}
+
 interface OrgRow {
   org_id: string;
   tenant_id: string;
@@ -370,6 +380,16 @@ export class SqliteScopeHost implements ScopeHost {
         admission_note    TEXT,
         created_at        TEXT NOT NULL,
         UNIQUE (vertical_slug, version)
+      );
+      -- Channels (#31 step 2): a named pointer per vertical. Promotion moves it,
+      -- and promotion is where the migration and permission diffs fire — the
+      -- moment a change reaches anyone, rather than the moment it was typed.
+      CREATE TABLE IF NOT EXISTS vertical_channels (
+        vertical_slug TEXT NOT NULL,
+        channel       TEXT NOT NULL,
+        version_id    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY (vertical_slug, channel)
       );
       -- Organizations inside a tenant (K-22). Membership tuples point at these and
       -- grantToOrg targets them. Before this the id was a free-form string with no
@@ -1392,6 +1412,79 @@ export class SqliteScopeHost implements ScopeHost {
           admission: 'rejected',
           note,
         });
+      },
+      promoteVersion: async (
+        actor,
+        verticalSlug: string,
+        channel,
+        versionId: string,
+        acknowledge?: PromotionAcknowledgement,
+      ) => {
+        const incoming = readVersion(versionId);
+        if (!incoming) throw new Error(`unknown version ${versionId}`);
+        if (incoming.verticalSlug !== verticalSlug) {
+          throw new Error(`version ${versionId} belongs to '${incoming.verticalSlug}'`);
+        }
+        if (incoming.admission !== 'admitted') {
+          throw new Error(
+            `version ${versionId} is ${incoming.admission}, not admitted — it cannot be promoted`,
+          );
+        }
+        const current = this.directory
+          .prepare('SELECT version_id FROM vertical_channels WHERE vertical_slug = ? AND channel = ?')
+          .get(verticalSlug, channel) as { version_id: string } | undefined;
+        const outgoing = current ? readVersion(current.version_id) : undefined;
+        const ack = promotionAcknowledgement.parse(acknowledge ?? {});
+
+        // §4's two checkpoints, fired where the blast radius is. A FIRST promotion
+        // has nothing to diff against, so there is nothing to acknowledge — the
+        // gate is about change, not about existence.
+        if (outgoing) {
+          if (outgoing.permissionDigest !== incoming.permissionDigest && !ack.permissionChange) {
+            throw new Error(
+              `promotion changes the permission surface (${outgoing.permissionDigest} → ` +
+                `${incoming.permissionDigest}) — acknowledge it explicitly to promote`,
+            );
+          }
+          if (outgoing.migrationDigest !== incoming.migrationDigest && !ack.migrationChange) {
+            throw new Error(
+              `promotion changes migrations (${outgoing.migrationDigest} → ` +
+                `${incoming.migrationDigest}) — acknowledge it explicitly to promote`,
+            );
+          }
+        }
+
+        this.directory
+          .prepare(
+            `INSERT INTO vertical_channels (vertical_slug, channel, version_id, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (vertical_slug, channel) DO UPDATE SET version_id = ?, updated_at = ?`,
+          )
+          .run(verticalSlug, channel, versionId, new Date().toISOString(), versionId, new Date().toISOString());
+
+        // The acknowledgement is recorded, not just enforced: that is what turns
+        // "someone reviewed the permission change" into evidence.
+        this.recordAdmin(
+          actor,
+          'promoteVersion',
+          { tenantId: null, vertical: verticalSlug },
+          outgoing ? { versionId: outgoing.id, version: outgoing.version } : null,
+          { channel, versionId, version: incoming.version, acknowledged: ack },
+        );
+      },
+      listChannels: async (actor, verticalSlug: string) => {
+        const rows = this.directory
+          .prepare('SELECT * FROM vertical_channels WHERE vertical_slug = ? ORDER BY channel')
+          .all(verticalSlug) as ChannelRow[];
+        this.recordAccess(actor, 'listChannels', {}, { verticalSlug }, rows.length);
+        return rows.map((r) =>
+          verticalChannel.parse({
+            verticalSlug: r.vertical_slug,
+            channel: r.channel,
+            versionId: r.version_id,
+            updatedAt: r.updated_at,
+          }),
+        );
       },
       bindScopeVersion: async (actor, tenantId, scopeId, versionId: string) => {
         const v = readVersion(versionId);
