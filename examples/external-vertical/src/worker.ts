@@ -10,7 +10,7 @@
  *   - ./notes                   your own module
  *
  * This vertical is SELF-CONTAINED: it embeds its own control plane and seeds its
- * own tenant/scope, exactly like the ServiceCo demo. Registering into a
+ * own tenant/scope, exactly like the Callout demo. Registering into a
  * separately-deployed shared control plane is a later step (first-flow.md slice 4).
  *
  * Local run:  pnpm dev      (wrangler dev, no account; dev-header auth on)

@@ -1,7 +1,7 @@
 # @substrat-run/engine-protocol
 
 Protocol engine for [Substrat](https://github.com/substrat-run/substrat) —
-checklists/protocols (egenkontroll, condition reports, inspection records) with the
+checklists/protocols (self-inspection, condition reports, inspection records) with the
 **sign → immutable** invariant: versioned templates, append-only responses, a
 verifiable content hash, and counter-signatures on frozen content.
 

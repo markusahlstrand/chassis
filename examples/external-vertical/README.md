@@ -58,7 +58,7 @@ pnpm deploy         # needs a Workers Paid plan (Durable Object SQLite)
 ```
 
 `ALLOW_DEV_HEADER` is **not** set on deploy, so a deployed worker is fail-closed
-until you wire real auth. See the ServiceCo demo's worker for the Better Auth
+until you wire real auth. See the Callout demo's worker for the Better Auth
 seam; the kernel only ever receives the resolved `PrincipalId`.
 
 ## The shape to copy

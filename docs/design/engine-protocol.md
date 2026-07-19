@@ -32,10 +32,10 @@ Middle of the spectrum → engine form is right, **but decision 27 forbids desig
 ahead**: engines are extracted at the second vertical. So the build order is the
 discipline, rehearsed at demo scale:
 
-1. **Milestone A — ServiceCo vertical code.** Protocol tables, fill flow, in-app sign,
-   immutability enforcement live in `demos/fsm/src` as vertical operations. No new
+1. **Milestone A — Callout vertical code.** Protocol tables, fill flow, in-app sign,
+   immutability enforcement live in `demos/callout/src` as vertical operations. No new
    package. The FSM demo gains its egenkontroll beat.
-2. **Milestone B — the second shape forces extraction.** CykelService needs a service
+2. **Milestone B — the second shape forces extraction.** Handlebar needs a service
    checklist with a different shape (per-bike condition report; customer counter-sign
    at pickup). Extract `engines/protocol`: invariants move to the engine, both
    verticals' templates stay behind as content. The extraction diff is the proof the
@@ -113,14 +113,14 @@ question): it's glue an edit can silently drop — invisible to review, weak for
 compliance.
 
 **It is still the right pole when the policy is CONDITIONAL on vertical data.**
-ServiceCo owes an egenkontroll only on `montage` orders (`demos/fsm/src/module.ts`):
-`order.kind` is ServiceCo vocabulary, and the kernel must never learn it. That guard
+Callout owes an egenkontroll only on `montage` orders (`demos/callout/src/module.ts`):
+`order.kind` is Callout vocabulary, and the kernel must never learn it. That guard
 stays glue, on purpose.
 
 ### Pole 2 — manifest-declared (milestone C, shipped)
 
 A module's **manifest** declares an unconditional pre-condition on an operation; another
-module **contributes** the named predicate. CykelService (`demos/bike-shop`):
+module **contributes** the named predicate. Handlebar (`demos/handlebar`):
 
 ```ts
 // manifest (the vertical — the layer that owns "what is mandatory when")
@@ -174,7 +174,7 @@ vertical-composed glue lacks.
 ### Pole 2's complement — operation withdrawal (what makes the guard *enforceable*)
 
 A guard binds the **operation it names**. On its own that makes a gate *reviewable* but
-not *enforceable*: CykelService gates `bike-shop/close-repair`, while the engine's own
+not *enforceable*: Handlebar gates `bike-shop/close-repair`, while the engine's own
 `workorder/close` would stay registered — and any caller holding `workorder:close` could
 walk around the gate. (Confirmed in the demo before this landed: sign without
 counter-signing, `bike-shop/close-repair` blocks, plain `workorder/close` closes it
@@ -198,11 +198,11 @@ withdraws: ['workorder/close'],   // the name stops resolving in THIS host
   manifest that withdraws an already-registered operation removes it from the map.
 - **Fails closed and looks like nothing special.** A withdrawn operation is
   indistinguishable from one that was never registered: `unknown operation`.
-- **Opt-in, never self-inflicted.** ServiceCo withdraws nothing and keeps
+- **Opt-in, never self-inflicted.** Callout withdraws nothing and keeps
   `workorder/close`. A module withdrawing its *own* operation throws — it is meaningless
   and would hide bugs.
 
-Guard + withdrawal together: **the only door to `closed` in CykelService is the vertical's
+Guard + withdrawal together: **the only door to `closed` in Handlebar is the vertical's
 pickup ceremony, and the kernel refuses it until the customer has counter-signed.** The
 gate is now in the manifest diff *and* in the execution path.
 
@@ -215,7 +215,7 @@ master-plan offline question, not solved here), template marketplace.
 ## 8. Review questions for the human
 
 1. ~~Rehearsal (A/B) vs direct engine build?~~ **Resolved 2026-07-14: rehearsal.**
-   Milestone A ships as ServiceCo vertical code; extraction happens at milestone B.
+   Milestone A ships as Callout vertical code; extraction happens at milestone B.
 2. Is append-only responses right, or is latest-value-with-audit-log enough?
 3. Counter-signature as second signature row on frozen content — does the bike-shop
    pickup flow actually need the customer to sign *after* content freezes, or before?
@@ -241,4 +241,4 @@ master-plan offline question, not solved here), template marketplace.
    `workorder/close` cannot bypass `bike-shop/close-repair`)?~~ **Resolved 2026-07-14:
    yes — `withdraws: string[]` on the manifest, order-independent, opt-in, binding-only.
    The bypass is closed; the demo asserts `workorder/close` is now `unknown operation`
-   in CykelService's host while ServiceCo keeps it.**
+   in Handlebar's host while Callout keeps it.**

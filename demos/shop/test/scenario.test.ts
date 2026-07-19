@@ -11,7 +11,7 @@ import { buildShopHost, seedShop, type ShopWorld, type OrderRow, type OrderLineR
  * The scenario from spec/concept.md §9 — headless end-to-end:
  * migrations → catalogue → the OVERSELL throw → denials (roles, cart ownership,
  * cross-tenant) → priced checkout mot faktura → the invoicing engine builds a
- * fakturaunderlag from the RETAIL event (reuse + additive consume) → portal
+ * invoice basis from the RETAIL event (reuse + additive consume) → portal
  * isolation → lazy TTL release → the order state machine can't skip → the
  * warehouse's on-hand/reserved view stays behind stock:manage, and drafts stay
  * behind catalog:manage.
@@ -148,7 +148,7 @@ describe('Kallkälla Kaffe e-commerce scenario (concept §9)', () => {
     ).rejects.toThrow(/not open/);
   });
 
-  it('6. star topology: invoicing built a fakturaunderlag from the RETAIL event', async () => {
+  it('6. star topology: invoicing built an invoice basis from the RETAIL event', async () => {
     const underlag = await astrid.invoke<{ id: string; status: string; total: string }[]>('invoicing/list');
     expect(underlag).toHaveLength(1);
     expect(underlag[0]!.status).toBe('open');

@@ -30,7 +30,7 @@ the customer-portal walk work — see [Composing](./composing#portal-reads).
 ::: tip There is no `workorder/create` operation — and that is the design
 The engine registers no `create`. Creation is the in-scope function `createWorkOrder(ctx, …)`
 only, because **the vertical must price and label the order first**: it arrives from a
-felanmälan, a booking, a ticket. `demos/fsm` reaches it through `serviceco/create-workorder`.
+felanmälan, a booking, a ticket. `demos/callout` reaches it through `callout/create-workorder`.
 
 The hole is deliberate and load-bearing — the engine owns the state machine, the vertical
 owns vocabulary and pricing, and the engine leaves a gap exactly where the vertical belongs.

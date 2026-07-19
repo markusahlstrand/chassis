@@ -16,7 +16,7 @@ human-readable descriptions:
 ```
 workorder:create   Create work orders
 workorder:report   Start work, report time and material
-invoicing:export   Export a fakturaunderlag (makes it immutable)
+invoicing:export   Export an invoice basis (makes it immutable)
 ```
 
 ### Roles @ nodes

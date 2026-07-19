@@ -86,18 +86,18 @@ Substrat is pre-release (0.x). What exists today:
 | Work-order engine | [`@substrat-run/engine-workorder`](/engines/workorder/) | Seed |
 | Invoicing engine | [`@substrat-run/engine-invoicing`](/engines/invoicing/) | Seed |
 | Protocol / checklist engine | [`@substrat-run/engine-protocol`](/engines/protocol/) | Seed |
-| ServiceCo vertical — runs on both adapters, deployed on Cloudflare | [`demos/fsm`](https://github.com/substrat-run/substrat/tree/main/demos/fsm) | Working |
-| PeopleCo (HR) vertical — leave/absence, time, expenses, onboarding; one role-adaptive app (employee mobile + manager web) | [`demos/hr`](https://github.com/substrat-run/substrat/tree/main/demos/hr) | Working |
+| Callout vertical — runs on both adapters, deployed on Cloudflare | [`demos/callout`](https://github.com/substrat-run/substrat/tree/main/demos/callout) | Working |
+| Meridian (HR) vertical — leave/absence, time, expenses, onboarding; one role-adaptive app (employee mobile + manager web) | [`demos/meridian`](https://github.com/substrat-run/substrat/tree/main/demos/meridian) | Working |
 
 Interfaces change without notice until the first vertical ships.
 
-**PeopleCo** is the deliberate shape-breaker: a domain with *no ready-made engine*, so
+**Meridian** is the deliberate shape-breaker: a domain with *no ready-made engine*, so
 leave/absence, time reporting, and expenses are all vertical code — proof the kernel's
 guarantees (nested tenancy, permissions, audit, GDPR) hold with zero engine support, and
 that its value isn't borrowed from the work-order state machine. It reuses only the
 protocol engine (onboarding) and is the vertical that surfaces the
 [absence / entry-ledger engine](/engines/#engines-today) candidate. It also exercises what
-ServiceCo doesn't: two country scopes (Sweden 25 days + saved days, Spain 22 + *registro de
+Callout doesn't: two country scopes (Sweden 25 days + saved days, Spain 22 + *registro de
 jornada*) diverging from one codebase, and a single app that adapts to the person — an
 employee sees only their own record; a team lead who is *also* an employee gets a **Manage**
 section beside their own **My work**, all behind the same permission checks.

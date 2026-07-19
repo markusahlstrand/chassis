@@ -32,9 +32,9 @@ host.defineOperation('acme/felanmalan-to-order', async (ctx, input) => {
 
 The ticket update and the order creation commit together or not at all.
 
-`demos/fsm/src/routes.ts` maps the seam precisely: `assign`/`start`/`close` go straight to
+`demos/callout/src/routes.ts` maps the seam precisely: `assign`/`start`/`close` go straight to
 the engine, while `create-workorder` and `complete-workorder` (which needs billable lines
-priced) route through `serviceco/*`.
+priced) route through `callout/*`.
 
 ## Configuration
 

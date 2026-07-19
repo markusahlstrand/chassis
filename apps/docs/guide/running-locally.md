@@ -7,7 +7,7 @@ No cloud account, no Docker, no second datastore.
 
 ::: tip This is a monorepo command
 `pnpm dev` at the root of the [substrat monorepo](https://github.com/substrat-run/substrat)
-runs the ServiceCo demo vertical (`demos/fsm`) wired to the console (`apps/console`). It is
+runs the Callout demo vertical (`demos/callout`) wired to the console (`apps/console`). It is
 the reference for what a local stack looks like, not a published tool.
 :::
 
@@ -23,12 +23,12 @@ It ends on a banner telling you where to go:
   substrat · local stack — one process, one SQLite dir
   ────────────────────────────────────────────────────
     ▶ Console (open this)   http://localhost:5272
-    ▶ Portal — ServiceCo    http://localhost:5271
+    ▶ Portal — Callout    http://localhost:5271
 
       vertical API          http://localhost:8871
       control plane API     http://localhost:8788
   ────────────────────────────────────────────────────
-    data   …/demos/fsm/.data
+    data   …/demos/callout/.data
 ```
 
 Open the **console** to act as the platform operator (tenants, scopes, entitlements,
@@ -46,7 +46,7 @@ its own listener.
 flowchart TB
   subgraph browser["Your browser"]
     C["Console UI<br/>localhost:5272"]
-    A["ServiceCo app (portal)<br/>localhost:5271"]
+    A["Callout app (portal)<br/>localhost:5271"]
   end
 
   subgraph proc["One Node process — pnpm dev"]
@@ -58,7 +58,7 @@ flowchart TB
     V --> H
   end
 
-  subgraph data["demos/fsm/.data — one SQLite directory"]
+  subgraph data["demos/callout/.data — one SQLite directory"]
     D[("_directory.sqlite<br/>tenants · scopes · roles · entitlements · audit")]
     S[("&lt;tenant&gt;__&lt;scope&gt;.sqlite<br/>one file per scope — its data + outbox")]
     B[("better-auth.sqlite<br/>logins · sessions")]
@@ -82,7 +82,7 @@ and the console just wrote to that same row. There is no sync, no second copy �
 | Port | Process | What it is |
 |---|---|---|
 | `5272` | Vite dev server | The **console** — the platform operator's admin UI |
-| `5271` | Vite dev server | The **portal** — ServiceCo's tenant-facing app |
+| `5271` | Vite dev server | The **portal** — Callout's tenant-facing app |
 | `8871` | Node (Hono) | The **vertical API** — resolves a user, `getScope`, invokes operations |
 | `8788` | Node (Hono) | The **control plane** — the audited directory surface the console drives |
 
@@ -91,7 +91,7 @@ separate. All four are launched and torn down together by `pnpm dev`.
 
 ### The databases
 
-Everything lives under `demos/fsm/.data` as plain SQLite files (WAL mode — the `-wal` /
+Everything lives under `demos/callout/.data` as plain SQLite files (WAL mode — the `-wal` /
 `-shm` siblings are SQLite's, not yours to touch):
 
 | File | Owned by | Holds |
@@ -103,7 +103,7 @@ Everything lives under `demos/fsm/.data` as plain SQLite files (WAL mode — the
 Debugging is opening a file:
 
 ```sh
-sqlite3 demos/fsm/.data/_directory.sqlite 'SELECT slug, status FROM scopes;'
+sqlite3 demos/callout/.data/_directory.sqlite 'SELECT slug, status FROM scopes;'
 ```
 
 Delete the `.data` directory to reset the world; it re-seeds on the next boot.
@@ -132,13 +132,13 @@ way to change the local world:
 - **Grant/revoke entitlements, suspend, archive:** all live in the console and take effect
   immediately, because they write the shared directory the portal reads.
 - **New scope:** provisioning a scope is on the control-plane API (`POST /scopes`) but does
-  not yet have a console button — the demo seeds its scopes in `demos/fsm/src/seed.ts`. Add
+  not yet have a console button — the demo seeds its scopes in `demos/callout/src/seed.ts`. Add
   one there, or `curl` the API with a platform-actor header.
 
 ## Adding another application
 
 A "new application" is a new **vertical**. Today each vertical ships its own dev server
-(the shop demo has its own; ServiceCo is `demos/fsm/src/server.ts`), and each composes its
+(the shop demo has its own; Callout is `demos/callout/src/server.ts`), and each composes its
 engines + module into a host. To scaffold one, use the process in
 [Getting started](/guide/getting-started) and the engines you need.
 
@@ -159,7 +159,7 @@ pnpm dev:connected
 ```
 
 This starts three things: a standalone control plane (its own process, on `:8788`), the
-ServiceCo vertical in **connected mode**, and the console pointed at that control plane. On
+Callout vertical in **connected mode**, and the console pointed at that control plane. On
 boot the vertical registers its tenants and scopes into the control plane over HTTP; before
 every request it asks the control plane "is this scope still active?" So when you suspend a
 scope in the console, the vertical's next action fails closed — the same outcome as the
@@ -169,7 +169,7 @@ deployment boundary in production.
 ```mermaid
 flowchart LR
   CO["Console<br/>:5272"] -->|writes| CP["Control plane<br/>:8788 — own process"]
-  V["ServiceCo vertical<br/>:8871 — own process"] -->|"register + gate (HTTP)"| CP
+  V["Callout vertical<br/>:8871 — own process"] -->|"register + gate (HTTP)"| CP
   V -->|local execution| DB[("scope SQLite")]
 ```
 

@@ -1,7 +1,7 @@
 # Protocol engine
 
 `@substrat-run/engine-protocol` — **protocols and checklists with the sign → immutable
-invariant**: egenkontroller, installation protocols, service checklists, per-item condition
+invariant**: self-inspections, installation protocols, service checklists, per-item condition
 reports. A protocol is the compliance artifact a field-service or workshop business must be
 able to produce, unaltered, years later.
 

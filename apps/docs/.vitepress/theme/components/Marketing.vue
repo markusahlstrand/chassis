@@ -45,9 +45,9 @@ const cannots = [
 ];
 
 const demos = [
-  ['ServiceCo', 'Field service', 'vertical', 'A Swedish service & installation firm — work orders, time & material reporting, egenkontroll protocols, fakturaunderlag. Runs on SQLite locally and deployed on Cloudflare from one codebase.'],
-  ['Kallkälla Kaffe', 'E-commerce', 'engine', 'An online coffee roaster — catalog, cart, stock, discounts, orders. Proves the attachment contracts aren’t field-service-shaped.'],
-  ['CykelService', 'Bike shop', 'kernel', 'An agent-scaffolded vertical: the same engines re-vocabularied to a bike workshop, from acceptance run 001.'],
+  ['RallyPoint', 'Padel club', 'engine', 'Court booking as allocation over an interval rather than a state machine — the lost race rejected with no locking code anywhere, multi-venue tenancy, and a player who holds no role at all reaching their own booking through an entity-narrowed grant.', '/verticals/rallypoint'],
+  ['Meridian', 'HR', 'kernel', 'The shape-breaker: a domain with no ready-made engine, so the kernel carries it alone. Multi-country scopes diverging from one codebase, and one role-adaptive app serving employee and manager in the same surface.', '/verticals/meridian'],
+  ['Callout', 'Field service', 'vertical', 'The canonical composition — a Swedish service & installation firm where two engines cooperate through events with zero imports between them. Runs on SQLite locally and deployed on Cloudflare from one codebase.', '/verticals/'],
 ];
 
 const pkgs = [
@@ -131,14 +131,14 @@ const repo = 'https://github.com/substrat-run/substrat';
       <div class="kicker">Reference verticals</div>
       <h2>The same kernel, three businesses.</h2>
       <div class="grid-3">
-        <div v-for="([name, kind, layer, desc]) in demos" :key="name" class="demo-card">
+        <a v-for="([name, kind, layer, desc, href]) in demos" :key="name" class="demo-card" :href="href">
           <div class="demo-head">
             <span class="swatch" :class="`layer-${layer}`" />
             <span class="demo-name">{{ name }}</span>
             <span class="demo-kind">{{ kind }}</span>
           </div>
           <p class="muted sm">{{ desc }}</p>
-        </div>
+        </a>
       </div>
     </section>
 
@@ -431,13 +431,20 @@ h2 {
   margin-bottom: 4px;
 }
 
-/* Demo cards */
+/* Demo cards — each links to that vertical's page */
 .demo-card {
+  display: block;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 20px;
   box-shadow: var(--shadow-xs);
   background: var(--surface-card);
+  color: var(--text-primary);
+  transition: border-color 0.15s ease;
+}
+.demo-card:hover {
+  border-color: var(--border-strong);
+  text-decoration: none;
 }
 .demo-head {
   display: flex;

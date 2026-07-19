@@ -44,17 +44,17 @@ Run `pnpm install && pnpm test`.
 ## Demos
 
 Reference verticals — the same vertical code on the kernel, proving the guarantees hold
-(and, for ServiceCo, that a vertical deploys unchanged from local SQLite to Cloudflare):
+(and, for Callout, that a vertical deploys unchanged from local SQLite to Cloudflare):
 
-- **[ServiceCo — field service](demos/fsm/README.md)** — the flagship. A Swedish
-  service/installation firm: work orders, time/material reporting, egenkontroll protocols,
-  fakturaunderlag. Runs on pure SQLite locally **and deployed on Cloudflare** (Durable
+- **[Callout — field service](demos/callout/README.md)** — the flagship. A Swedish
+  service/installation firm: work orders, time/material reporting, self-inspection protocols,
+  invoice basis. Runs on pure SQLite locally **and deployed on Cloudflare** (Durable
   Objects + D1) behind Better Auth, from one shared route table + auth seam — only the
   adapter beneath differs. Architecture and request-flow diagrams in its README.
 - **[Kallkälla Kaffe — e-commerce](demos/shop/)** — an online coffee roaster (catalog,
   cart, stock, discounts, orders) with Better Auth logins; proves the attachment contracts
   aren't field-service-shaped.
-- **[CykelService — bike shop](demos/bike-shop/)** — an agent-scaffolded vertical (the same
+- **[Handlebar — bike shop](demos/handlebar/)** — an agent-scaffolded vertical (the same
   engines re-vocabularied to a bike workshop), from [acceptance run 001](docs/acceptance/agent-loop-001.md).
 
 ## Documentation
@@ -81,4 +81,4 @@ Acceptance runs — the recurring "can an agent build a vertical unaided up to t
 checkpoints?" benchmark (master plan §5.6):
 
 - [docs/acceptance/agent-loop-001.md](docs/acceptance/agent-loop-001.md) — run 001,
-  CykelService (2026-07-14): PASS, with notes.
+  Handlebar (2026-07-14): PASS, with notes.

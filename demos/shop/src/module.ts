@@ -25,7 +25,7 @@ import {
 // the kernel: catalog + variants + a RESERVATION LEDGER (no-oversell) + cart +
 // the checkout PRICING MOMENT that freezes an immutable order and emits a fat
 // `commerce.order-placed` event. The invoicing engine consumes that event
-// (additive, star topology) to build a fakturaunderlag — engine reuse across a
+// (additive, star topology) to build an invoice basis — engine reuse across a
 // different domain than the work-order verticals.
 //
 // The reservation invariant and the order state machine live as VERTICAL code

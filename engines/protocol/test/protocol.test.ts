@@ -48,14 +48,14 @@ describe('engine-protocol', () => {
     await h.close();
   });
 
-  const defineTemplate = (key = 'egenkontroll', content = CONTENT) =>
+  const defineTemplate = (key = 'self-inspection', content = CONTENT) =>
     staff.invoke<ProtocolTemplateRow>('protocol/define-template', {
       key,
-      title: 'Egenkontroll',
+      title: 'Self-inspection',
       content,
     });
 
-  const instantiate = (templateKey = 'egenkontroll') =>
+  const instantiate = (templateKey = 'self-inspection') =>
     staff.invoke<ProtocolInstanceRow>('protocol/instantiate', {
       templateKey,
       entityType: BIKE.entityType,
@@ -68,7 +68,7 @@ describe('engine-protocol', () => {
     const v1 = await defineTemplate();
     expect(v1.version).toBe(1);
 
-    const v2 = await defineTemplate('egenkontroll', {
+    const v2 = await defineTemplate('self-inspection', {
       sections: [{ title: 'Broms', items: [{ key: 'front-brake', label: 'Frambroms', type: 'check' }] }],
     });
     expect(v2.version).toBe(2);
@@ -81,7 +81,7 @@ describe('engine-protocol', () => {
     expect(inst.template_version).toBe(1);
 
     // Editing the template afterwards must not retro-change the instance.
-    await defineTemplate('egenkontroll', {
+    await defineTemplate('self-inspection', {
       sections: [{ title: 'Ny', items: [{ key: 'other', label: 'Annat', type: 'check' }] }],
     });
     const again = await staff.invoke<{ instance: ProtocolInstanceRow }>('protocol/get', {
@@ -135,7 +135,7 @@ describe('engine-protocol', () => {
   /** Sign a fresh instance on its own entity, answering `value`. */
   const signWith = async (entityId: string, value: boolean | string) => {
     const inst = await staff.invoke<ProtocolInstanceRow>('protocol/instantiate', {
-      templateKey: 'egenkontroll',
+      templateKey: 'self-inspection',
       entityType: 'workorder',
       entityId,
     });
@@ -167,7 +167,7 @@ describe('engine-protocol', () => {
     await defineTemplate();
     const v1 = await signWith('01JWORKORDER000000000000001', true);
 
-    await defineTemplate('egenkontroll', {
+    await defineTemplate('self-inspection', {
       sections: [
         {
           title: 'Broms',
@@ -189,10 +189,10 @@ describe('engine-protocol', () => {
     await defineTemplate();
     const inst = await instantiate();
 
-    await expect(h.run((ctx) => requireSigned(ctx, BIKE, 'egenkontroll'))).rejects.toThrow();
+    await expect(h.run((ctx) => requireSigned(ctx, BIKE, 'self-inspection'))).rejects.toThrow();
 
     await staff.invoke('protocol/sign', { instanceId: inst.id });
-    await expect(h.run((ctx) => requireSigned(ctx, BIKE, 'egenkontroll'))).resolves.toBeUndefined();
+    await expect(h.run((ctx) => requireSigned(ctx, BIKE, 'self-inspection'))).resolves.toBeUndefined();
   });
 
   // -- void -----------------------------------------------------------------
