@@ -1,8 +1,10 @@
 # Membership, invites, and the admin as first consumer
 
-**Status:** proposed. Implements plan decision 31; takes the option
+**Status:** partly built. Implements plan decision 31; takes the option
 [control-plane](control-plane.md) §3 deferred ("decide it at the second vertical").
-Partly built: the tombstone, `removeMember` and `listMembers` shipped in #53.
+Built so far: the tombstone with `removeMember`/`listMembers` (#53), the org record and
+branded `OrgId` (#55), the connector executor with correlated audit rows (#61), and the
+invites engine (#62). Remaining: the tenant-admin surface (§8 step 6).
 
 **K-21** settled revocation (tombstone, never delete) and assignment authority (one
 kernel-resolved set comparison, not N checks); both shipped or are recorded inline.
@@ -272,20 +274,35 @@ not need to: the initial owner is seeded platform-side during provisioning — t
 half (§3), which is out-of-band host code and already holds the authority. Self-service
 begins at the second member, not the first.
 
-## 6. The invites engine
+## 6. The invites engine (built)
 
-With §4 and §5 settled, invites is an ordinary engine and a good one — a state machine
-that cannot skip states, every mutation emitting a fat event, every operation checking a
-permission:
+`@substrat-run/engine-invites`. A state machine that cannot skip states, every mutation
+emitting a fat event, every operation checking a permission — except one, and that
+exception is the interesting part.
 
-`invited → accepted | expired | revoked`, accept-required, verified hashed identifier,
-rate-limited. The mechanics are already worked out in
-[booking-social](booking-social.md) §"invite, don't search" — written for a consumer
-social graph, but they transfer intact.
+`invited → accepted | revoked | expired`, accept-required, verified hashed identifier,
+rate-limited. The mechanics came from [booking-social](booking-social.md) §"invite,
+don't search" — written for a consumer social graph, and they transferred intact.
 
-The engine owns the flow. The kernel owns the effect: on accept, the engine calls the §4
-seam. That division is why the seam has to exist first — without it the engine can run its
-entire state machine and then be unable to make anyone a member.
+**The engine owns the flow; the executor owns the effect.** On accept the engine
+*emits* `member.add-requested` and the connector (§4.2) effects it. An earlier draft of
+this section said the engine "calls the §4 seam", which was the in-scope framing §4.1
+corrects: the engine cannot call anything that writes the directory, because that write
+is outside its transaction. It asks. That is why the seam had to exist first — without
+it the engine can run its entire state machine and then be unable to make anyone a
+member.
+
+**`invites/accept` checks no permission**, deliberately. The recipient is not yet a
+member of anything, so there is no grant they could hold; a check would be vacuous or
+would require granting access *before* acceptance, which is what accept-required exists
+to prevent. The invitation is the authority, proven by re-hashing the identifier the
+caller presents — so a leaked invitation id is not a bearer token.
+
+**The identifier hash is salted per scope.** A global salt would make one address
+produce one hash everywhere, letting anyone holding the table correlate a person across
+tenants — reintroducing what per-tenant identity pools exist to prevent (§4.3). This
+was not in the original sketch and is the kind of thing that is free to get right at
+build time and unfixable afterwards.
 
 **Extraction discipline (D-27) is satisfied, narrowly.** Engines are extracted at the
 second vertical, never designed ahead. Membership and invites have two real consumers on
@@ -326,8 +343,9 @@ discovered.
 4. **The org record (#34, remainder).** `OrgId` becomes a branded ULID and orgs become a
    real directory record (§4.4). Shared with #48, which needs the same
    `orgId ↔ tenantId` row — so these two are done adjacently, not in sequence.
-5. **The connector seam (§4.2) + the invites engine (#35, engine half).** The executor and
-   its correlated audit trail land here; the engine emits, the executor effects.
+5. ~~**The connector seam (§4.2) + the invites engine (#35, engine half)**~~ — built.
+   The executor drains the outbox inline after commit and stamps `causedBy` on the admin
+   rows it writes; the invites engine emits and never touches the directory itself.
 6. **The tenant-admin surface (#35, app half; #33).** Its own app, its own auth — the
    authhero path, self-service, org membership. Not bolted into the staff console: §6's
    two-regimes point means that would be a category error.
