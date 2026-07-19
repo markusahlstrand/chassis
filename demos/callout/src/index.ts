@@ -11,4 +11,10 @@ export {
   type ProtocolSummary,
   type ProtocolTemplateRow,
 } from '@substrat-run/engine-protocol';
-export { buildDemoHost, seedDemo, type DemoWorld } from './seed.js';
+export {
+  buildDemoHost,
+  seedDemo,
+  provisionCallout,
+  type CalloutInstance,
+  type DemoWorld,
+} from './seed.js';
