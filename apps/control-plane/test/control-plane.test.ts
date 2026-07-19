@@ -2,6 +2,7 @@ import { SELF, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { DEV_ACTOR_HEADER } from '@substrat-run/control-plane-api';
+import { platformActorId } from '@substrat-run/contracts';
 import { ulid } from '@substrat-run/kernel';
 import { d1StaffRoster, listStaff } from '../src/staff-roster.js';
 
@@ -52,7 +53,8 @@ describe('shared control-plane worker', () => {
     // Read back through a brand-new coordinator against the same DO namespace —
     // proof the row is in durable storage, reachable by any stateless host.
     const fresh = new CloudflareScopeHost({ scope: env.SCOPE, controlPlane: env.CONTROL_PLANE });
-    const tenants = await fresh.admin.listTenants();
+    // Reads take an actor now (K-24) — the same one the dev stub authenticated as.
+    const tenants = await fresh.admin.listTenants(platformActorId.parse(ACTOR));
     expect(tenants.map((t) => t.id)).toContain(id);
     await fresh.close();
   });

@@ -242,19 +242,19 @@ export function scopeHostContractSuite(
       await stub.invoke('connector/request-member', { principal: joiner, orgId: org });
 
       // Prompt dispatch: effected by the time the request returns, not on a timer.
-      const members = await host.admin.listMembers(t1, org);
+      const members = await host.admin.listMembers(staff, t1, org);
       expect(members.map((m) => m.principal)).toEqual([joiner]);
 
       // The two halves join. The executor's admin row carries the id of the event
       // that caused it, which is what stops the split trail being unreadable —
       // control-plane.md §3 named that as the main cost of this pattern.
-      const added = (await host.admin.auditLog({ tenantId: t1 })).find(
+      const added = (await host.admin.auditLog(staff, { tenantId: t1 })).find(
         (e) => e.action === 'addMember' && JSON.stringify(e.after).includes(joiner),
       );
       expect(added?.causedBy).toEqual(expect.any(String));
 
       // A staff member acting directly caused nothing but themselves.
-      const orgRow = (await host.admin.auditLog({ tenantId: t1 })).find(
+      const orgRow = (await host.admin.auditLog(staff, { tenantId: t1 })).find(
         (e) => e.action === 'createOrg',
       );
       expect(orgRow?.causedBy).toBeNull();
@@ -274,7 +274,7 @@ export function scopeHostContractSuite(
         stub.invoke('connector/request-and-throw', { principal: ghost, orgId: org }),
       ).rejects.toThrow(/deliberate failure/);
 
-      expect(await host.admin.listMembers(t1, org)).toEqual([]);
+      expect(await host.admin.listMembers(staff, t1, org)).toEqual([]);
     });
 
     it('delivers each event to an executor exactly once', async () => {
@@ -290,7 +290,7 @@ export function scopeHostContractSuite(
       // Another operation on the same scope drains the outbox again.
       await stub.invoke('connector/requests');
 
-      const rows = (await host.admin.auditLog({ tenantId: t1 })).filter(
+      const rows = (await host.admin.auditLog(staff, { tenantId: t1 })).filter(
         (e) => e.action === 'addMember' && JSON.stringify(e.after).includes(once),
       );
       expect(rows).toHaveLength(1);
@@ -417,14 +417,14 @@ export function scopeHostContractSuite(
     it('creates a tenant record, idempotently; only real creates are audited', async () => {
       await host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' });
       await host.admin.createTenant(staff, { id: t3, slug: 'acme-co', name: 'Acme Co' }); // no-op
-      expect(await host.admin.getTenant(t3)).toMatchObject({
+      expect(await host.admin.getTenant(staff, t3)).toMatchObject({
         id: t3,
         slug: 'acme-co',
         name: 'Acme Co',
         status: 'active',
       });
-      expect((await host.admin.listTenants()).filter((x) => x.id === t3)).toHaveLength(1);
-      const creates = (await host.admin.auditLog({ tenantId: t3 })).filter(
+      expect((await host.admin.listTenants(staff)).filter((x) => x.id === t3)).toHaveLength(1);
+      const creates = (await host.admin.auditLog(staff, { tenantId: t3 })).filter(
         (r) => r.action === 'createTenant',
       );
       expect(creates).toHaveLength(1); // the idempotent no-op left no row
@@ -443,7 +443,7 @@ export function scopeHostContractSuite(
     });
 
     it('records setTenantStatus with before/after status', async () => {
-      const transitions = (await host.admin.auditLog({ tenantId: t3 })).filter(
+      const transitions = (await host.admin.auditLog(staff, { tenantId: t3 })).filter(
         (r) => r.action === 'setTenantStatus',
       );
       expect(transitions.length).toBeGreaterThanOrEqual(2);
@@ -480,7 +480,7 @@ export function scopeHostContractSuite(
       await host.admin.unarchiveScope(staff, t3, s3);
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
 
-      const transitions = (await host.admin.auditLog({ tenantId: t3 })).filter(
+      const transitions = (await host.admin.auditLog(staff, { tenantId: t3 })).filter(
         (r) => r.action === 'archiveScope' || r.action === 'unarchiveScope',
       );
       expect(transitions.map((r) => r.action)).toEqual(
@@ -519,19 +519,19 @@ export function scopeHostContractSuite(
       // Granting the flag loads the module for this tenant.
       await host.admin.grantEntitlement(staff, t4, 'billed');
       await expect(stub.invoke<string>('billed/act')).resolves.toBe('ran');
-      expect(await host.admin.listEntitlements(t4)).toContain('billed');
+      expect(await host.admin.listEntitlements(staff, t4)).toContain('billed');
 
       // Revoking it takes the operation away again — as if never registered.
       await host.admin.revokeEntitlement(staff, t4, 'billed');
       await expect(stub.invoke('billed/act')).rejects.toThrow(/not entitled/);
-      expect(await host.admin.listEntitlements(t4)).not.toContain('billed');
+      expect(await host.admin.listEntitlements(staff, t4)).not.toContain('billed');
     });
 
     it('audits grant/revoke idempotently and records the SKU flag', async () => {
       // Re-grant twice: only the first is a real change, so only one row.
       await host.admin.grantEntitlement(staff, t4, 'audited-sku');
       await host.admin.grantEntitlement(staff, t4, 'audited-sku');
-      const grants = (await host.admin.auditLog({ tenantId: t4 })).filter(
+      const grants = (await host.admin.auditLog(staff, { tenantId: t4 })).filter(
         (r) =>
           r.action === 'grantEntitlement' &&
           (r.after as { entitlementKey: string }).entitlementKey === 'audited-sku',
@@ -540,7 +540,7 @@ export function scopeHostContractSuite(
       expect(grants[0]!.actor).toBe(staff);
 
       await host.admin.revokeEntitlement(staff, t4, 'audited-sku');
-      const revokes = (await host.admin.auditLog({ tenantId: t4 })).filter(
+      const revokes = (await host.admin.auditLog(staff, { tenantId: t4 })).filter(
         (r) => r.action === 'revokeEntitlement',
       );
       expect(revokes.length).toBeGreaterThanOrEqual(1);
@@ -566,7 +566,7 @@ export function scopeHostContractSuite(
       const bare = scopeId.parse(ulid());
       await host.provisionScope(staff, { tenantId: t5, scopeId: bare });
 
-      const rec = await host.admin.getScopeRecord(t5, bare);
+      const rec = await host.admin.getScopeRecord(staff, t5, bare);
       // A ULID lowercases into a valid slug, so the placeholder is unique by
       // construction — every pre-existing caller provisions without naming.
       expect(rec).toMatchObject({
@@ -593,7 +593,7 @@ export function scopeHostContractSuite(
         vertical: 'housing',
         jurisdiction: 'eu',
       });
-      expect(await host.admin.getScopeRecord(t5, named)).toMatchObject({
+      expect(await host.admin.getScopeRecord(staff, t5, named)).toMatchObject({
         slug: 'brf-vasastan',
         kind: 'brf',
         name: 'Brf Vasastan',
@@ -610,7 +610,7 @@ export function scopeHostContractSuite(
 
       // Idempotency is keyed on the scope id, so re-provisioning the SAME scope
       // must not collide with its own slug.
-      const named = (await host.admin.listScopes({ tenantId: t5 })).find(
+      const named = (await host.admin.listScopes(staff, { tenantId: t5 })).find(
         (s) => s.slug === 'brf-vasastan',
       )!;
       await expect(
@@ -640,7 +640,7 @@ export function scopeHostContractSuite(
     });
 
     it('enumerates the scopes under a tenant, and filters by status (§4.5)', async () => {
-      const all = await host.admin.listScopes({ tenantId: t5 });
+      const all = await host.admin.listScopes(staff, { tenantId: t5 });
       expect(all.length).toBeGreaterThanOrEqual(2);
       expect(all.every((s) => s.tenantId === t5)).toBe(true);
       // Ordered by scope id — ULID order is chronological.
@@ -649,11 +649,11 @@ export function scopeHostContractSuite(
       const target = all[0]!;
       await host.admin.suspendScope(staff, t5, target.id);
 
-      const suspended = await host.admin.listScopes({ tenantId: t5, status: 'suspended' });
+      const suspended = await host.admin.listScopes(staff, { tenantId: t5, status: 'suspended' });
       expect(suspended.map((s) => s.id)).toEqual([target.id]);
 
       // Several statuses at once — the console's All / Suspended / Archived tabs.
-      const both = await host.admin.listScopes({
+      const both = await host.admin.listScopes(staff, {
         tenantId: t5,
         status: ['active', 'suspended'],
       });
@@ -661,32 +661,32 @@ export function scopeHostContractSuite(
 
       // An empty status list means "no status is acceptable" — it must match
       // nothing, never degenerate into an unfiltered read of the whole fleet.
-      expect(await host.admin.listScopes({ tenantId: t5, status: [] })).toEqual([]);
+      expect(await host.admin.listScopes(staff, { tenantId: t5, status: [] })).toEqual([]);
 
       await host.admin.unsuspendScope(staff, t5, target.id);
     });
 
     it('lists the whole fleet across tenants when unfiltered (§4.5)', async () => {
-      const fleet = await host.admin.listScopes();
+      const fleet = await host.admin.listScopes(staff);
       const tenants = new Set(fleet.map((s) => s.tenantId));
       expect(tenants.size).toBeGreaterThan(1);
       expect(fleet.length).toBeGreaterThanOrEqual(
-        (await host.admin.listScopes({ tenantId: t5 })).length,
+        (await host.admin.listScopes(staff, { tenantId: t5 })).length,
       );
     });
 
     it('filters the fleet by vertical (§4.5)', async () => {
-      const housing = await host.admin.listScopes({ vertical: 'housing' });
+      const housing = await host.admin.listScopes(staff, { vertical: 'housing' });
       expect(housing.length).toBeGreaterThanOrEqual(1);
       expect(housing.every((s) => s.vertical === 'housing')).toBe(true);
     });
 
     it('fails closed reading a scope record on a mismatched pair (K-3)', async () => {
-      const [any] = await host.admin.listScopes({ tenantId: t5 });
+      const [any] = await host.admin.listScopes(staff, { tenantId: t5 });
       // The scope exists — but not under t1. It must read as absent, never as
       // itself: the same rule getScope applies when minting a stub.
-      expect(await host.admin.getScopeRecord(t1, any!.id)).toBeUndefined();
-      expect(await host.admin.getScopeRecord(t5, scopeId.parse(ulid()))).toBeUndefined();
+      expect(await host.admin.getScopeRecord(staff, t1, any!.id)).toBeUndefined();
+      expect(await host.admin.getScopeRecord(staff, t5, scopeId.parse(ulid()))).toBeUndefined();
     });
 
     it('projects the applied-migration count into the directory (§5.4)', async () => {
@@ -694,18 +694,18 @@ export function scopeHostContractSuite(
       // '0'. Registered modules carry migrations, so a provisioned scope must
       // report a count, which is what makes "which scopes are behind" answerable
       // from the index without fanning out.
-      const [any] = await host.admin.listScopes({ tenantId: t5 });
+      const [any] = await host.admin.listScopes(staff, { tenantId: t5 });
       expect(Number(any!.schemaVersion)).toBeGreaterThan(0);
     });
 
     it('stamps the audit target with the scope vertical for lifecycle actions (§4.4)', async () => {
       // `vertical` was plumbed end-to-end and passed by no call site — every row
       // was null. A lifecycle action on a scope that names one must carry it.
-      const named = (await host.admin.listScopes({ tenantId: t5 })).find(
+      const named = (await host.admin.listScopes(staff, { tenantId: t5 })).find(
         (s) => s.vertical === 'housing',
       )!;
       await host.admin.suspendScope(staff, t5, named.id);
-      const rows = (await host.admin.auditLog({ tenantId: t5, scopeId: named.id })).filter(
+      const rows = (await host.admin.auditLog(staff, { tenantId: t5, scopeId: named.id })).filter(
         (r) => r.action === 'suspendScope',
       );
       expect(rows).toHaveLength(1);
@@ -716,19 +716,19 @@ export function scopeHostContractSuite(
     // -- the admin audit log, read side (control-plane.md §4.4/§4.5) ----------
 
     it('narrows the audit log by scope, actor and action (§4.5)', async () => {
-      const [any] = await host.admin.listScopes({ tenantId: t5 });
+      const [any] = await host.admin.listScopes(staff, { tenantId: t5 });
 
-      const byScope = await host.admin.auditLog({ tenantId: t5, scopeId: any!.id });
+      const byScope = await host.admin.auditLog(staff, { tenantId: t5, scopeId: any!.id });
       expect(byScope.length).toBeGreaterThan(0);
       expect(byScope.every((r) => r.scopeId === any!.id)).toBe(true);
 
-      const byActor = await host.admin.auditLog({ tenantId: t5, actor: staff });
+      const byActor = await host.admin.auditLog(staff, { tenantId: t5, actor: staff });
       expect(byActor.length).toBeGreaterThan(0);
       expect(byActor.every((r) => r.actor === staff)).toBe(true);
       // A different actor shares the log and must not see these rows.
-      expect(await host.admin.auditLog({ actor: platformActorId.parse(ulid()) })).toEqual([]);
+      expect(await host.admin.auditLog(staff, { actor: platformActorId.parse(ulid()) })).toEqual([]);
 
-      const lifecycle = await host.admin.auditLog({
+      const lifecycle = await host.admin.auditLog(staff, {
         tenantId: t5,
         action: ['suspendScope', 'unsuspendScope'],
       });
@@ -738,16 +738,16 @@ export function scopeHostContractSuite(
       ).toBe(true);
 
       // Single action, not an array — both spellings are accepted.
-      const provisions = await host.admin.auditLog({ tenantId: t5, action: 'provisionScope' });
+      const provisions = await host.admin.auditLog(staff, { tenantId: t5, action: 'provisionScope' });
       expect(provisions.every((r) => r.action === 'provisionScope')).toBe(true);
 
       // Empty action list matches nothing rather than everything.
-      expect(await host.admin.auditLog({ tenantId: t5, action: [] })).toEqual([]);
+      expect(await host.admin.auditLog(staff, { tenantId: t5, action: [] })).toEqual([]);
     });
 
     it('orders oldest-first by default and newest-first on request (§4.5)', async () => {
-      const asc = await host.admin.auditLog({ tenantId: t5 });
-      const desc = await host.admin.auditLog({ tenantId: t5, order: 'desc' });
+      const asc = await host.admin.auditLog(staff, { tenantId: t5 });
+      const desc = await host.admin.auditLog(staff, { tenantId: t5, order: 'desc' });
       expect(asc.length).toBe(desc.length);
       expect(asc.length).toBeGreaterThan(1);
       // The default preserves the ordering the log shipped with; the console reads desc.
@@ -755,15 +755,15 @@ export function scopeHostContractSuite(
     });
 
     it('limits and pages the audit log by cursor (§4.5)', async () => {
-      const all = await host.admin.auditLog({ tenantId: t5 });
+      const all = await host.admin.auditLog(staff, { tenantId: t5 });
       expect(all.length).toBeGreaterThan(2);
 
-      const first = await host.admin.auditLog({ tenantId: t5, limit: 2 });
+      const first = await host.admin.auditLog(staff, { tenantId: t5, limit: 2 });
       expect(first.map((r) => r.id)).toEqual(all.slice(0, 2).map((r) => r.id));
 
       // The cursor IS the last entry's id — ULID order is chronological, so no
       // separate encoding is needed. Paging forward resumes strictly after it.
-      const next = await host.admin.auditLog({
+      const next = await host.admin.auditLog(staff, {
         tenantId: t5,
         limit: 2,
         cursor: first[first.length - 1]!.id,
@@ -771,7 +771,7 @@ export function scopeHostContractSuite(
       expect(next.map((r) => r.id)).toEqual(all.slice(2, 4).map((r) => r.id));
 
       // Descending pages backward from the cursor.
-      const descPage = await host.admin.auditLog({
+      const descPage = await host.admin.auditLog(staff, {
         tenantId: t5,
         order: 'desc',
         limit: 2,
@@ -786,14 +786,14 @@ export function scopeHostContractSuite(
     });
 
     it('bounds the audit log by time (§4.5)', async () => {
-      const all = await host.admin.auditLog({ tenantId: t5 });
+      const all = await host.admin.auditLog(staff, { tenantId: t5 });
       const pivot = all[1]!.at;
       // `since` is inclusive, `until` exclusive.
-      const since = await host.admin.auditLog({ tenantId: t5, since: pivot });
+      const since = await host.admin.auditLog(staff, { tenantId: t5, since: pivot });
       expect(since.every((r) => r.at >= pivot)).toBe(true);
       expect(since.some((r) => r.id === all[1]!.id)).toBe(true);
 
-      const until = await host.admin.auditLog({ tenantId: t5, until: pivot });
+      const until = await host.admin.auditLog(staff, { tenantId: t5, until: pivot });
       expect(until.every((r) => r.at < pivot)).toBe(true);
     });
   });

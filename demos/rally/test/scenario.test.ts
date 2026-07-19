@@ -8,6 +8,7 @@ import type { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { principalId, type Money } from '@substrat-run/contracts';
 import type { Reservation } from '@substrat-run/engine-booking';
 import {
+  RALLY_PLATFORM_ACTOR,
   buildRallyHost,
   seedRally,
   zonedToInstant,
@@ -541,7 +542,7 @@ describe('RallyPoint: inviting a player', () => {
     });
 
     // Nothing yet: an invitation confers nothing until the recipient acts.
-    expect(await host.admin.listMembers(w.t1, w.org1)).toEqual([]);
+    expect(await host.admin.listMembers(RALLY_PLATFORM_ACTOR, w.t1, w.org1)).toEqual([]);
 
     const newcomer = principalId.parse(ulid());
     const theirs = await host.getScope(newcomer, w.t1, w.s1);
@@ -551,7 +552,7 @@ describe('RallyPoint: inviting a player', () => {
     });
 
     // The KERNEL membership — effected by the executor, never by the engine.
-    const members = await host.admin.listMembers(w.t1, w.org1);
+    const members = await host.admin.listMembers(RALLY_PLATFORM_ACTOR, w.t1, w.org1);
     expect(members.map((m) => m.principal)).toEqual([newcomer]);
 
     // ...and RallyPoint's OWN record, from its consumer on the same acceptance.
@@ -559,7 +560,7 @@ describe('RallyPoint: inviting a player', () => {
     expect(roster.find((m) => m.party_ref === partyRef)?.name).toBe('Ny Spelare');
 
     // The split trail joins: the admin row names the event that caused it.
-    const added = (await host.admin.auditLog({ tenantId: w.t1 })).find(
+    const added = (await host.admin.auditLog(RALLY_PLATFORM_ACTOR, { tenantId: w.t1 })).find(
       (e) => e.action === 'addMember',
     );
     expect(added?.causedBy).toEqual(expect.any(String));

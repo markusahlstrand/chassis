@@ -73,14 +73,14 @@ describe('migration failure is recorded in the directory', () => {
   });
 
   it('records which module@version failed, through the coordinator', async () => {
-    const record = await host.admin.getScopeRecord(t, s);
+    const record = await host.admin.getScopeRecord(staff, t, s);
     expect(record?.migrationFailure).not.toBeNull();
     expect(record?.migrationFailure?.version).toBe('@test/broken@0002-broken');
     expect(record?.migrationFailure?.attempts).toBeGreaterThan(0);
   });
 
   it('projects the count that actually landed, not the pre-attempt value', async () => {
-    const record = await host.admin.getScopeRecord(t, s);
+    const record = await host.admin.getScopeRecord(staff, t, s);
     expect(record?.schemaVersion).toBe('1');
   });
 });

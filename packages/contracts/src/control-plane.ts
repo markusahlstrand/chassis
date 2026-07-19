@@ -24,7 +24,8 @@ export const adminAction = z.enum([
   'addMember',
   'removeMember', // K-21 — tombstones the membership tuple, never deletes it
   'createOrg', // K-22 — orgs are a real record, not a free-form string
-  'registerIdentityPool', // K-23 — a provider declares its topology before it may link
+  'registerIdentityPool',
+  'pruneAccessLog', // K-24 — deleting drained access rows is itself a mutation // K-23 — a provider declares its topology before it may link
   'createTenant', // §4.1
   'setTenantStatus', // §4.1 — before/after carry the transitioned status
   'provisionScope', // §4.2 — the first scope-lifecycle transition (→ active)
@@ -106,6 +107,30 @@ export const resolvedIdentity = z.object({
   scopeId: scopeId.nullable(),
 });
 export type ResolvedIdentity = z.infer<typeof resolvedIdentity>;
+
+/**
+ * One staff READ of the directory (K-24). Separate from `adminLogEntry` because a
+ * mutation is permanent evidence and a read is operational history — one table would
+ * force one retention policy on both.
+ *
+ * `resultCount` is what separates navigation from an incident: "called listScopes"
+ * against "enumerated 4,000 tenants".
+ *
+ * `drainedAt` marks a row shipped to Tier 2. Only drained rows may be pruned —
+ * expiring on age alone would destroy evidence while calling itself retention.
+ */
+export const accessLogEntry = z.object({
+  id: z.string().min(1),
+  actor: platformActorId,
+  method: z.string().min(1),
+  tenantId: tenantId.nullable(),
+  scopeId: scopeId.nullable(),
+  params: z.string().nullable(),
+  resultCount: z.number().int().nonnegative(),
+  drainedAt: instant.nullable(),
+  at: instant,
+});
+export type AccessLogEntry = z.infer<typeof accessLogEntry>;
 
 /**
  * One principal's membership of one org, as the directory holds it (K-21).

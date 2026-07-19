@@ -60,7 +60,7 @@ describe('control-plane identity mapping', () => {
       tenantId: t,
       scopeId: s,
     });
-    const links = (await host.admin.auditLog({ tenantId: t })).filter(
+    const links = (await host.admin.auditLog(staff, { tenantId: t })).filter(
       (e) => e.action === 'linkIdentity',
     );
     expect(links).toHaveLength(1);

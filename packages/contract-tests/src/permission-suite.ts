@@ -174,8 +174,8 @@ export function permissionContractSuite(
       // And the row is still here. This is the entire reason K-21 chose a
       // tombstone over a DELETE: a tuple that once granted access is the evidence
       // of why an access was allowed (K-4), which a deleted row cannot provide.
-      expect(await host.admin.listMembers(t1, beta)).toEqual([]);
-      const withRevoked = await host.admin.listMembers(t1, beta, { includeRevoked: true });
+      expect(await host.admin.listMembers(staff, t1, beta)).toEqual([]);
+      const withRevoked = await host.admin.listMembers(staff, t1, beta, { includeRevoked: true });
       expect(withRevoked).toHaveLength(1);
       expect(withRevoked[0]!.principal).toBe(frank);
       expect(typeof withRevoked[0]!.revokedAt).toBe('string');
@@ -189,10 +189,10 @@ export function permissionContractSuite(
       await host.admin.addMember(staff, t1, hank, gamma);
       await host.admin.removeMember(staff, t1, hank, gamma);
 
-      const live = await host.admin.listMembers(t1, gamma);
+      const live = await host.admin.listMembers(staff, t1, gamma);
       expect(live.map((m) => m.principal)).toEqual([gina]);
       expect(live[0]!.revokedAt).toBeNull();
-      expect(await host.admin.listMembers(t1, gamma, { includeRevoked: true })).toHaveLength(2);
+      expect(await host.admin.listMembers(staff, t1, gamma, { includeRevoked: true })).toHaveLength(2);
     });
 
     it('re-adding a revoked member clears the tombstone', async () => {
@@ -205,7 +205,7 @@ export function permissionContractSuite(
 
       await host.admin.addMember(staff, t1, iris, delta);
       await expect(probe(iris, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
-      const rows = await host.admin.listMembers(t1, delta, { includeRevoked: true });
+      const rows = await host.admin.listMembers(staff, t1, delta, { includeRevoked: true });
       expect(rows.find((m) => m.principal === iris)?.revokedAt).toBeNull();
     });
 
@@ -214,16 +214,16 @@ export function permissionContractSuite(
       await host.admin.createOrg(staff, { id: epsilon, tenantId: t1, slug: 'epsilon', name: 'Eps' });
       await host.admin.addMember(staff, t1, jack, epsilon);
       await host.admin.removeMember(staff, t1, jack, epsilon);
-      const first = (await host.admin.listMembers(t1, epsilon, { includeRevoked: true }))[0]!
+      const first = (await host.admin.listMembers(staff, t1, epsilon, { includeRevoked: true }))[0]!
         .revokedAt;
 
       await host.admin.removeMember(staff, t1, jack, epsilon);
       await host.admin.removeMember(staff, t1, jack, gamma); // real org, never a member
 
-      const after = (await host.admin.listMembers(t1, epsilon, { includeRevoked: true }))[0]!
+      const after = (await host.admin.listMembers(staff, t1, epsilon, { includeRevoked: true }))[0]!
         .revokedAt;
       expect(after).toBe(first);
-      const removals = (await host.admin.auditLog({ tenantId: t1 })).filter(
+      const removals = (await host.admin.auditLog(staff, { tenantId: t1 })).filter(
         (r) => r.action === 'removeMember',
       );
       expect(removals.filter((r) => JSON.stringify(r.before).includes(jack))).toHaveLength(1);
@@ -242,7 +242,7 @@ export function permissionContractSuite(
       await expect(
         host.admin.grantToOrg(staff, ghost, PERM_READ, { tenantId: t1, scopeId: s1 }),
       ).rejects.toThrow(/unknown org/);
-      await expect(host.admin.listMembers(t1, ghost)).rejects.toThrow(/unknown org/);
+      await expect(host.admin.listMembers(staff, t1, ghost)).rejects.toThrow(/unknown org/);
     });
 
     it("scopes orgs by tenant — another tenant's org reads as absent", async () => {
@@ -252,8 +252,8 @@ export function permissionContractSuite(
       await host.admin.createTenant(staff, { id: other, slug: `o-${other.toLowerCase()}`, name: 'O' });
       const foreign: OrgId = orgId.parse(ulid());
       await host.admin.createOrg(staff, { id: foreign, tenantId: other, slug: 'foreign', name: 'F' });
-      expect(await host.admin.getOrg(other, foreign)).toMatchObject({ slug: 'foreign' });
-      expect(await host.admin.getOrg(t1, foreign)).toBeUndefined();
+      expect(await host.admin.getOrg(staff, other, foreign)).toMatchObject({ slug: 'foreign' });
+      expect(await host.admin.getOrg(staff, t1, foreign)).toBeUndefined();
       const stranger: PrincipalId = principalId.parse(ulid());
       await expect(host.admin.addMember(staff, t1, stranger, foreign)).rejects.toThrow(
         /unknown org/,
@@ -264,7 +264,7 @@ export function permissionContractSuite(
       const dup: OrgId = orgId.parse(ulid());
       await host.admin.createOrg(staff, { id: dup, tenantId: t1, slug: 'dup', name: 'Dup' });
       await host.admin.createOrg(staff, { id: dup, tenantId: t1, slug: 'dup', name: 'Dup' });
-      const orgs = await host.admin.listOrgs(t1);
+      const orgs = await host.admin.listOrgs(staff, t1);
       expect(orgs.filter((o) => o.id === dup)).toHaveLength(1);
       expect(orgs.every((o) => o.tenantId === t1)).toBe(true);
     });
@@ -278,7 +278,7 @@ export function permissionContractSuite(
       await expect(
         host.admin.createOrg(staff, { id: second, tenantId: t1, slug: 'taken', name: 'Two' }),
       ).rejects.toThrow(/already taken/);
-      expect(await host.admin.getOrg(t1, second)).toBeUndefined();
+      expect(await host.admin.getOrg(staff, t1, second)).toBeUndefined();
     });
 
     // -- identity: pools, topology, and per-tenant keying (§4.3, K-22/K-23) --
@@ -390,7 +390,7 @@ export function permissionContractSuite(
         second,
       );
       // The cross-tenant question, answerable ONLY because the pool is central.
-      expect(await host.admin.listIdentityTenants('oidc:central', 'consultant-1')).toEqual(
+      expect(await host.admin.listIdentityTenants(staff, 'oidc:central', 'consultant-1')).toEqual(
         [t1, tB].sort(),
       );
     });
@@ -404,7 +404,7 @@ export function permissionContractSuite(
       // Not a leak — the caller already knows this pool's tenant. It throws because
       // ASKING is a category error: on a tenant-bound pool the same externalId in
       // another tenant is a different person, so a tenant list has no meaning.
-      await expect(host.admin.listIdentityTenants('oidc:enum-bound', 'z')).rejects.toThrow(
+      await expect(host.admin.listIdentityTenants(staff, 'oidc:enum-bound', 'z')).rejects.toThrow(
         /tenant-bound/,
       );
     });
@@ -479,10 +479,56 @@ export function permissionContractSuite(
       );
     });
 
+    // -- staff access log (K-24) ---------------------------------------------
+
+    it('records who READ the directory, with what came back', async () => {
+      const reader = platformActorId.parse(ulid());
+      await host.admin.listTenants(reader);
+      const rows = await host.admin.accessLog(staff, { actor: reader });
+      const listed = rows.find((r) => r.method === 'listTenants');
+      expect(listed?.actor).toBe(reader);
+      // result_count is what separates navigation from an incident: "called
+      // listTenants" against "enumerated every tenant on the platform".
+      expect(listed?.resultCount).toBeGreaterThan(0);
+      expect(listed?.drainedAt).toBeNull();
+    });
+
+    it('audits reading the audit trail, and reading the access log itself', async () => {
+      const nosy = platformActorId.parse(ulid());
+      await host.admin.auditLog(nosy, { tenantId: t1 });
+      await host.admin.accessLog(nosy, {});
+      const rows = await host.admin.accessLog(staff, { actor: nosy });
+      // Who examined the record of who did what is the question an incident asks
+      // second, so neither read is exempt from being recorded.
+      expect(rows.map((r) => r.method)).toEqual(
+        expect.arrayContaining(['auditLog', 'accessLog']),
+      );
+    });
+
+    it('keeps reads OUT of the mutation trail', async () => {
+      // Two logs because they are two things. A read in the admin log would make
+      // its "every row is an effect" property false.
+      const before = (await host.admin.auditLog(staff, { tenantId: t1 })).length;
+      await host.admin.listScopes(staff, { tenantId: t1 });
+      expect((await host.admin.auditLog(staff, { tenantId: t1 })).length).toBe(before);
+    });
+
+    it('refuses to prune anything undrained', async () => {
+      const filler = platformActorId.parse(ulid());
+      await host.admin.listTenants(filler);
+      const before = (await host.admin.accessLog(staff, { actor: filler })).length;
+      expect(before).toBeGreaterThan(0);
+      // Nothing drains yet, so nothing may be pruned. Expiring on age alone would
+      // destroy evidence while calling itself retention — the failure K-21
+      // rejected for tuples, one layer up.
+      expect(await host.admin.pruneAccessLog(staff, 100)).toBe(0);
+      expect((await host.admin.accessLog(staff, { actor: filler })).length).toBe(before);
+    });
+
     // -- control-plane audit trail (control-plane.md §4.4) --------------------
 
     it('records every admin mutation with actor and target, append-only (K-20)', async () => {
-      const log = await host.admin.auditLog({ tenantId: t1 });
+      const log = await host.admin.auditLog(staff, { tenantId: t1 });
       // The six seed mutations each left a row; nothing is ever removed.
       expect(log.length).toBeGreaterThanOrEqual(6);
       // Every row is stamped platform-side: our staff actor, this tenant, a timestamp.
@@ -503,7 +549,7 @@ export function permissionContractSuite(
 
     it('captures before/after when a role is redefined — the permission-diff seed', async () => {
       await host.admin.defineRole(staff, t1, { key: 'tech', permissions: [PERM_USE], source: 'vertical' });
-      const redefines = (await host.admin.auditLog({ tenantId: t1 }))
+      const redefines = (await host.admin.auditLog(staff, { tenantId: t1 }))
         .filter(
           (r) =>
             r.action === 'defineRole' &&
@@ -527,7 +573,7 @@ export function permissionContractSuite(
         permissions: [PERM_READ, PERM_USE],
         source: 'vertical',
       });
-      const roles = await host.admin.listRoles({ tenantId: t1 });
+      const roles = await host.admin.listRoles(staff, { tenantId: t1 });
       const found = roles.find((r) => r.key === 'listed-role');
       expect(found).toMatchObject({
         tenantId: t1,
@@ -545,7 +591,7 @@ export function permissionContractSuite(
         permissions: [PERM_READ, PERM_USE, PERM_ADMIN],
         source: 'vertical',
       });
-      const listed = (await host.admin.listRoles({ tenantId: t1 })).filter((r) => r.key === 'listed-role');
+      const listed = (await host.admin.listRoles(staff, { tenantId: t1 })).filter((r) => r.key === 'listed-role');
       // defineRole is an upsert keyed on (tenant, key) — a redefinition replaces.
       expect(listed).toHaveLength(1);
       expect(listed[0]!.permissions).toContain(PERM_ADMIN);
@@ -557,23 +603,23 @@ export function permissionContractSuite(
         permissions: [PERM_READ],
         source: ENGINE_SOURCE,
       });
-      const bySource = await host.admin.listRoles({ tenantId: t1, source: 'vertical' });
+      const bySource = await host.admin.listRoles(staff, { tenantId: t1, source: 'vertical' });
       expect(bySource.length).toBeGreaterThan(0);
       expect(bySource.every((r) => r.source === 'vertical')).toBe(true);
       expect(bySource.some((r) => r.key === 'engine-role')).toBe(false);
 
-      const engine = await host.admin.listRoles({ source: ENGINE_SOURCE });
+      const engine = await host.admin.listRoles(staff, { source: ENGINE_SOURCE });
       expect(engine.some((r) => r.key === 'engine-role')).toBe(true);
 
       // Another tenant's roles are not this tenant's, the same way the audit read
       // is scoped — the console must never show one tenant's role design to another.
-      const other = await host.admin.listRoles({ tenantId: tenantId.parse(ulid()) });
+      const other = await host.admin.listRoles(staff, { tenantId: tenantId.parse(ulid()) });
       expect(other.some((r) => r.key === 'listed-role')).toBe(false);
     });
 
     it('scopes the audit read by tenant', async () => {
       const otherTenant = tenantId.parse(ulid());
-      expect(await host.admin.auditLog({ tenantId: otherTenant })).toEqual([]);
+      expect(await host.admin.auditLog(staff, { tenantId: otherTenant })).toEqual([]);
     });
   });
 }

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
+  accessLogEntry,
   adminLogEntry,
   createTenantInput,
   domainEvent,
@@ -22,6 +23,7 @@ import {
   tenant as tenantSchema,
   tenantRole,
   type AdminAction,
+  type AccessLogEntry,
   type AdminLogEntry,
   type CapabilityGrant,
   type CreateTenantInput,
@@ -51,6 +53,7 @@ import {
 import {
   resolveScopeRecord,
   ulid,
+  type AccessLogFilter,
   type AuditLogFilter,
   type ConsumerHandler,
   type ExecutorHandler,
@@ -198,6 +201,18 @@ interface OrgRow {
   slug: string;
   name: string;
   created_at: string;
+}
+
+interface AccessLogRow {
+  id: string;
+  actor: string;
+  method: string;
+  tenant_id: string | null;
+  scope_id: string | null;
+  params: string | null;
+  result_count: number;
+  drained_at: string | null;
+  at: string;
 }
 
 interface AdminLogRow {
@@ -364,6 +379,31 @@ export class SqliteScopeHost implements ScopeHost {
       -- Append-only control-plane audit trail (control-plane.md §4.4). Lives in
       -- the directory, not a scope DB: it records cross-tenant staff actions and
       -- is stamped host-side. Never UPDATEd, never DELETEd.
+      -- Staff READS (K-24). Separate from the admin log because they are two
+      -- things: a mutation is permanent evidence, a read is operational history.
+      -- One table would force one retention policy on both, the stricter would
+      -- win, and read noise would bury the mutation rows an auditor came for.
+      --
+      -- drained_at marks a row shipped to Tier 2. ONLY drained rows may be
+      -- pruned: expiring on age alone would destroy evidence while calling
+      -- itself retention. Until that sink exists nothing drains, so nothing
+      -- prunes and the window is unbounded — a stated limitation, not a policy.
+      CREATE TABLE IF NOT EXISTS _substrat_access_log (
+        id           TEXT PRIMARY KEY,
+        actor        TEXT NOT NULL,
+        method       TEXT NOT NULL,
+        tenant_id    TEXT,
+        scope_id     TEXT,
+        params       TEXT,
+        -- What separates navigation from an incident: "called listScopes" against
+        -- "enumerated 4,000 tenants". A log that cannot tell them apart is a log
+        -- nobody reads.
+        result_count INTEGER NOT NULL,
+        drained_at   TEXT,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS _substrat_access_log_actor ON _substrat_access_log (actor, id);
+      CREATE INDEX IF NOT EXISTS _substrat_access_log_tenant ON _substrat_access_log (tenant_id, id);
       CREATE TABLE IF NOT EXISTS _substrat_admin_log (
         id TEXT PRIMARY KEY,
         actor TEXT NOT NULL,
@@ -807,6 +847,39 @@ export class SqliteScopeHost implements ScopeHost {
    * remembering a call per method. `before` is captured only where cheaply
    * readable; idempotent upserts with no cheap prior state pass `before: null`.
    */
+  /**
+   * Record a staff read (K-24). Called by every read on `HostAdmin`, which is why
+   * they all take an actor: a read the log cannot attribute is unrepresentable.
+   *
+   * `params` is a bounded summary, not the raw filter — enough to know what was
+   * asked, capped so one query cannot write an unbounded row.
+   */
+  private recordAccess(
+    actor: PlatformActorId,
+    method: string,
+    target: { tenantId?: TenantId | null; scopeId?: ScopeId | null },
+    params: unknown,
+    resultCount: number,
+  ): void {
+    const summary = params == null ? null : JSON.stringify(params).slice(0, 500);
+    this.directory
+      .prepare(
+        `INSERT INTO _substrat_access_log
+           (id, actor, method, tenant_id, scope_id, params, result_count, drained_at, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      )
+      .run(
+        ulid(),
+        actor,
+        method,
+        target.tenantId ?? null,
+        target.scopeId ?? null,
+        summary,
+        resultCount,
+        new Date().toISOString(),
+      );
+  }
+
   private recordAdmin(
     actor: PlatformActorId,
     action: AdminAction,
@@ -1053,7 +1126,7 @@ export class SqliteScopeHost implements ScopeHost {
         this.roles.set(`${tenantId}/${parsed.key}`, parsed);
         this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
       },
-      listRoles: async (filter?: RoleFilter): Promise<TenantRole[]> => {
+      listRoles: async (actor, filter?: RoleFilter): Promise<TenantRole[]> => {
         const where: string[] = [];
         const params: string[] = [];
         if (filter?.tenantId) {
@@ -1077,6 +1150,7 @@ export class SqliteScopeHost implements ScopeHost {
         // Parsed, not cast: `permissions` is a JSON blob in a TEXT column, so the
         // contract is the only thing standing between a corrupted row and the
         // console rendering a role with permissions nobody declared.
+        this.recordAccess(actor, 'listRoles', { tenantId: filter?.tenantId ?? null }, filter, rows.length);
         return rows.map((r) =>
           tenantRole.parse({
             tenantId: r.tenant_id,
@@ -1162,13 +1236,20 @@ export class SqliteScopeHost implements ScopeHost {
           .run(parsed.id, parsed.tenantId, parsed.slug, parsed.name, new Date().toISOString());
         this.recordAdmin(actor, 'createOrg', { tenantId: parsed.tenantId }, null, parsed);
       },
-      listOrgs: async (tenantId: TenantId) =>
-        (
+      listOrgs: async (actor, tenantId: TenantId) => {
+        const rows = (
           this.directory
             .prepare('SELECT * FROM orgs WHERE tenant_id = ? ORDER BY slug')
             .all(tenantId) as OrgRow[]
-        ).map(mapOrg),
-      getOrg: async (tenantId: TenantId, orgId: OrgId) => readOrg(tenantId, orgId),
+        ).map(mapOrg);
+        this.recordAccess(actor, 'listOrgs', { tenantId }, null, rows.length);
+        return rows;
+      },
+      getOrg: async (actor, tenantId: TenantId, orgId: OrgId) => {
+        const o = readOrg(tenantId, orgId);
+        this.recordAccess(actor, 'getOrg', { tenantId }, { orgId }, o ? 1 : 0);
+        return o;
+      },
       addMember: async (actor, tenantId, principal, orgId) => {
         requireOrg(tenantId, orgId);
         // INSERT OR REPLACE, so re-adding a revoked member clears the tombstone —
@@ -1197,7 +1278,7 @@ export class SqliteScopeHost implements ScopeHost {
         if (info.changes === 0) return; // never a member, or already revoked
         this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
       },
-      listMembers: async (tenantId, orgId, options) => {
+      listMembers: async (actor, tenantId, orgId, options) => {
         requireOrg(tenantId, orgId);
         const rows = this.directory
           .prepare(
@@ -1207,6 +1288,7 @@ export class SqliteScopeHost implements ScopeHost {
              ORDER BY subject`,
           )
           .all(tenantId, `org:${orgId}`) as { subject: string; revoked_at: string | null }[];
+        this.recordAccess(actor, 'listMembers', { tenantId }, { orgId, ...options }, rows.length);
         return rows.map((r) =>
           orgMembership.parse({
             principal: r.subject.slice('principal:'.length),
@@ -1254,12 +1336,20 @@ export class SqliteScopeHost implements ScopeHost {
           { status },
         );
       },
-      listTenants: async (): Promise<Tenant[]> =>
-        (this.directory.prepare('SELECT * FROM tenants ORDER BY tenant_id').all() as TenantRow[]).map(
-          mapTenant,
-        ),
-      getTenant: async (tenantId: TenantId): Promise<Tenant | undefined> => readTenant(tenantId),
-      listScopes: async (filter?: ScopeFilter): Promise<Scope[]> => {
+      listTenants: async (actor): Promise<Tenant[]> => {
+        const rows = (
+          this.directory.prepare('SELECT * FROM tenants ORDER BY tenant_id').all() as TenantRow[]
+        ).map(mapTenant);
+        // Enumerating every tenant on the platform is the read this log exists for.
+        this.recordAccess(actor, 'listTenants', {}, null, rows.length);
+        return rows;
+      },
+      getTenant: async (actor, tenantId: TenantId): Promise<Tenant | undefined> => {
+        const t = readTenant(tenantId);
+        this.recordAccess(actor, 'getTenant', { tenantId }, null, t ? 1 : 0);
+        return t;
+      },
+      listScopes: async (actor, filter?: ScopeFilter): Promise<Scope[]> => {
         const where: string[] = [];
         const params: (string | number)[] = [];
         if (filter?.tenantId) {
@@ -1282,15 +1372,25 @@ export class SqliteScopeHost implements ScopeHost {
           'SELECT * FROM scopes' +
           (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
           ' ORDER BY scope_id';
-        return (this.directory.prepare(sql).all(...params) as ScopeRow[]).map(mapScope);
+        const scopes = (this.directory.prepare(sql).all(...params) as ScopeRow[]).map(mapScope);
+        this.recordAccess(
+          actor,
+          'listScopes',
+          { tenantId: filter?.tenantId ?? null },
+          filter,
+          scopes.length,
+        );
+        return scopes;
       },
-      getScopeRecord: async (tenantId: TenantId, scopeId: ScopeId): Promise<Scope | undefined> => {
+      getScopeRecord: async (actor, tenantId: TenantId, scopeId: ScopeId): Promise<Scope | undefined> => {
         const r = this.directory.prepare('SELECT * FROM scopes WHERE scope_id = ?').get(scopeId) as
           | ScopeRow
           | undefined;
         // Cross-check the pair (K-3): a scope that exists under a DIFFERENT tenant
         // reads as absent, never as itself. Same rule as getScope's stub mint.
-        if (!r || r.tenant_id !== tenantId) return undefined;
+        const found = r && r.tenant_id === tenantId;
+        this.recordAccess(actor, 'getScopeRecord', { tenantId, scopeId }, null, found ? 1 : 0);
+        if (!found) return undefined;
         return mapScope(r);
       },
       suspendScope: async (actor, tenantId, scopeId) =>
@@ -1321,14 +1421,17 @@ export class SqliteScopeHost implements ScopeHost {
         if (info.changes === 0) return; // nothing held, nothing changed
         this.recordAdmin(actor, 'revokeEntitlement', { tenantId }, { entitlementKey }, null);
       },
-      listEntitlements: async (tenantId: TenantId): Promise<string[]> =>
-        (
+      listEntitlements: async (actor, tenantId: TenantId): Promise<string[]> => {
+        const keys = (
           this.directory
             .prepare(
               'SELECT entitlement_key FROM _substrat_entitlements WHERE tenant_id = ? ORDER BY entitlement_key',
             )
             .all(tenantId) as { entitlement_key: string }[]
-        ).map((r) => r.entitlement_key),
+        ).map((r) => r.entitlement_key);
+        this.recordAccess(actor, 'listEntitlements', { tenantId }, null, keys.length);
+        return keys;
+      },
       registerIdentityPool: async (actor: PlatformActorId, input: IdentityPool) => {
         const parsed = identityPool.parse(input);
         const existing = readPool(parsed.provider);
@@ -1359,8 +1462,12 @@ export class SqliteScopeHost implements ScopeHost {
           parsed,
         );
       },
-      getIdentityPool: async (provider: string) => readPool(provider),
-      listIdentityTenants: async (provider: string, externalId: string) => {
+      getIdentityPool: async (actor, provider: string) => {
+        const pool = readPool(provider);
+        this.recordAccess(actor, 'getIdentityPool', {}, { provider }, pool ? 1 : 0);
+        return pool;
+      },
+      listIdentityTenants: async (actor, provider: string, externalId: string) => {
         const pool = readPool(provider);
         if (!pool) throw new Error(`identity pool '${provider}' is not registered`);
         if (pool.topology !== 'central') {
@@ -1369,13 +1476,17 @@ export class SqliteScopeHost implements ScopeHost {
               `meaningful on a central pool, where the same externalId is the same person`,
           );
         }
-        return (
+        const tenants = (
           this.directory
             .prepare(
               'SELECT tenant_id FROM _substrat_identities WHERE provider = ? AND external_id = ? ORDER BY tenant_id',
             )
             .all(provider, externalId) as { tenant_id: string }[]
         ).map((r) => r.tenant_id as TenantId);
+        // Which tenants a given login touches — a cross-tenant question, and one
+        // worth being able to ask who asked.
+        this.recordAccess(actor, 'listIdentityTenants', {}, { provider }, tenants.length);
+        return tenants;
       },
       linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
@@ -1436,7 +1547,49 @@ export class SqliteScopeHost implements ScopeHost {
         if (!row) return undefined;
         return resolvedIdentity.parse({ principal: row.principal_id, scopeId: row.scope_id });
       },
-      auditLog: async (filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
+      accessLog: async (actor, filter?: AccessLogFilter): Promise<AccessLogEntry[]> => {
+        const where: string[] = [];
+        const params: (string | number)[] = [];
+        if (filter?.actor) { where.push('actor = ?'); params.push(filter.actor); }
+        if (filter?.tenantId) { where.push('tenant_id = ?'); params.push(filter.tenantId); }
+        if (filter?.method) { where.push('method = ?'); params.push(filter.method); }
+        let sql = 'SELECT * FROM _substrat_access_log';
+        if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+        sql += ' ORDER BY id';
+        if (filter?.limit !== undefined) { sql += ' LIMIT ?'; params.push(filter.limit); }
+        const rows = this.directory.prepare(sql).all(...params) as AccessLogRow[];
+        // Reading the access log is itself a read. Recorded BEFORE the rows are
+        // returned, so the row describing this call is not in its own result.
+        this.recordAccess(actor, 'accessLog', { tenantId: filter?.tenantId ?? null }, filter, rows.length);
+        return rows.map((r) =>
+          accessLogEntry.parse({
+            id: r.id,
+            actor: r.actor,
+            method: r.method,
+            tenantId: r.tenant_id,
+            scopeId: r.scope_id,
+            params: r.params,
+            resultCount: r.result_count,
+            drainedAt: r.drained_at,
+            at: r.at,
+          }),
+        );
+      },
+      pruneAccessLog: async (actor, limit: number): Promise<number> => {
+        // ONLY drained rows. Age alone is not a licence to delete evidence.
+        const info = this.directory
+          .prepare(
+            `DELETE FROM _substrat_access_log WHERE id IN (
+               SELECT id FROM _substrat_access_log WHERE drained_at IS NOT NULL ORDER BY id LIMIT ?
+             )`,
+          )
+          .run(limit);
+        if (info.changes > 0) {
+          this.recordAdmin(actor, 'pruneAccessLog', { tenantId: null }, { pruned: info.changes }, null);
+        }
+        return info.changes;
+      },
+      auditLog: async (actor, filter?: AuditLogFilter): Promise<AdminLogEntry[]> => {
         const where: string[] = [];
         const params: (string | number)[] = [];
         if (filter?.tenantId) {
@@ -1481,6 +1634,15 @@ export class SqliteScopeHost implements ScopeHost {
           params.push(filter.limit);
         }
         const rows = this.directory.prepare(sql).all(...params) as AdminLogRow[];
+        // Reading the audit trail is itself audited. Who examined the record of
+        // who did what is exactly the question an incident asks second.
+        this.recordAccess(
+          actor,
+          'auditLog',
+          { tenantId: filter?.tenantId ?? null, scopeId: filter?.scopeId ?? null },
+          filter,
+          rows.length,
+        );
         return rows.map((r) =>
           adminLogEntry.parse({
             id: r.id,

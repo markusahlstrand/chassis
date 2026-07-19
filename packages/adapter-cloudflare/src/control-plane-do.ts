@@ -77,6 +77,18 @@ export interface OrgRow {
   created_at: string;
 }
 
+export interface AccessLogRow {
+  id: string;
+  actor: string;
+  method: string;
+  tenant_id: string | null;
+  scope_id: string | null;
+  params: string | null;
+  result_count: number;
+  drained_at: string | null;
+  at: string;
+}
+
 interface AdminLogRow {
   id: string;
   actor: string;
@@ -200,6 +212,19 @@ const DIRECTORY_DDL = `
     created_at   TEXT NOT NULL,
     PRIMARY KEY (tenant_id, provider, external_id)
   );
+  CREATE TABLE IF NOT EXISTS _substrat_access_log (
+    id           TEXT PRIMARY KEY,
+    actor        TEXT NOT NULL,
+    method       TEXT NOT NULL,
+    tenant_id    TEXT,
+    scope_id     TEXT,
+    params       TEXT,
+    result_count INTEGER NOT NULL,
+    drained_at   TEXT,
+    at           TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS _substrat_access_log_actor ON _substrat_access_log (actor, id);
+  CREATE INDEX IF NOT EXISTS _substrat_access_log_tenant ON _substrat_access_log (tenant_id, id);
   CREATE TABLE IF NOT EXISTS _substrat_admin_log (
     id TEXT PRIMARY KEY,
     actor TEXT NOT NULL,
@@ -951,6 +976,66 @@ export class ControlPlaneDO extends DurableObject {
   // -- admin audit log (control-plane.md §4.4) --------------------------------
 
   /** Append one audit row. before/after are arbitrary JSON, stringified here. */
+  /** Staff READS (K-24). Separate table, separate lifetime — see control-plane.md §4.6. */
+  recordAccess(entry: {
+    id: string;
+    actor: string;
+    method: string;
+    tenantId: string | null;
+    scopeId: string | null;
+    params: string | null;
+    resultCount: number;
+    at: string;
+  }): void {
+    this.sql.exec(
+      `INSERT INTO _substrat_access_log
+         (id, actor, method, tenant_id, scope_id, params, result_count, drained_at, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      entry.id,
+      entry.actor,
+      entry.method,
+      entry.tenantId,
+      entry.scopeId,
+      entry.params,
+      entry.resultCount,
+      entry.at,
+    );
+  }
+
+  accessLog(query: {
+    actor?: string;
+    tenantId?: string;
+    method?: string;
+    limit?: number;
+  }): AccessLogRow[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (query.actor) { where.push('actor = ?'); params.push(query.actor); }
+    if (query.tenantId) { where.push('tenant_id = ?'); params.push(query.tenantId); }
+    if (query.method) { where.push('method = ?'); params.push(query.method); }
+    let sql = 'SELECT * FROM _substrat_access_log';
+    if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+    sql += ' ORDER BY id';
+    if (query.limit !== undefined) { sql += ' LIMIT ?'; params.push(query.limit); }
+    return this.sql.exec(sql, ...params).toArray() as unknown as AccessLogRow[];
+  }
+
+  /** ONLY drained rows. Age alone is not a licence to delete evidence (K-24). */
+  pruneAccessLog(limit: number): number {
+    const doomed = (
+      this.sql
+        .exec(
+          'SELECT id FROM _substrat_access_log WHERE drained_at IS NOT NULL ORDER BY id LIMIT ?',
+          limit,
+        )
+        .toArray() as unknown as { id: string }[]
+    ).map((r) => r.id);
+    for (const id of doomed) {
+      this.sql.exec('DELETE FROM _substrat_access_log WHERE id = ?', id);
+    }
+    return doomed.length;
+  }
+
   recordAdmin(entry: AdminEntryInput): void {
     this.sql.exec(
       `INSERT INTO _substrat_admin_log

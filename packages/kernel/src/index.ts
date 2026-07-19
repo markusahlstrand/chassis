@@ -1,4 +1,5 @@
 export type {
+  AccessLogFilter,
   AuditLogFilter,
   ConsumerHandler,
   ExecutorHandler,

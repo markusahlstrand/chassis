@@ -187,16 +187,20 @@ if (cpUrl) {
   // above then enforces its lifecycle. Roles stay LOCAL — role writes are not on
   // the control-plane HTTP surface (the permission-diff checkpoint), so the shared
   // plane is the authority for tenant/scope lifecycle and entitlements only.
-  cpClient = new ControlPlaneClient({ baseUrl: cpUrl, actor: platformActorId.parse(ulid()) });
-  const tenants = await host.admin.listTenants();
-  const scopes = await host.admin.listScopes();
+  // This registration runs platform-side, so it reads the directory as a platform
+  // actor — the same one it presents to the shared control plane. Reads take an
+  // actor now (K-24) precisely so a read like this one is attributable.
+  const registrar = platformActorId.parse(ulid());
+  cpClient = new ControlPlaneClient({ baseUrl: cpUrl, actor: registrar });
+  const tenants = await host.admin.listTenants(registrar);
+  const scopes = await host.admin.listScopes(registrar);
   // Everything below is idempotent, so retry the whole registration while the
   // control plane is still starting up (concurrently launches both at once).
   for (let attempt = 1; ; attempt++) {
     try {
       for (const t of tenants) {
         await cpClient.createTenant({ id: t.id, slug: t.slug, name: t.name });
-        for (const key of await host.admin.listEntitlements(t.id)) {
+        for (const key of await host.admin.listEntitlements(registrar, t.id)) {
           await cpClient.grantEntitlement(t.id, key);
         }
       }
