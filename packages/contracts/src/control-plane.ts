@@ -16,6 +16,7 @@ export const adminAction = z.enum([
   'addMember',
   'removeMember', // K-21 — tombstones the membership tuple, never deletes it
   'createOrg', // K-22 — orgs are a real record, not a free-form string
+  'registerIdentityPool', // K-23 — a provider declares its topology before it may link
   'createTenant', // §4.1
   'setTenantStatus', // §4.1 — before/after carry the transitioned status
   'provisionScope', // §4.2 — the first scope-lifecycle transition (→ active)
@@ -45,6 +46,42 @@ export const identityLink = z.object({
   scopeId: scopeId.optional(), // omitted = tenant-level home
 });
 export type IdentityLink = z.infer<typeof identityLink>;
+
+/**
+ * How an identity pool relates to tenants (K-23) — the fact that decides whether the
+ * same `externalId` seen in two tenants is one human or two.
+ *
+ * `central`: one pool serving many tenants. The same external subject IS the same
+ * person everywhere, which is what lets one login belong to several tenants (§4.3's
+ * staff case, and a branded multi-tenant consumer product like RallyPoint).
+ *
+ * `tenant-bound`: one pool serving exactly one tenant. Subject ids are unique only
+ * within it, so the same `externalId` in another tenant is a DIFFERENT person — the
+ * white-label case, where a consumer of two shops is correctly two accounts.
+ *
+ * Topology, not audience. The audiences in §4.3 are descriptive; this is enforceable.
+ */
+export const poolTopology = z.enum(['central', 'tenant-bound']);
+export type PoolTopology = z.infer<typeof poolTopology>;
+
+/**
+ * A registered identity provider. `provider` names exactly one pool, so separate
+ * per-tenant deployments take distinct provider strings (`oidc:<issuer>`) — which the
+ * `identityLink` comment above already assumed.
+ *
+ * `tenantId` is non-null exactly when `topology` is `tenant-bound`: it is the one
+ * tenant that pool may serve, and linking into any other is refused.
+ */
+export const identityPool = z
+  .object({
+    provider: z.string().min(1),
+    topology: poolTopology,
+    tenantId: tenantId.nullable(),
+  })
+  .refine((p) => (p.topology === 'tenant-bound') === (p.tenantId !== null), {
+    message: 'tenant-bound pools name their tenant; central pools must not',
+  });
+export type IdentityPool = z.infer<typeof identityPool>;
 
 /**
  * What the directory knows about an authenticated external identity, once the caller
@@ -93,7 +130,10 @@ export const adminLogEntry = z.object({
   id: z.string().min(1), // ULID, stamped host-side; sortable = chronological
   actor: platformActorId,
   action: adminAction,
-  tenantId,
+  // Nullable for PLATFORM-level actions that target no tenant — registering a central
+  // identity pool is the first (K-23). Every tenant-scoped action still carries one;
+  // null means "the platform itself", not "unknown".
+  tenantId: tenantId.nullable(),
   scopeId: scopeId.nullable(),
   vertical: z.string().nullable(),
   before: z.unknown().nullable(), // prior state where cheaply readable (e.g. a redefined role)

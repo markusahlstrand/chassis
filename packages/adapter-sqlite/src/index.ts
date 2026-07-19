@@ -8,6 +8,7 @@ import {
   domainEventInput,
   eventId,
   identityLink,
+  identityPool,
   instant,
   moduleManifest,
   createOrgInput,
@@ -29,6 +30,7 @@ import {
   type EntityRef,
   type CreateOrgInput,
   type IdentityLink,
+  type IdentityPool,
   type Node,
   type Org,
   type OrgId,
@@ -329,6 +331,16 @@ export class SqliteScopeHost implements ScopeHost {
       -- principal + home node. Provider-keyed so Better Auth, an OIDC issuer, or
       -- several at once coexist. Authentication input only — authorization stays
       -- in the tuples above.
+      -- Registered identity pools (K-23). A provider declares its topology before it
+      -- may link, so the directory knows whether the same externalId in two tenants is
+      -- one human (central) or two (tenant-bound). tenant_id is non-null exactly when
+      -- tenant-bound.
+      CREATE TABLE IF NOT EXISTS _substrat_identity_pools (
+        provider   TEXT PRIMARY KEY,
+        topology   TEXT NOT NULL,
+        tenant_id  TEXT,
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS _substrat_identities (
         provider     TEXT NOT NULL,
         external_id  TEXT NOT NULL,
@@ -345,7 +357,8 @@ export class SqliteScopeHost implements ScopeHost {
         id TEXT PRIMARY KEY,
         actor TEXT NOT NULL,
         action TEXT NOT NULL,
-        tenant_id TEXT NOT NULL,
+        -- Nullable: a platform-level action targets no tenant (K-23).
+        tenant_id TEXT,
         scope_id TEXT,
         vertical TEXT,
         before TEXT,
@@ -728,7 +741,7 @@ export class SqliteScopeHost implements ScopeHost {
   private recordAdmin(
     actor: PlatformActorId,
     action: AdminAction,
-    target: { tenantId: TenantId; scopeId?: ScopeId | null; vertical?: string | null },
+    target: { tenantId: TenantId | null; scopeId?: ScopeId | null; vertical?: string | null },
     before: unknown,
     after: unknown,
   ): void {
@@ -742,7 +755,7 @@ export class SqliteScopeHost implements ScopeHost {
         ulid(),
         actor,
         action,
-        target.tenantId,
+        target.tenantId ?? null,
         target.scopeId ?? null,
         target.vertical ?? null,
         before == null ? null : JSON.stringify(before),
@@ -773,6 +786,37 @@ export class SqliteScopeHost implements ScopeHost {
         | TenantRow
         | undefined;
       return r ? mapTenant(r) : undefined;
+    };
+
+    const readPool = (provider: string): IdentityPool | undefined => {
+      const r = this.directory
+        .prepare('SELECT provider, topology, tenant_id FROM _substrat_identity_pools WHERE provider = ?')
+        .get(provider) as { provider: string; topology: string; tenant_id: string | null } | undefined;
+      return r
+        ? identityPool.parse({ provider: r.provider, topology: r.topology, tenantId: r.tenant_id })
+        : undefined;
+    };
+
+    /**
+     * A pool must be registered before it may link, and a tenant-bound pool may only
+     * link into its own tenant. Resolution needs no equivalent check — K-22's
+     * (tenantId, provider, externalId) key already scopes reads — so this is the one
+     * place the topology is established rather than merely assumed.
+     */
+    const requirePoolServes = (provider: string, tenant: TenantId): void => {
+      const pool = readPool(provider);
+      if (!pool) {
+        throw new Error(
+          `identity pool '${provider}' is not registered — a pool must declare its ` +
+            `topology before it may link (central vs tenant-bound decides whether the ` +
+            `same externalId in two tenants is one person or two)`,
+        );
+      }
+      if (pool.topology === 'tenant-bound' && pool.tenantId !== tenant) {
+        throw new Error(
+          `identity pool '${provider}' is bound to tenant ${pool.tenantId} and cannot link into ${tenant}`,
+        );
+      }
     };
 
     const mapOrg = (r: OrgRow): Org =>
@@ -1215,8 +1259,57 @@ export class SqliteScopeHost implements ScopeHost {
             )
             .all(tenantId) as { entitlement_key: string }[]
         ).map((r) => r.entitlement_key),
+      registerIdentityPool: async (actor: PlatformActorId, input: IdentityPool) => {
+        const parsed = identityPool.parse(input);
+        const existing = readPool(parsed.provider);
+        if (existing) {
+          // Idempotent on an identical registration. A CONFLICTING one throws:
+          // flipping a live pool's topology silently reinterprets every row it owns
+          // — the same externalId across tenants would change from one human to two.
+          if (existing.topology === parsed.topology && existing.tenantId === parsed.tenantId) {
+            return;
+          }
+          throw new Error(
+            `identity pool '${parsed.provider}' is already registered as ${existing.topology}` +
+              `${existing.tenantId ? ` for tenant ${existing.tenantId}` : ''}`,
+          );
+        }
+        this.directory
+          .prepare(
+            'INSERT INTO _substrat_identity_pools (provider, topology, tenant_id, created_at) VALUES (?, ?, ?, ?)',
+          )
+          .run(parsed.provider, parsed.topology, parsed.tenantId, new Date().toISOString());
+        this.recordAdmin(
+          actor,
+          'registerIdentityPool',
+          // Null for a central pool: it belongs to no single tenant, which is what
+          // made the admin log's tenantId nullable.
+          { tenantId: parsed.tenantId },
+          null,
+          parsed,
+        );
+      },
+      getIdentityPool: async (provider: string) => readPool(provider),
+      listIdentityTenants: async (provider: string, externalId: string) => {
+        const pool = readPool(provider);
+        if (!pool) throw new Error(`identity pool '${provider}' is not registered`);
+        if (pool.topology !== 'central') {
+          throw new Error(
+            `identity pool '${provider}' is tenant-bound — enumerating tenants is only ` +
+              `meaningful on a central pool, where the same externalId is the same person`,
+          );
+        }
+        return (
+          this.directory
+            .prepare(
+              'SELECT tenant_id FROM _substrat_identities WHERE provider = ? AND external_id = ? ORDER BY tenant_id',
+            )
+            .all(provider, externalId) as { tenant_id: string }[]
+        ).map((r) => r.tenant_id as TenantId);
+      },
       linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
+        requirePoolServes(parsed.provider, parsed.tenantId);
         // Read before write. `INSERT OR IGNORE` alone cannot tell "already bound to the
         // same principal" (idempotent) from "already bound to someone else" (a
         // collision), and silently ignoring the second resolves one person as another.
@@ -1395,8 +1488,41 @@ export class SqliteScopeHost implements ScopeHost {
     `);
   }
 
+  /**
+   * Drop the admin log's `tenant_id NOT NULL` (K-23). SQLite cannot relax a column
+   * constraint in place, so this is the same create-copy-drop-rename the identity key
+   * uses, detected the same way — from `sqlite_master.sql`, which works on DO SQLite
+   * too. Rows are copied verbatim: the log stays append-only in content, this only
+   * widens what a future row may say.
+   */
+  private ensureAdminLogTenantNullable(): void {
+    const row = this.directory
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get('_substrat_admin_log') as { sql: string } | undefined;
+    if (!row || !/tenant_id TEXT NOT NULL/.test(row.sql)) return;
+    this.directory.exec(`
+      CREATE TABLE _substrat_admin_log_new (
+        id TEXT PRIMARY KEY,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        tenant_id TEXT,
+        scope_id TEXT,
+        vertical TEXT,
+        before TEXT,
+        after TEXT,
+        at TEXT NOT NULL
+      );
+      INSERT INTO _substrat_admin_log_new
+        SELECT id, actor, action, tenant_id, scope_id, vertical, before, after, at
+        FROM _substrat_admin_log;
+      DROP TABLE _substrat_admin_log;
+      ALTER TABLE _substrat_admin_log_new RENAME TO _substrat_admin_log;
+    `);
+  }
+
   private ensureDirectoryColumns(): void {
     this.ensureIdentityKey();
+    this.ensureAdminLogTenantNullable();
     // K-21's tombstone on tenant-level tuples (membership lives here).
     this.ensureColumn(this.directory, '_substrat_tenant_tuples', 'revoked_at', 'revoked_at TEXT');
     const existing = new Set(

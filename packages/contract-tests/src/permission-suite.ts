@@ -281,45 +281,94 @@ export function permissionContractSuite(
       expect(await host.admin.getOrg(t1, second)).toBeUndefined();
     });
 
-    // -- identity is keyed per tenant (§4.3) ---------------------------------
+    // -- identity: pools, topology, and per-tenant keying (§4.3, K-22/K-23) --
     // The first contract coverage identity has had on either adapter, which is part
     // of why the key drifted from what §4.3 requires without anyone noticing.
 
+    it('refuses to link through a provider that has not registered a pool', async () => {
+      // Deny-by-default. An unregistered pool has not said whether the same
+      // externalId in two tenants is one human or two, and the kernel will not guess.
+      await expect(
+        host.admin.linkIdentity(staff, {
+          provider: 'oidc:unregistered',
+          externalId: 'x',
+          principal: principalId.parse(ulid()),
+          tenantId: t1,
+        }),
+      ).rejects.toThrow(/not registered/);
+    });
+
     it('keys identities per tenant — the same externalId in two pools is two people', async () => {
       // §4.3: with one auth pool per white-label tenant, an external subject id is
-      // unique only WITHIN its pool. Two tenants' pools both issuing '123' is normal,
-      // and they are different people. A globally-keyed mapping would resolve the
-      // second as the first — a cross-tenant identity bleed.
+      // unique only WITHIN its pool. Two pools both issuing '123' is normal and they
+      // are different people. Two pools means two PROVIDER strings — a provider names
+      // exactly one pool, which is what makes the tenant-bound rule enforceable.
       const other = tenantId.parse(ulid());
       await host.admin.createTenant(staff, { id: other, slug: `p-${other.toLowerCase()}`, name: 'P' });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:shop-a',
+        topology: 'tenant-bound',
+        tenantId: t1,
+      });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:shop-b',
+        topology: 'tenant-bound',
+        tenantId: other,
+      });
       const here: PrincipalId = principalId.parse(ulid());
       const there: PrincipalId = principalId.parse(ulid());
 
       await host.admin.linkIdentity(staff, {
-        provider: 'oidc:pool',
+        provider: 'oidc:shop-a',
         externalId: '123',
         principal: here,
         tenantId: t1,
       });
       await host.admin.linkIdentity(staff, {
-        provider: 'oidc:pool',
+        provider: 'oidc:shop-b',
         externalId: '123', // same string, different pool, different person
         principal: there,
         tenantId: other,
       });
 
-      expect((await host.admin.resolveIdentity(t1, 'oidc:pool', '123'))?.principal).toBe(here);
-      expect((await host.admin.resolveIdentity(other, 'oidc:pool', '123'))?.principal).toBe(there);
+      expect((await host.admin.resolveIdentity(t1, 'oidc:shop-a', '123'))?.principal).toBe(here);
+      expect((await host.admin.resolveIdentity(other, 'oidc:shop-b', '123'))?.principal).toBe(there);
+      // Neither pool's subject is visible through the other.
+      expect(await host.admin.resolveIdentity(t1, 'oidc:shop-b', '123')).toBeUndefined();
     });
 
-    it('lets one external identity belong to several tenants (the staff case)', async () => {
-      // The mirror of the bleed: §4.3's staff audience is one central pool where
-      // "someone administering five tenants wants ONE login". A global key made that
-      // impossible — one external id could hold exactly one row.
+    it('holds a tenant-bound pool to its own tenant', async () => {
+      const other = tenantId.parse(ulid());
+      await host.admin.createTenant(staff, { id: other, slug: `b-${other.toLowerCase()}`, name: 'B' });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:bound',
+        topology: 'tenant-bound',
+        tenantId: t1,
+      });
+      await expect(
+        host.admin.linkIdentity(staff, {
+          provider: 'oidc:bound',
+          externalId: 'y',
+          principal: principalId.parse(ulid()),
+          tenantId: other,
+        }),
+      ).rejects.toThrow(/bound to tenant/);
+    });
+
+    it('lets one central-pool login belong to several tenants (the cross-tenant case)', async () => {
+      // The mirror of the bleed: §4.3's central pool is where "someone administering
+      // five tenants wants ONE login" — and RallyPoint's player at several clubs is
+      // the same shape, since clubs are tenants there. One login, one principal per
+      // tenant: shared identity, separate authority.
       const consultant: PrincipalId = principalId.parse(ulid());
       const second: PrincipalId = principalId.parse(ulid());
       const tB = tenantId.parse(ulid());
       await host.admin.createTenant(staff, { id: tB, slug: `c-${tB.toLowerCase()}`, name: 'C' });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:central',
+        topology: 'central',
+        tenantId: null,
+      });
 
       await host.admin.linkIdentity(staff, {
         provider: 'oidc:central',
@@ -340,6 +389,46 @@ export function permissionContractSuite(
       expect((await host.admin.resolveIdentity(tB, 'oidc:central', 'consultant-1'))?.principal).toBe(
         second,
       );
+      // The cross-tenant question, answerable ONLY because the pool is central.
+      expect(await host.admin.listIdentityTenants('oidc:central', 'consultant-1')).toEqual(
+        [t1, tB].sort(),
+      );
+    });
+
+    it('refuses to enumerate tenants for a tenant-bound pool', async () => {
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:enum-bound',
+        topology: 'tenant-bound',
+        tenantId: t1,
+      });
+      // Not a leak — the caller already knows this pool's tenant. It throws because
+      // ASKING is a category error: on a tenant-bound pool the same externalId in
+      // another tenant is a different person, so a tenant list has no meaning.
+      await expect(host.admin.listIdentityTenants('oidc:enum-bound', 'z')).rejects.toThrow(
+        /tenant-bound/,
+      );
+    });
+
+    it('is idempotent on an identical pool registration, and refuses a conflicting one', async () => {
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:stable',
+        topology: 'central',
+        tenantId: null,
+      });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:stable',
+        topology: 'central',
+        tenantId: null,
+      });
+      // Flipping a live pool's topology silently reinterprets every row it owns —
+      // the same externalId across tenants would change from one human to two.
+      await expect(
+        host.admin.registerIdentityPool(staff, {
+          provider: 'oidc:stable',
+          topology: 'tenant-bound',
+          tenantId: t1,
+        }),
+      ).rejects.toThrow(/already registered/);
     });
 
     it('resolves only within the tenant asked for', async () => {
@@ -349,6 +438,11 @@ export function permissionContractSuite(
         id: elsewhere,
         slug: `e-${elsewhere.toLowerCase()}`,
         name: 'E',
+      });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:scoped',
+        topology: 'tenant-bound',
+        tenantId: t1,
       });
       await host.admin.linkIdentity(staff, {
         provider: 'oidc:scoped',
@@ -362,31 +456,27 @@ export function permissionContractSuite(
     it('refuses to rebind a key to a different principal, loudly', async () => {
       const first: PrincipalId = principalId.parse(ulid());
       const impostor: PrincipalId = principalId.parse(ulid());
-      await host.admin.linkIdentity(staff, {
-        provider: 'oidc:pool',
-        externalId: 'collide',
-        principal: first,
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:collide',
+        topology: 'tenant-bound',
         tenantId: t1,
       });
-      // Re-linking the same person stays idempotent...
-      await host.admin.linkIdentity(staff, {
-        provider: 'oidc:pool',
-        externalId: 'collide',
-        principal: first,
-        tenantId: t1,
-      });
+      const link = (principal: PrincipalId) =>
+        host.admin.linkIdentity(staff, {
+          provider: 'oidc:collide',
+          externalId: 'collide',
+          principal,
+          tenantId: t1,
+        });
+      await link(first);
+      await link(first); // re-linking the same person stays idempotent
       // ...but a genuine collision must not be swallowed. The old INSERT OR IGNORE
       // silently dropped it and left the second person resolving as the first,
       // without even an audit row to show it happened.
-      await expect(
-        host.admin.linkIdentity(staff, {
-          provider: 'oidc:pool',
-          externalId: 'collide',
-          principal: impostor,
-          tenantId: t1,
-        }),
-      ).rejects.toThrow(/already bound/);
-      expect((await host.admin.resolveIdentity(t1, 'oidc:pool', 'collide'))?.principal).toBe(first);
+      await expect(link(impostor)).rejects.toThrow(/already bound/);
+      expect((await host.admin.resolveIdentity(t1, 'oidc:collide', 'collide'))?.principal).toBe(
+        first,
+      );
     });
 
     // -- control-plane audit trail (control-plane.md §4.4) --------------------

@@ -20,9 +20,14 @@ describe('control-plane identity mapping', () => {
   const s = scopeId.parse(ulid());
   const elin = principalId.parse(ulid());
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'substrat-identity-'));
     host = new SqliteScopeHost({ dir });
+    // K-23: a pool declares its topology before it may link. Both providers here
+    // serve this one tenant, so both are tenant-bound.
+    for (const provider of ['better-auth', 'oidc:https://authhero.example']) {
+      await host.admin.registerIdentityPool(staff, { provider, topology: 'tenant-bound', tenantId: t });
+    }
   });
   afterAll(async () => {
     await host.close();
@@ -140,6 +145,11 @@ describe('identity key migration from the pre-K-22 shape', () => {
     const host = new SqliteScopeHost({ dir });
     try {
       await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+      await host.admin.registerIdentityPool(staff, {
+        provider: 'oidc:legacy',
+        topology: 'central',
+        tenantId: null,
+      });
       // The pre-existing binding still resolves — the copy is lossless.
       expect((await host.admin.resolveIdentity(t, 'oidc:legacy', 'user-1'))?.principal).toBe(legacy);
 

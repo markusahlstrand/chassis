@@ -107,7 +107,8 @@ export interface AdminEntryInput {
   id: string;
   actor: string;
   action: string;
-  tenantId: string;
+  /** Null for platform-level actions that target no tenant (K-23). */
+  tenantId: string | null;
   scopeId: string | null;
   vertical: string | null;
   before: unknown;
@@ -181,6 +182,12 @@ const DIRECTORY_DDL = `
     entitlement_key TEXT NOT NULL,
     PRIMARY KEY (tenant_id, entitlement_key)
   );
+  CREATE TABLE IF NOT EXISTS _substrat_identity_pools (
+    provider   TEXT PRIMARY KEY,
+    topology   TEXT NOT NULL,
+    tenant_id  TEXT,
+    created_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS _substrat_identities (
     provider     TEXT NOT NULL,
     external_id  TEXT NOT NULL,
@@ -194,7 +201,8 @@ const DIRECTORY_DDL = `
     id TEXT PRIMARY KEY,
     actor TEXT NOT NULL,
     action TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
+    -- Nullable for platform-level actions that target no tenant (K-23).
+    tenant_id TEXT,
     scope_id TEXT,
     vertical TEXT,
     before TEXT,
@@ -297,8 +305,40 @@ export class ControlPlaneDO extends DurableObject {
     }
   }
 
+  /**
+   * Drop the admin log's `tenant_id NOT NULL` (K-23) — same create-copy-drop-rename
+   * as the identity key, detected the same way. Rows copy verbatim.
+   */
+  private ensureAdminLogTenantNullable(): void {
+    const row = this.sql
+      .exec("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", '_substrat_admin_log')
+      .toArray()[0] as unknown as { sql: string } | undefined;
+    if (!row || !/tenant_id TEXT NOT NULL/.test(row.sql)) return;
+    for (const stmt of [
+      `CREATE TABLE _substrat_admin_log_new (
+         id TEXT PRIMARY KEY,
+         actor TEXT NOT NULL,
+         action TEXT NOT NULL,
+         tenant_id TEXT,
+         scope_id TEXT,
+         vertical TEXT,
+         before TEXT,
+         after TEXT,
+         at TEXT NOT NULL
+       )`,
+      `INSERT INTO _substrat_admin_log_new
+         SELECT id, actor, action, tenant_id, scope_id, vertical, before, after, at
+         FROM _substrat_admin_log`,
+      'DROP TABLE _substrat_admin_log',
+      'ALTER TABLE _substrat_admin_log_new RENAME TO _substrat_admin_log',
+    ]) {
+      this.sql.exec(stmt);
+    }
+  }
+
   private ensureDirectoryColumns(): void {
     this.ensureIdentityKey();
+    this.ensureAdminLogTenantNullable();
     for (const ddl of SCOPE_COLUMNS_ADDED) {
       this.addColumn('scopes', ddl);
     }
@@ -788,6 +828,53 @@ export class ControlPlaneDO extends DurableObject {
         )
         .toArray() as unknown as { entitlement_key: string }[]
     ).map((r) => r.entitlement_key);
+  }
+
+  // -- identity pools (K-23) --------------------------------------------------
+
+  readPool(provider: string): { provider: string; topology: string; tenant_id: string | null } | undefined {
+    return this.sql
+      .exec('SELECT provider, topology, tenant_id FROM _substrat_identity_pools WHERE provider = ?', provider)
+      .toArray()[0] as unknown as
+      | { provider: string; topology: string; tenant_id: string | null }
+      | undefined;
+  }
+
+  /** Returns false when an identical registration already exists; throws on a conflicting one. */
+  registerIdentityPool(
+    provider: string,
+    topology: string,
+    tenantId: string | null,
+    createdAt: string,
+  ): boolean {
+    const existing = this.readPool(provider);
+    if (existing) {
+      if (existing.topology === topology && existing.tenant_id === tenantId) return false;
+      throw new Error(
+        `identity pool '${provider}' is already registered as ${existing.topology}` +
+          `${existing.tenant_id ? ` for tenant ${existing.tenant_id}` : ''}`,
+      );
+    }
+    this.sql.exec(
+      'INSERT INTO _substrat_identity_pools (provider, topology, tenant_id, created_at) VALUES (?, ?, ?, ?)',
+      provider,
+      topology,
+      tenantId,
+      createdAt,
+    );
+    return true;
+  }
+
+  identityTenants(provider: string, externalId: string): string[] {
+    return (
+      this.sql
+        .exec(
+          'SELECT tenant_id FROM _substrat_identities WHERE provider = ? AND external_id = ? ORDER BY tenant_id',
+          provider,
+          externalId,
+        )
+        .toArray() as unknown as { tenant_id: string }[]
+    ).map((r) => r.tenant_id);
   }
 
   // -- identities (D-16; control-plane.md §6) ---------------------------------

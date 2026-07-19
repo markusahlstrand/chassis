@@ -42,6 +42,27 @@ Because the mapping is **keyed by provider**, several auth adapters — and seve
 upstreams — coexist without collision. Adding one is additive: no schema change, no
 permission, no kernel change.
 
+**Pools are registered, and declare their topology.** Before a provider may link
+anything it registers as `central` (one pool serving many tenants — the same
+`externalId` everywhere is the same human) or `tenant-bound` (one pool, one tenant —
+the same `externalId` elsewhere is a *different* human). An unregistered provider is
+refused rather than defaulted: without that fact the kernel would be guessing whether
+two people are one.
+
+```ts
+await host.admin.registerIdentityPool(actor, {
+  provider: 'oidc:https://issuer.example',
+  topology: 'tenant-bound',
+  tenantId,                       // null for a central pool
+});
+```
+
+Topology, not audience. A padel player on a branded multi-club platform is a *consumer*
+who wants the central topology, while a shopper on a white-label store is a consumer who
+must not have it — so the audience is shorthand and the topology is the enforceable fact.
+A provider string names exactly one pool, so separate per-tenant deployments take
+distinct provider strings (`oidc:<issuer>`).
+
 **And keyed by tenant.** The full key is `(tenantId, provider, externalId)`, with the
 tenant as an *input* to the lookup rather than something derived from the identity. That
 matters as soon as tenants have their own identity pools: an external subject id is unique
@@ -54,6 +75,17 @@ principal per tenant. Shared identity, separate authority.
 
 The caller always knows which tenant it is asking about: the request arrived on that
 tenant's hostname, or carried a pool-scoped token.
+
+**"Which tenants is this login in?"** is a separate call, and central-only:
+
+```ts
+await host.admin.listIdentityTenants(provider, externalId); // → TenantId[]
+```
+
+It throws on a tenant-bound pool. Not because the answer would leak — the caller already
+knows that pool's tenant — but because asking is a category error: where the same
+`externalId` names different people per tenant, a tenant list has no meaning. Enumerate,
+then resolve within the one you picked.
 
 ## Auth adapters at the edge
 
