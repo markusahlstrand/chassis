@@ -62,10 +62,31 @@ export interface ScopeRow {
   jurisdiction: string | null;
   status: string;
   schema_version: string;
+  vertical_version_id: string | null;
   migration_failed_version: string | null;
   migration_error: string | null;
   migration_attempts: number;
   migration_last_attempt_at: string | null;
+  created_at: string;
+}
+
+export interface VerticalRow {
+  slug: string;
+  name: string;
+  source: string;
+  created_at: string;
+}
+
+export interface VersionRow {
+  id: string;
+  vertical_slug: string;
+  version: string;
+  manifest_digest: string;
+  permission_digest: string;
+  migration_digest: string;
+  deployment_ref: string | null;
+  admission: string;
+  admission_note: string | null;
   created_at: string;
 }
 
@@ -155,6 +176,7 @@ const DIRECTORY_DDL = `
     jurisdiction TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     schema_version TEXT NOT NULL DEFAULT '0',
+    vertical_version_id TEXT,
     -- Last FAILED migration attempt (§5.3). All null / 0 = healthy. Written on the
     -- failure path so a scope that fails closed stops rendering as active, and
     -- cleared on the next success. See ScopeDO.applyPendingMigrations.
@@ -164,6 +186,25 @@ const DIRECTORY_DDL = `
     migration_attempts INTEGER NOT NULL DEFAULT 0,
     migration_last_attempt_at TEXT,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS verticals (
+    slug       TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS vertical_versions (
+    id                TEXT PRIMARY KEY,
+    vertical_slug     TEXT NOT NULL,
+    version           TEXT NOT NULL,
+    manifest_digest   TEXT NOT NULL,
+    permission_digest TEXT NOT NULL,
+    migration_digest  TEXT NOT NULL,
+    deployment_ref    TEXT,
+    admission         TEXT NOT NULL,
+    admission_note    TEXT,
+    created_at        TEXT NOT NULL,
+    UNIQUE (vertical_slug, version)
   );
   CREATE TABLE IF NOT EXISTS orgs (
     org_id TEXT PRIMARY KEY,
@@ -260,6 +301,7 @@ const SCOPE_COLUMNS_ADDED = [
   'kind TEXT',
   'name TEXT',
   'vertical TEXT',
+  'vertical_version_id TEXT',
   'migration_failed_version TEXT',
   'migration_error TEXT',
   'migration_attempts INTEGER NOT NULL DEFAULT 0',
@@ -716,6 +758,66 @@ export class ControlPlaneDO extends DurableObject {
       relation,
       object,
       expiresAt,
+    );
+  }
+
+  // -- vertical + version registry (#31) --------------------------------------
+
+  readVertical(slug: string): VerticalRow | undefined {
+    return this.sql
+      .exec('SELECT * FROM verticals WHERE slug = ?', slug)
+      .toArray()[0] as unknown as VerticalRow | undefined;
+  }
+
+  insertVertical(slug: string, name: string, source: string, createdAt: string): void {
+    this.sql.exec(
+      'INSERT INTO verticals (slug, name, source, created_at) VALUES (?, ?, ?, ?)',
+      slug, name, source, createdAt,
+    );
+  }
+
+  listVerticals(): VerticalRow[] {
+    return this.sql.exec('SELECT * FROM verticals ORDER BY slug').toArray() as unknown as VerticalRow[];
+  }
+
+  readVersion(id: string): VersionRow | undefined {
+    return this.sql
+      .exec('SELECT * FROM vertical_versions WHERE id = ?', id)
+      .toArray()[0] as unknown as VersionRow | undefined;
+  }
+
+  insertVersion(v: {
+    id: string; verticalSlug: string; version: string; manifestDigest: string;
+    permissionDigest: string; migrationDigest: string; deploymentRef: string | null;
+    createdAt: string;
+  }): void {
+    this.sql.exec(
+      `INSERT INTO vertical_versions
+         (id, vertical_slug, version, manifest_digest, permission_digest,
+          migration_digest, deployment_ref, admission, admission_note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?)`,
+      v.id, v.verticalSlug, v.version, v.manifestDigest, v.permissionDigest,
+      v.migrationDigest, v.deploymentRef, v.createdAt,
+    );
+  }
+
+  listVersions(verticalSlug: string): VersionRow[] {
+    return this.sql
+      .exec('SELECT * FROM vertical_versions WHERE vertical_slug = ? ORDER BY id', verticalSlug)
+      .toArray() as unknown as VersionRow[];
+  }
+
+  setAdmission(id: string, admission: string, note: string | null): void {
+    this.sql.exec(
+      'UPDATE vertical_versions SET admission = ?, admission_note = ? WHERE id = ?',
+      admission, note, id,
+    );
+  }
+
+  bindScopeVersion(scopeId: string, versionId: string, verticalSlug: string): void {
+    this.sql.exec(
+      'UPDATE scopes SET vertical_version_id = ?, vertical = ? WHERE scope_id = ?',
+      versionId, verticalSlug, scopeId,
     );
   }
 

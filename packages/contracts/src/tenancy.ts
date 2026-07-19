@@ -107,6 +107,15 @@ export const scope = z.object({
   // audit log's `vertical` target real for scope-lifecycle actions, and what
   // console item 1 means by "which vertical each scope runs".
   vertical: z.string().min(1).nullable(),
+  /**
+   * The registered version this scope runs (#31). Null for a scope provisioned
+   * before the registry, or bound to a vertical we ship but have not versioned.
+   *
+   * Kept ALONGSIDE `vertical` rather than replacing it: the slug is what the audit
+   * log's target and the console's filters read, and a denormalized label that
+   * survives a version being superseded is worth more than one join.
+   */
+  verticalVersionId: z.string().min(1).nullable(),
   // The scope's migration state: the count of applied (module, version) pairs,
   // as a string. Written host-side after migrations apply — never caller-supplied.
   // '0' means "provisioned, nothing applied yet". Comparing it against the host's

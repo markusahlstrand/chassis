@@ -13,6 +13,10 @@ import {
   instant,
   moduleManifest,
   createOrgInput,
+  publishVersionInput,
+  registerVerticalInput,
+  vertical as verticalSchema,
+  verticalVersion,
   objectRef,
   org as orgSchema,
   orgMembership,
@@ -39,6 +43,10 @@ import {
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
+  type PublishVersionInput,
+  type RegisterVerticalInput,
+  type Vertical,
+  type VerticalVersion,
   type ResolvedIdentity,
   type RoleAssignment,
   type RoleDefinition,
@@ -165,6 +173,7 @@ interface ScopeRow {
   jurisdiction: string | null;
   status: string;
   schema_version: string;
+  vertical_version_id: string | null;
   migration_failed_version: string | null;
   migration_error: string | null;
   migration_attempts: number;
@@ -193,6 +202,26 @@ function mapMigrationFailure(r: {
     attempts: r.migration_attempts,
     lastAttemptAt: r.migration_last_attempt_at,
   };
+}
+
+interface VerticalRow {
+  slug: string;
+  name: string;
+  source: string;
+  created_at: string;
+}
+
+interface VersionRow {
+  id: string;
+  vertical_slug: string;
+  version: string;
+  manifest_digest: string;
+  permission_digest: string;
+  migration_digest: string;
+  deployment_ref: string | null;
+  admission: string;
+  admission_note: string | null;
+  created_at: string;
 }
 
 interface OrgRow {
@@ -307,6 +336,7 @@ export class SqliteScopeHost implements ScopeHost {
         jurisdiction TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         schema_version TEXT NOT NULL DEFAULT '0',
+        vertical_version_id TEXT,
         -- Last FAILED migration attempt (§5.3). All null / 0 = healthy. Written on
         -- the failure path so a scope that fails closed stops rendering as active;
         -- cleared on the next success. See applyPendingMigrations.
@@ -315,6 +345,31 @@ export class SqliteScopeHost implements ScopeHost {
         migration_attempts INTEGER NOT NULL DEFAULT 0,
         migration_last_attempt_at TEXT,
         created_at TEXT NOT NULL
+      );
+      -- The vertical + version registry (#31). A scope binds to a VERSION, so
+      -- dev/staging/prod are the same vertical pinned differently, and a preview
+      -- deployment is a version nothing has been promoted to yet.
+      CREATE TABLE IF NOT EXISTS verticals (
+        slug       TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        source     TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      -- admission: 'pending' until the gates pass. A push is not a deploy, and
+      -- bind_scope_version refuses anything not admitted -- which is what makes
+      -- that sentence structural rather than a convention.
+      CREATE TABLE IF NOT EXISTS vertical_versions (
+        id                TEXT PRIMARY KEY,
+        vertical_slug     TEXT NOT NULL,
+        version           TEXT NOT NULL,
+        manifest_digest   TEXT NOT NULL,
+        permission_digest TEXT NOT NULL,
+        migration_digest  TEXT NOT NULL,
+        deployment_ref    TEXT,
+        admission         TEXT NOT NULL,
+        admission_note    TEXT,
+        created_at        TEXT NOT NULL,
+        UNIQUE (vertical_slug, version)
       );
       -- Organizations inside a tenant (K-22). Membership tuples point at these and
       -- grantToOrg targets them. Before this the id was a free-form string with no
@@ -962,6 +1017,40 @@ export class SqliteScopeHost implements ScopeHost {
       }
     };
 
+    const mapVertical = (r: VerticalRow): Vertical =>
+      verticalSchema.parse({
+        slug: r.slug,
+        name: r.name,
+        source: r.source,
+        createdAt: r.created_at,
+      });
+    const readVertical = (slugValue: string): Vertical | undefined => {
+      const r = this.directory
+        .prepare('SELECT * FROM verticals WHERE slug = ?')
+        .get(slugValue) as VerticalRow | undefined;
+      return r ? mapVertical(r) : undefined;
+    };
+
+    const mapVersion = (r: VersionRow): VerticalVersion =>
+      verticalVersion.parse({
+        id: r.id,
+        verticalSlug: r.vertical_slug,
+        version: r.version,
+        manifestDigest: r.manifest_digest,
+        permissionDigest: r.permission_digest,
+        migrationDigest: r.migration_digest,
+        deploymentRef: r.deployment_ref,
+        admission: r.admission,
+        admissionNote: r.admission_note,
+        createdAt: r.created_at,
+      });
+    const readVersion = (id: string): VerticalVersion | undefined => {
+      const r = this.directory
+        .prepare('SELECT * FROM vertical_versions WHERE id = ?')
+        .get(id) as VersionRow | undefined;
+      return r ? mapVersion(r) : undefined;
+    };
+
     const mapOrg = (r: OrgRow): Org =>
       orgSchema.parse({
         id: r.org_id,
@@ -1011,6 +1100,7 @@ export class SqliteScopeHost implements ScopeHost {
         jurisdiction: r.jurisdiction,
         vertical: r.vertical,
         schemaVersion: r.schema_version,
+        verticalVersionId: r.vertical_version_id,
         migrationFailure: mapMigrationFailure(r),
         createdAt: r.created_at,
       });
@@ -1214,6 +1304,120 @@ export class SqliteScopeHost implements ScopeHost {
           null,
           { orgId, permission, node, entity },
         );
+      },
+      // -- vertical + version registry (#31) ---------------------------------
+
+      registerVertical: async (actor: PlatformActorId, input: RegisterVerticalInput) => {
+        const parsed = registerVerticalInput.parse(input);
+        const existing = readVertical(parsed.slug);
+        if (existing) {
+          // Idempotent on an identical registration. A conflicting one throws:
+          // changing a vertical's source silently rebinds what every scope on it
+          // is understood to be running.
+          if (existing.source === parsed.source && existing.name === parsed.name) return;
+          throw new Error(
+            `vertical '${parsed.slug}' is already registered as ${existing.source}`,
+          );
+        }
+        this.directory
+          .prepare('INSERT INTO verticals (slug, name, source, created_at) VALUES (?, ?, ?, ?)')
+          .run(parsed.slug, parsed.name, parsed.source, new Date().toISOString());
+        this.recordAdmin(actor, 'registerVertical', { tenantId: null }, null, parsed);
+      },
+      listVerticals: async (actor) => {
+        const rows = this.directory
+          .prepare('SELECT * FROM verticals ORDER BY slug')
+          .all() as VerticalRow[];
+        this.recordAccess(actor, 'listVerticals', {}, null, rows.length);
+        return rows.map(mapVertical);
+      },
+      publishVersion: async (actor: PlatformActorId, input: PublishVersionInput) => {
+        const parsed = publishVersionInput.parse(input);
+        if (!readVertical(parsed.verticalSlug)) {
+          throw new Error(`unknown vertical '${parsed.verticalSlug}'`);
+        }
+        // Lands PENDING. A push is not a deploy — the gates decide, and binding a
+        // scope is a separate, reviewable step.
+        this.directory
+          .prepare(
+            `INSERT INTO vertical_versions
+               (id, vertical_slug, version, manifest_digest, permission_digest,
+                migration_digest, deployment_ref, admission, admission_note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?)`,
+          )
+          .run(
+            parsed.id,
+            parsed.verticalSlug,
+            parsed.version,
+            parsed.manifestDigest,
+            parsed.permissionDigest,
+            parsed.migrationDigest,
+            parsed.deploymentRef,
+            new Date().toISOString(),
+          );
+        this.recordAdmin(actor, 'publishVersion', { tenantId: null }, null, parsed);
+      },
+      listVersions: async (actor, verticalSlug: string) => {
+        const rows = this.directory
+          .prepare('SELECT * FROM vertical_versions WHERE vertical_slug = ? ORDER BY id')
+          .all(verticalSlug) as VersionRow[];
+        this.recordAccess(actor, 'listVersions', {}, { verticalSlug }, rows.length);
+        return rows.map(mapVersion);
+      },
+      admitVersion: async (actor, versionId: string) => {
+        const v = readVersion(versionId);
+        if (!v) throw new Error(`unknown version ${versionId}`);
+        if (v.admission === 'admitted') return; // idempotent
+        if (v.admission === 'rejected') {
+          throw new Error(`version ${versionId} was rejected — publish a new one`);
+        }
+        this.directory
+          .prepare("UPDATE vertical_versions SET admission = 'admitted' WHERE id = ?")
+          .run(versionId);
+        this.recordAdmin(actor, 'admitVersion', { tenantId: null }, { admission: v.admission }, {
+          admission: 'admitted',
+        });
+      },
+      rejectVersion: async (actor, versionId: string, note: string) => {
+        const v = readVersion(versionId);
+        if (!v) throw new Error(`unknown version ${versionId}`);
+        if (v.admission === 'admitted') {
+          throw new Error(`version ${versionId} is already admitted — it may be bound`);
+        }
+        if (v.admission === 'rejected') return; // idempotent
+        this.directory
+          .prepare("UPDATE vertical_versions SET admission = 'rejected', admission_note = ? WHERE id = ?")
+          .run(note, versionId);
+        this.recordAdmin(actor, 'rejectVersion', { tenantId: null }, { admission: v.admission }, {
+          admission: 'rejected',
+          note,
+        });
+      },
+      bindScopeVersion: async (actor, tenantId, scopeId, versionId: string) => {
+        const v = readVersion(versionId);
+        if (!v) throw new Error(`unknown version ${versionId}`);
+        // The refusal this registry exists for. Without it, "a push lands pending"
+        // is a convention, and D-30's argument is that we cannot afford conventions
+        // where lockstep upgrades are the failure mode.
+        if (v.admission !== 'admitted') {
+          throw new Error(
+            `version ${versionId} is ${v.admission}, not admitted — it cannot be bound to a scope`,
+          );
+        }
+        const scope = this.directory
+          .prepare('SELECT tenant_id FROM scopes WHERE scope_id = ?')
+          .get(scopeId) as { tenant_id: string } | undefined;
+        if (!scope || scope.tenant_id !== tenantId) {
+          throw new Error(`unknown scope ${scopeId} in tenant ${tenantId}`);
+        }
+        this.directory
+          .prepare('UPDATE scopes SET vertical_version_id = ?, vertical = ? WHERE scope_id = ?')
+          .run(versionId, v.verticalSlug, scopeId);
+        this.recordAdmin(actor, 'bindScopeVersion', { tenantId, scopeId }, null, {
+          versionId,
+          vertical: v.verticalSlug,
+          version: v.version,
+        });
       },
       createOrg: async (actor: PlatformActorId, input: CreateOrgInput) => {
         const parsed = createOrgInput.parse(input);
@@ -1770,6 +1974,7 @@ export class SqliteScopeHost implements ScopeHost {
       ['kind', 'kind TEXT'],
       ['name', 'name TEXT'],
       ['vertical', 'vertical TEXT'],
+      ['vertical_version_id', 'vertical_version_id TEXT'],
       ['migration_failed_version', 'migration_failed_version TEXT'],
       ['migration_error', 'migration_error TEXT'],
       ['migration_attempts', 'migration_attempts INTEGER NOT NULL DEFAULT 0'],

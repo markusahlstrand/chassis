@@ -19,6 +19,8 @@ import type {
   OrgMembership,
   PermissionKey,
   PlatformActorId,
+  PublishVersionInput,
+  RegisterVerticalInput,
   PrincipalId,
   ResolvedIdentity,
   RoleAssignment,
@@ -30,6 +32,8 @@ import type {
   Tenant,
   TenantId,
   TenantRole,
+  Vertical,
+  VerticalVersion,
   TenantStatus,
 } from '@substrat-run/contracts';
 
@@ -267,6 +271,45 @@ export interface HostAdmin {
   createOrg(actor: PlatformActorId, input: CreateOrgInput): Promise<void>;
   listOrgs(actor: PlatformActorId, tenantId: TenantId): Promise<Org[]>;
   getOrg(actor: PlatformActorId, tenantId: TenantId, orgId: OrgId): Promise<Org | undefined>;
+
+  // -- vertical + version registry (#31) --------------------------------------
+
+  /**
+   * Register a vertical. Idempotent on the slug; a conflicting re-registration
+   * (different source) throws rather than silently rebinding what a scope runs.
+   */
+  registerVertical(actor: PlatformActorId, input: RegisterVerticalInput): Promise<void>;
+  listVerticals(actor: PlatformActorId): Promise<Vertical[]>;
+
+  /**
+   * Publish a version. It lands **pending** — a push is not a deploy.
+   *
+   * The digests are what promotion compares. `boundary-lint` and the migration and
+   * permission diffs are the admission gates, and binding a scope is a separate step
+   * (`bindScopeVersion`), so the two human checkpoints fire where the blast radius is
+   * rather than where the typing was.
+   */
+  publishVersion(actor: PlatformActorId, input: PublishVersionInput): Promise<void>;
+  listVersions(actor: PlatformActorId, verticalSlug: string): Promise<VerticalVersion[]>;
+
+  /** Admit a pending version — the gates passed. Idempotent on an already-admitted one. */
+  admitVersion(actor: PlatformActorId, versionId: string): Promise<void>;
+  /** Reject a pending version, with the reason. Rejected is terminal: publish a new one. */
+  rejectVersion(actor: PlatformActorId, versionId: string, note: string): Promise<void>;
+
+  /**
+   * Point a scope at a version.
+   *
+   * **Refuses anything not admitted.** That refusal is the registry's reason to
+   * exist: without it "push lands pending" is a convention, and a convention is what
+   * D-30's lockstep-upgrade argument says we cannot afford to rely on.
+   */
+  bindScopeVersion(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    scopeId: ScopeId,
+    versionId: string,
+  ): Promise<void>;
 
   // -- tenant registry (control-plane.md §4.1) -------------------------------
 
