@@ -28,11 +28,11 @@ import {
   firstPlatformActorAuth,
   serviceTokenAuth,
   sessionPlatformAuth,
-  staffAllowlist,
   UNSAFE_devPlatformActorAuth,
   type PlatformActorAuth,
 } from '@substrat-run/control-plane-api';
 import { buildStaffAuth, staffSessionReader } from './staff-auth.js';
+import { d1StaffRoster } from './staff-roster.js';
 
 /** The placeholder scope-DO class: kernel only, no modules. */
 export const ScopeDO = defineScopeDO([], {});
@@ -47,17 +47,12 @@ interface Env {
   ASSETS?: Fetcher;
   BETTER_AUTH_SECRET?: string;
   BASE_URL?: string;
-  /** Comma-separated staff emails allowed to act. Defaults to markus@substrat.run. */
-  STAFF_EMAILS?: string;
   /** Shared secret a connected vertical presents (x-service-token) to register. */
   SERVICE_TOKEN?: string;
   /** Local dev / test only: trust the `x-platform-actor` header. NEVER on a real deploy. */
   ALLOW_DEV_ACTOR?: string;
 }
 
-// A fixed staff actor id for the audit log in this demo deployment. A real
-// deployment would mint one per operator and map emails to their own ids.
-const STAFF_ACTOR = platformActorId.parse('01JZ00000000000000000000MK');
 // The actor a connected vertical acts as when it registers (a service, not staff).
 const SERVICE_ACTOR = platformActorId.parse('01JZ00000000000000000000SV');
 
@@ -76,16 +71,9 @@ function authFor(env: Env, origin: string): PlatformActorAuth {
   // Staff sign in (Better Auth session).
   if (env.AUTH_DB) {
     const auth = buildStaffAuth(env as { AUTH_DB: D1Database }, origin);
-    const emails = (env.STAFF_EMAILS ?? 'markus@substrat.run')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    readers.push(
-      sessionPlatformAuth(
-        staffSessionReader(auth),
-        staffAllowlist(emails.map((email) => ({ email, actor: STAFF_ACTOR }))),
-      ),
-    );
+    // The roster is DATA, not config (#42): one actor per human, revocable by a
+    // timestamp rather than by editing a secret. migrations/0002_staff_roster.sql.
+    readers.push(sessionPlatformAuth(staffSessionReader(auth), d1StaffRoster(env.AUTH_DB)));
   }
   // A connected vertical registers as a service (shared token), not staff.
   if (env.SERVICE_TOKEN) readers.push(serviceTokenAuth(env.SERVICE_TOKEN, SERVICE_ACTOR));
