@@ -268,4 +268,75 @@ describe('control-plane API', () => {
     expect(entries).toEqual([]);
     expect(nextCursor).toBeNull();
   });
+
+  // -- the hostname map (§4.7, K-26) -----------------------------------------
+
+  it('binds a hostname, which does not serve until it is activated', async () => {
+    const created = await json('/hostnames', 'POST', {
+      hostname: 'ACME.Example.com',
+      tenantId: t1,
+      scopeId: s1,
+      surface: 'app',
+      canonical: true,
+    });
+    expect(created.status).toBe(201);
+    const body = await created.json();
+    // Normalized at the schema: DNS is case-insensitive, so the map is too.
+    expect(body.hostname).toBe('acme.example.com');
+    expect(body.status).toBe('pending');
+    expect(await host.admin.resolveHostname('acme.example.com')).toBeUndefined();
+
+    const activated = await json('/hostnames/acme.example.com/status', 'PATCH', { status: 'active' });
+    expect(activated.status).toBe(200);
+    expect((await activated.json()).status).toBe('active');
+    expect(await host.admin.resolveHostname('acme.example.com')).toMatchObject({ scopeId: s1 });
+  });
+
+  it('lists hostnames, filtered by scope', async () => {
+    const all = await (await req('/hostnames')).json();
+    expect(all.map((h: { hostname: string }) => h.hostname)).toContain('acme.example.com');
+    const forScope = await (await req(`/hostnames?scopeId=${s1}`)).json();
+    expect(forScope.every((h: { scopeId: string }) => h.scopeId === s1)).toBe(true);
+  });
+
+  it('records a failure reason rather than losing it', async () => {
+    await json('/hostnames', 'POST', {
+      hostname: 'broken.example.com',
+      tenantId: t1,
+      scopeId: s1,
+      surface: 'app',
+    });
+    await json('/hostnames/broken.example.com/status', 'PATCH', {
+      status: 'failed',
+      note: 'DNS validation timed out',
+    });
+    const rows = await (await req(`/hostnames?scopeId=${s1}`)).json();
+    const row = rows.find((h: { hostname: string }) => h.hostname === 'broken.example.com');
+    expect(row.status).toBe('failed');
+    expect(row.statusNote).toContain('DNS validation');
+  });
+
+  it('refuses to move a hostname to another scope over HTTP', async () => {
+    const res = await json('/hostnames', 'POST', {
+      hostname: 'acme.example.com',
+      tenantId: t2,
+      scopeId: scopeId.parse(ulid()),
+      surface: 'app',
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('rejects a malformed binding at the boundary', async () => {
+    expect((await json('/hostnames', 'POST', { hostname: '', tenantId: t1, scopeId: s1, surface: 'app' })).status).toBe(400);
+    expect((await json('/hostnames', 'POST', { hostname: 'x.example.com', tenantId: 'nope', scopeId: s1, surface: 'app' })).status).toBe(400);
+    expect((await json('/hostnames/acme.example.com/status', 'PATCH', { status: 'sideways' })).status).toBe(400);
+  });
+
+  it('audits the staff writes, and does not offer resolveHostname at all', async () => {
+    const { entries } = await (await req('/admin-log?action=bindHostname')).json();
+    expect(entries.length).toBeGreaterThan(0);
+    // The router's per-request read is not a staff action and has no route here
+    // (K-24). A 404 rather than a resolution is the point.
+    expect((await req('/hostnames/acme.example.com/resolve')).status).toBe(404);
+  });
 });

@@ -2,10 +2,14 @@ import { Hono } from 'hono';
 import {
   adminAction,
   createTenantInput,
+  hostname as hostnameSchema,
+  hostnameRegion,
+  hostnameStatus,
   jurisdiction,
   scopeId as scopeIdSchema,
   scopeStatus,
   storageShape,
+  surfaceName,
   tenantId as tenantIdSchema,
   tenantStatus,
   z,
@@ -47,6 +51,25 @@ const provisionScopeBody = z.object({
 });
 
 const setTenantStatusBody = z.object({ status: tenantStatus });
+
+const bindHostnameBody = z.object({
+  hostname: hostnameSchema,
+  tenantId: tenantIdSchema,
+  scopeId: scopeIdSchema,
+  surface: surfaceName,
+  region: hostnameRegion.optional().default(null),
+  canonical: z.boolean().optional().default(false),
+});
+
+const setHostnameStatusBody = z.object({
+  status: hostnameStatus,
+  note: z.string().optional(),
+});
+
+const listHostnamesQuery = z.object({
+  tenantId: tenantIdSchema.optional(),
+  scopeId: scopeIdSchema.optional(),
+});
 
 /** Repeatable query params arrive as `?status=active&status=suspended`. */
 const listScopesQuery = z.object({
@@ -215,6 +238,42 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       return c.json(await admin.getScopeRecord(c.get('actor'), tenantId, scopeId));
     });
   }
+
+  // -- the hostname map (§4.7, K-26) -----------------------------------------
+  // The three STAFF actions land here. `resolveHostname` deliberately does NOT:
+  // it is the router's per-request machine path, unaudited by design (K-24), and
+  // putting it on the audited staff surface would either flood the log or quietly
+  // create an unaudited route on a surface whose whole claim is that it is audited.
+  // The router reads the directory directly; it does not come through here.
+
+  app.get('/hostnames', async (c) => {
+    const filter = listHostnamesQuery.parse({
+      tenantId: c.req.query('tenantId'),
+      scopeId: c.req.query('scopeId'),
+    });
+    return c.json(await admin.listHostnames(c.get('actor'), filter));
+  });
+
+  app.post('/hostnames', async (c) => {
+    const input = bindHostnameBody.parse(await c.req.json());
+    await admin.bindHostname(c.get('actor'), input);
+    const bound = (await admin.listHostnames(c.get('actor'), { scopeId: input.scopeId })).find(
+      (h) => h.hostname === input.hostname,
+    );
+    return c.json(bound, 201);
+  });
+
+  app.patch('/hostnames/:hostname/status', async (c) => {
+    const { status, note } = setHostnameStatusBody.parse(await c.req.json());
+    // Not path-parsed through the schema: a hostname is the path segment here, and
+    // `setHostnameStatus` normalizes and 404s an unknown one below the seam.
+    const name = c.req.param('hostname');
+    await admin.setHostnameStatus(c.get('actor'), name, status, note);
+    const row = (await admin.listHostnames(c.get('actor'), {})).find(
+      (h) => h.hostname === name.toLowerCase(),
+    );
+    return c.json(row);
+  });
 
   // -- roles, read only (§4.5 console item 4) --------------------------------
   // The READ lands; `defineRole` deliberately does not. Creating a role over

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Scope, Tenant, TenantId } from '@substrat-run/contracts';
+import type { HostnameBinding, Scope, Tenant, TenantId } from '@substrat-run/contracts';
 import { Badge, Button, Card, Dialog, Input, Select, Table, Tag } from '../components';
 import type { TableColumn } from '../components';
 import { effectiveStatus, statusLabel, statusTone, tenantTone } from '../lib/fleet';
@@ -20,12 +20,13 @@ export interface TenantDetailProps {
   tenant: Tenant;
   scopes: Scope[];
   entitlements: string[];
+  hostnames: HostnameBinding[];
   onBack: () => void;
   onChanged: () => void;
   onToast: (title: string, detail?: string, status?: 'success' | 'danger') => void;
 }
 
-export function TenantDetail({ api, tenant, scopes, entitlements, onBack, onChanged, onToast }: TenantDetailProps) {
+export function TenantDetail({ api, tenant, scopes, entitlements, hostnames, onBack, onChanged, onToast }: TenantDetailProps) {
   const [confirmSuspend, setConfirmSuspend] = useState(false);
   const [armed, setArmed] = useState('');
   const [granting, setGranting] = useState(false);
@@ -60,14 +61,14 @@ export function TenantDetail({ api, tenant, scopes, entitlements, onBack, onChan
       },
     },
     {
-      // The tenant-facing portal for this scope's vertical. Only rendered when a
-      // portal origin is configured (portalUrl → null otherwise), so it stays
-      // dark in a deployment until the hostname router exists.
+      // The tenant-facing portal for this scope's vertical, from the scope's
+      // canonical hostname. Null — so no link — until a binding is ACTIVE: a
+      // hostname still validating DNS would render a link that leads nowhere.
       header: '',
       align: 'right',
       width: 96,
       render: (s) => {
-        const url = portalUrl(s);
+        const url = portalUrl(s, hostnames);
         if (!url) return null;
         return (
           <a

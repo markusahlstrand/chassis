@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Scope, Tenant, TenantId } from '@substrat-run/contracts';
+import type { HostnameBinding, Scope, Tenant, TenantId } from '@substrat-run/contracts';
 import { Card, Toast } from './components';
 import { ConsoleShell } from './ConsoleShell';
 import type { ViewKey } from './ConsoleShell';
@@ -7,6 +7,7 @@ import type { BreadcrumbItem } from './components';
 import { createApi } from './lib/api';
 import { getSession, signOut, type StaffSession } from './lib/auth';
 import { AdminLog } from './views/AdminLog';
+import { Domains } from './views/Domains';
 import { Login } from './views/Login';
 import { Permissions } from './views/Permissions';
 import { Scopes } from './views/Scopes';
@@ -46,7 +47,7 @@ interface Toast {
   status: 'success' | 'danger';
 }
 
-const VIEWS: ViewKey[] = ['tenants', 'scopes', 'admin-log', 'permissions'];
+const VIEWS: ViewKey[] = ['tenants', 'scopes', 'domains', 'admin-log', 'permissions'];
 
 /**
  * Navigation lives in the URL — which view, and any drilled-into tenant — so a
@@ -94,6 +95,7 @@ export function App() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [scopes, setScopes] = useState<Scope[]>([]);
   const [entitlements, setEntitlements] = useState<Map<TenantId, string[]>>(new Map());
+  const [hostnames, setHostnames] = useState<HostnameBinding[]>([]);
 
   // Dev mode authenticates with the actor header; session mode with the cookie.
   const api = useMemo(() => createApi(devMode ? actor : null), [actor]);
@@ -134,12 +136,13 @@ export function App() {
   const load = useCallback(async () => {
     if (!authed) return;
     try {
-      const [ts, ss] = await Promise.all([api.listTenants(), api.listScopes()]);
+      const [ts, ss, hs] = await Promise.all([api.listTenants(), api.listScopes(), api.listHostnames()]);
       // No batch read for entitlements — one call per tenant. Fine at fleet
       // sizes the console handles today; a real N+1 to revisit if it isn't.
       const keys = await Promise.all(ts.map((t) => api.listEntitlements(t.id)));
       setTenants(ts);
       setScopes(ss);
+      setHostnames(hs);
       setEntitlements(new Map(ts.map((t, i) => [t.id, keys[i] ?? []])));
       setError(undefined);
     } catch (e) {
@@ -220,6 +223,7 @@ export function App() {
       crumbs={crumbs}
       tenantCount={tenants.length}
       scopeCount={scopes.length}
+      hostnameCount={hostnames.length}
       identityLabel={devMode ? undefined : session?.email}
       onSignOut={
         devMode ? undefined : () => void signOut().then(() => setSession(null))
@@ -238,6 +242,7 @@ export function App() {
             tenant={detail}
             scopes={scopes.filter((s) => s.tenantId === detail.id)}
             entitlements={entitlements.get(detail.id) ?? []}
+            hostnames={hostnames}
             onBack={() => setOpenTenant(undefined)}
             onChanged={() => void load()}
             onToast={notify}
@@ -255,7 +260,17 @@ export function App() {
         ))}
 
       {view === 'scopes' && (
-        <Scopes api={api} scopes={scopes} tenants={tenantMap} entitlements={entitlements} onChanged={() => void load()} onToast={notify} />
+        <Scopes api={api} scopes={scopes} tenants={tenantMap} entitlements={entitlements} hostnames={hostnames} onChanged={() => void load()} onToast={notify} />
+      )}
+      {view === 'domains' && (
+        <Domains
+          api={api}
+          scopes={scopes}
+          tenants={tenantMap}
+          hostnames={hostnames}
+          onChanged={() => void load()}
+          onToast={notify}
+        />
       )}
       {view === 'admin-log' && <AdminLog api={api} tenants={tenantMap} />}
       {view === 'permissions' && <Permissions api={api} tenants={tenantMap} />}
