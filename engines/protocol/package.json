@@ -1,6 +1,6 @@
 {
   "name": "@substrat-run/engine-protocol",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Substrat engine: protocols/checklists with the sign → immutable invariant — versioned templates, append-only responses, verifiable content hash, counter-signatures on frozen content",
   "license": "AGPL-3.0-only",
   "repository": {
