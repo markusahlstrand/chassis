@@ -1,5 +1,24 @@
 # @substrat-run/control-plane-api
 
+## 0.6.0
+
+### Minor Changes
+
+- ea3c5de: Service auth for connected verticals, and a workerd fetch fix.
+
+  - `serviceTokenAuth` + `SERVICE_TOKEN_HEADER` — a shared-token credential a
+    vertical presents to register into the control plane (a service, not staff),
+    and `firstPlatformActorAuth` to compose it with session/dev auth.
+  - `ControlPlaneClient` gains a `serviceToken` option (sent as `x-service-token`).
+  - **Fix:** `ControlPlaneClient` bound `globalThis.fetch` incorrectly, throwing
+    "Illegal invocation" on workerd. It is now bound to the global scope, so the
+    client works inside a Worker (over a service binding or plain fetch).
+
+### Patch Changes
+
+- @substrat-run/contracts@0.6.0
+- @substrat-run/kernel@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

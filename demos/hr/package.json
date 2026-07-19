@@ -1,6 +1,6 @@
 {
   "name": "@substrat-run/demo-hr",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "HR demo vertical (PeopleCo) — see spec/concept.md",
   "type": "module",
