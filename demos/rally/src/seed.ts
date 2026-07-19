@@ -519,3 +519,32 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
 
   return world;
 }
+
+/**
+ * Bind the demo cast's logins to their principals.
+ *
+ * Separate from `seedRally` and idempotent, because the auth store is a different
+ * database with its own lifecycle: the world may already exist when Better Auth's
+ * tables are created fresh, and re-running must not mint a second principal for a
+ * person who already has one.
+ *
+ * A login with no identity in a club resolves to nobody there — that is the point.
+ * Signing up makes you a person; joining a club is what the invites engine is for.
+ */
+export async function linkRallyLogins(
+  host: SqliteScopeHost,
+  world: RallyWorld,
+  users: { externalId: string; principal: PrincipalId; tenantId: TenantId; scopeId: ScopeId }[],
+): Promise<void> {
+  const staff = RALLY_PLATFORM_ACTOR;
+  for (const u of users) {
+    if (await host.admin.resolveIdentity(u.tenantId, 'better-auth', u.externalId)) continue;
+    await host.admin.linkIdentity(staff, {
+      provider: 'better-auth',
+      externalId: u.externalId,
+      principal: u.principal,
+      tenantId: u.tenantId,
+      scopeId: u.scopeId,
+    });
+  }
+}

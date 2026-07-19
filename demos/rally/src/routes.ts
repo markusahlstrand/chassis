@@ -1,4 +1,10 @@
 import { RALLY_PLATFORM_ACTOR } from './seed.js';
+import {
+  devHeaderAdapter,
+  resolvePrincipal,
+  type AuthAdapter,
+  type Venue,
+} from './auth-adapters.js';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { principalId, type PrincipalId } from '@substrat-run/contracts';
@@ -21,7 +27,11 @@ import type { RallyWorld } from './seed.js';
  * that calls operations directly cannot see those; one that goes through this
  * app can.
  */
-export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
+export function createRallyApp(
+  host: SqliteScopeHost,
+  world: RallyWorld,
+  adapters: AuthAdapter[] = [devHeaderAdapter()],
+): Hono {
   const CAST: Record<string, { name: string; role: string; principal: PrincipalId }> = {
     astrid: { name: 'Astrid (klubbchef)', role: 'club-admin', principal: world.astrid },
     ravi: { name: 'Ravi (reception, Solna)', role: 'receptionist', principal: world.ravi },
@@ -47,19 +57,38 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
 
   const app = new Hono();
 
-  function principalOf(c: Context): PrincipalId {
-    const raw = c.req.header('x-principal');
-    if (!raw) throw new PermissionDenied('missing x-principal header');
-    return principalId.parse(raw);
-  }
-
-  async function stub(c: Context): Promise<ScopeStub> {
+  function venueOf(c: Context): Venue {
     const key = c.req.header('x-venue') ?? 'solna';
     const venue = VENUES[key];
     if (!venue) throw new PermissionDenied(`unknown venue: ${key}`);
+    return venue;
+  }
+
+  /**
+   * Resolve the caller through the mounted adapters, in order — a real session
+   * wins, the dev header is a fallback the server may not even have mounted.
+   *
+   * The VENUE is an input, not something derived from the login. Clubs are tenants
+   * and the pool is central, so one login legitimately maps to a different
+   * principal per club; asking "who are you" without saying "where" has no answer
+   * (§4.3, and why `resolveIdentity` takes a tenant since #56).
+   */
+  async function authOf(c: Context): Promise<PrincipalId> {
+    const result = await resolvePrincipal(adapters, c.req.raw.headers, venueOf(c));
+    if (!result) {
+      // Authenticated-but-not-a-member lands here too, and deliberately reads the
+      // same as unauthenticated: whether an email belongs to this club is not a
+      // question an unauthenticated caller gets answered.
+      throw new PermissionDenied('not authenticated for this venue');
+    }
+    return result.principal;
+  }
+
+  async function stub(c: Context): Promise<ScopeStub> {
+    const venue = venueOf(c);
     // getScope cross-checks (tenantId, scopeId) and fails closed — a principal
     // claiming another company's scope gets `unknown scope`, not a 403.
-    return host.getScope(principalOf(c), venue.tenantId, venue.scopeId);
+    return host.getScope(await authOf(c), venue.tenantId, venue.scopeId);
   }
 
   const body = async (c: Context): Promise<Record<string, unknown>> =>
@@ -98,7 +127,7 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
    * gets no switcher; an owner with several gets the overview.
    */
   app.get('/api/my-venues', async (c) => {
-    const principal = principalOf(c);
+    const principal = await authOf(c);
     const reachable: { key: string; label: string }[] = [];
     for (const [key, v] of Object.entries(VENUES)) {
       try {
@@ -235,7 +264,7 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
     op: string,
     input?: unknown,
   ): Promise<{ venue: string; label: string; rows: T }[]> {
-    const principal = principalOf(c);
+    const principal = await authOf(c);
     const out: { venue: string; label: string; rows: T }[] = [];
     for (const [key, v] of Object.entries(VENUES)) {
       try {
@@ -270,7 +299,7 @@ export function createRallyApp(host: SqliteScopeHost, world: RallyWorld): Hono {
    * asking every club in turn.
    */
   app.get('/api/clubs', async (c) => {
-    principalOf(c); // authenticated, but the directory is not per-principal
+    await authOf(c); // authenticated, but the directory is not per-principal
     const scopes = await host.admin.listScopes(RALLY_PLATFORM_ACTOR, { status: 'active' });
     const byScope = new Map(Object.entries(VENUES).map(([k, v]) => [v.scopeId as string, k]));
     // Deliberately NOT filtered by principal. Discovery and access are different
