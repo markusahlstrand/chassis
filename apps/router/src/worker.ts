@@ -86,6 +86,37 @@ function assertNode(request: Request, target: RouteTarget, secret?: string): Req
 }
 
 /**
+ * A dispatch failure that a retry might fix.
+ *
+ * Observed while verifying K-28: a freshly-deployed user worker is not instantly
+ * reachable everywhere. One scope got `Worker not found.` for ~15s while sibling
+ * scopes on the SAME script succeeded — its Durable Object had placed in a colo the
+ * script had not propagated to. It healed on its own.
+ *
+ * Cloudflare's own guidance for this error is to return 404, which is right when the
+ * script genuinely is not there and wrong during that window: it turns a transient
+ * gap into a hard failure for whichever tenants happen to land in a cold colo.
+ *
+ * There is no propagation-complete signal to wait for, so this is not a delay. It is
+ * one bounded retry, which is also the mitigation that survives being wrong about the
+ * cause — the colo explanation is an inference from the symptom, not something
+ * Cloudflare documents, and a retry does not depend on it being right.
+ */
+const isTransientDispatchFailure = (e: unknown): boolean =>
+  e instanceof Error && e.message.startsWith('Worker not found');
+
+/**
+ * Retry only requests with no body — deliberately.
+ *
+ * A retry is safe when we know the first attempt had no effect. We do not always know
+ * that: if the failure came after the request reached the vertical, re-sending a POST
+ * could run the same mutation twice, and a double-charged customer is a worse outcome
+ * than a 502. Bodyless requests carry no mutation to duplicate, and they are the ones
+ * a person actually sees fail — a page load, not a form submit.
+ */
+const isReplayable = (request: Request): boolean => request.body === null;
+
+/**
  * The DO stub is reused across requests in an isolate; the resolution itself is not
  * cached. Keyed on the binding rather than held in a bare module variable, so it
  * cannot outlive the env it was built from — in production there is one env per
@@ -134,6 +165,28 @@ export default {
     // termination and processing at the edge, ahead of this worker, and the DO
     // jurisdiction pins storage and execution (K-7). Both halves are configuration.
     // Re-checking it in code would be a third enforcement point that can disagree.
-    return vertical.fetch(assertNode(request, target, env.ROUTER_SECRET));
+    const forwarded = assertNode(request, target, env.ROUTER_SECRET);
+
+    try {
+      return await vertical.fetch(forwarded);
+    } catch (e) {
+      if (!isTransientDispatchFailure(e) || !isReplayable(request)) throw e;
+      try {
+        return await vertical.fetch(assertNode(request, target, env.ROUTER_SECRET));
+      } catch (retryError) {
+        if (!isTransientDispatchFailure(retryError)) throw retryError;
+        // Twice is enough to distinguish a propagation gap from a script that is
+        // simply not there. Bounded, so a real misconfiguration fails fast instead
+        // of hanging — 502, the same answer as a vertical with no binding.
+        console.error(
+          `router: vertical '${target.verticalSlug}' not found on retry for ` +
+            `hostname ${hostname} (scope ${target.scopeId})`,
+        );
+        return new Response('This application is not available.', {
+          status: 502,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        });
+      }
+    }
   },
 };
