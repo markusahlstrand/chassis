@@ -23,7 +23,23 @@ import { meridianModule, HR_PERM } from './module.js';
  * role — their access is a grant on their OWN employee record, exactly like the
  * Callout portal customer.
  */
-export interface DemoWorld {
+/**
+ * What ANY instance of this vertical has: one tenant, one scope, an owner.
+ *
+ * The boundary #31 blocker 3 is about — everything in DemoWorld beyond these three
+ * is the DEMO STORY, which a customer must not receive. Separate types make that
+ * structural: `provisionMeridian` cannot return a cast, because its return type has no
+ * room for one.
+ */
+export interface MeridianInstance {
+  tenantId: TenantId;
+  scopeId: ScopeId;
+  /** The first hr-admin — whoever provisioned it. */
+  owner: PrincipalId;
+}
+
+/** The demo world: an instance, plus the cast and fixtures the story needs. */
+export interface DemoWorld extends MeridianInstance {
   t1: TenantId; // Nordljus AB
   t2: TenantId; // Solmark AB (attack victim owner)
   sSe: ScopeId; // Nordljus — Sweden (Stockholm)
@@ -35,11 +51,11 @@ export interface DemoWorld {
   pablo: PrincipalId; // employee @ sEs
   petra: PrincipalId; // payroll operator @ sSe
   mallory: PrincipalId; // HR admin @ t2 — the attacker
-  elinEmpId: string; // Elin's employee record (sSe)
-  karinEmpId: string; // a second SE employee, no login (directory + denial target)
-  matsEmpId: string; // Mats' own employee record — he is ALSO an employee (dual role)
-  pabloEmpId: string; // Pablo's employee record (sEs)
-  projectId: string; // 'nordljus-app' project (sSe)
+  elinEmpId?: string; // Elin's employee record (sSe)
+  karinEmpId?: string; // a second SE employee, no login (directory + denial target)
+  matsEmpId?: string; // Mats' own employee record — he is ALSO an employee (dual role)
+  pabloEmpId?: string; // Pablo's employee record (sEs)
+  projectId?: string; // 'nordljus-app' project (sSe)
 }
 
 /**
@@ -151,6 +167,48 @@ const ONBOARDING_ES = {
 };
 
 /** Idempotent: safe on every start; demo data seeds only once. */
+/**
+ * Provision ONE instance of this vertical — what a customer gets (#31 blocker 3).
+ *
+ * Tenant, scope, entitlements, roles, identity pool, and an owner holding
+ * `hr-admin`. No cast, no fixtures, no second company. Idempotent, so it is
+ * safe on every start and safe against an instance that already exists.
+ *
+ * This is the function an instantiate button calls.
+ */
+export async function provisionMeridian(
+  host: SqliteScopeHost,
+  input: { tenantId: TenantId; scopeId: ScopeId; owner: PrincipalId; slug: string; name: string },
+): Promise<MeridianInstance> {
+  const staff = platformActorId.parse(ulid());
+
+  await host.admin.createTenant(staff, { id: input.tenantId, slug: input.slug, name: input.name });
+  // K-23: a provider declares its topology before it may link an identity.
+  await host.admin.registerIdentityPool(staff, {
+    provider: 'better-auth',
+    topology: 'central',
+    tenantId: null,
+  });
+  // Entitlements (§4.3) are default-deny, so the SKU flags for the modules this
+  // vertical runs must be granted before any of its operations resolve.
+  for (const key of ['protocol', 'meridian']) {
+    await host.admin.grantEntitlement(staff, input.tenantId, key);
+  }
+  await host.provisionScope(staff, {
+    tenantId: input.tenantId,
+    scopeId: input.scopeId,
+    jurisdiction: 'eu',
+  });
+  for (const role of ROLES) await host.admin.defineRole(staff, input.tenantId, role);
+  await host.admin.assignRole(staff, {
+    principalId: input.owner,
+    roleKey: 'hr-admin',
+    node: { tenantId: input.tenantId, scopeId: null },
+  });
+
+  return { tenantId: input.tenantId, scopeId: input.scopeId, owner: input.owner };
+}
+
 export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<DemoWorld> {
   const castPath = join(dir, 'cast.json');
   const fresh = !existsSync(castPath);
@@ -163,6 +221,9 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     : (JSON.parse(readFileSync(castPath, 'utf8')) as Record<string, string>);
 
   const world: DemoWorld = {
+    tenantId: tenantId.parse(raw.t1),
+    scopeId: scopeId.parse(raw.sSe),
+    owner: principalId.parse(raw.hedda),
     t1: tenantId.parse(raw.t1), t2: tenantId.parse(raw.t2),
     sSe: scopeId.parse(raw.sSe), sEs: scopeId.parse(raw.sEs), s2: scopeId.parse(raw.s2),
     hedda: principalId.parse(raw.hedda), mats: principalId.parse(raw.mats),
@@ -174,27 +235,30 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
 
   const staff = platformActorId.parse(ulid());
 
-  await host.admin.createTenant(staff, { id: world.t1, slug: 'nordljus', name: 'Nordljus AB' });
-  await host.admin.createTenant(staff, { id: world.t2, slug: 'solmark', name: 'Solmark AB' });
-
-  for (const t of [world.t1, world.t2]) {
-    for (const key of ['protocol', 'meridian']) {
-      await host.admin.grantEntitlement(staff, t, key);
-    }
-  }
-
-  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.sSe, kind: 'entity', name: 'Sweden', jurisdiction: 'eu' });
+  // The real instance — everything a customer would get, and nothing else.
+  await provisionMeridian(host, {
+    tenantId: world.t1, scopeId: world.sSe, owner: world.hedda,
+    slug: 'nordljus', name: 'Nordljus AB',
+  });
+  // A second scope in the SAME tenant — one company, two countries. Provisioning
+  // creates one scope because that is what an instance needs; more are the
+  // customer's to add.
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.sEs, kind: 'entity', name: 'Spain', jurisdiction: 'eu' });
-  await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, kind: 'entity', name: 'Sweden', jurisdiction: 'eu' });
 
-  for (const t of [world.t1, world.t2]) {
-    for (const role of ROLES) await host.admin.defineRole(staff, t, role);
-  }
-  // hedda is tenant-level — she reaches both Sweden and Spain.
-  await host.admin.assignRole(staff, { principalId: world.hedda, roleKey: 'hr-admin', node: { tenantId: world.t1, scopeId: null } });
+  // ---------------------------------------------------------------------------
+  // DEMO ONLY, below. A second company and an admin nobody hired, so the scenario
+  // can watch the tenant boundary turn them away (#31 blocker 4). Never reachable
+  // from provisioning — instantiating the template would otherwise hand a
+  // customer a company they do not own with an account they did not create.
+  // ---------------------------------------------------------------------------
+  await provisionMeridian(host, {
+    tenantId: world.t2, scopeId: world.s2, owner: world.mallory,
+    slug: 'solmark', name: 'Solmark AB',
+  });
+
+  // The demo cast's remaining roles; the tenant-level admins came from provisioning.
   await host.admin.assignRole(staff, { principalId: world.mats, roleKey: 'manager', node: { tenantId: world.t1, scopeId: world.sSe } });
   await host.admin.assignRole(staff, { principalId: world.petra, roleKey: 'payroll', node: { tenantId: world.t1, scopeId: world.sSe } });
-  await host.admin.assignRole(staff, { principalId: world.mallory, roleKey: 'hr-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {
     // --- Sweden (Stockholm) ---

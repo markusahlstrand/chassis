@@ -16,7 +16,23 @@ import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
 import { shopModule, SHOP_PERM } from './module.js';
 
-export interface ShopWorld {
+/**
+ * What ANY instance of this vertical has: one tenant, one scope, an owner.
+ *
+ * The boundary #31 blocker 3 is about. Everything in ShopWorld beyond these three is
+ * the DEMO STORY, and a customer who instantiates the template must not receive
+ * it. Separate types make that structural: `provisionShop` cannot return a cast,
+ * because its return type has no room for one.
+ */
+export interface ShopInstance {
+  tenantId: TenantId;
+  scopeId: ScopeId;
+  /** The first shop-admin — whoever provisioned it. */
+  owner: PrincipalId;
+}
+
+/** The demo world: an instance, plus the cast and fixtures the story needs. */
+export interface ShopWorld extends ShopInstance {
   t1: TenantId; // Kallkälla Kaffe AB
   t2: TenantId; // Bönfeber Rosteri AB (the attack victim owner)
   s1: ScopeId; // Kallkälla web shop
@@ -28,10 +44,10 @@ export interface ShopWorld {
   guest: PrincipalId; // anonymous shopper — no order grant
   public: PrincipalId; // browse-only fallback for not-logged-in visitors
   rurik: PrincipalId; // shop-admin @ t2 — the attacker
-  elinCustomerId: string;
-  ottoCustomerId: string;
-  microLotVariantId: string; // Gichichi AA 250 g — on_hand 1 (the oversell beat)
-  chelbesaVariantId: string; // Chelbesa 250 g — the TTL-release beat
+  elinCustomerId?: string;
+  ottoCustomerId?: string;
+  microLotVariantId?: string; // Gichichi AA 250 g — on_hand 1 (the oversell beat)
+  chelbesaVariantId?: string; // Chelbesa 250 g — the TTL-release beat
 }
 
 /**
@@ -87,6 +103,63 @@ export function buildShopHost(dir: string): SqliteScopeHost {
 }
 
 /** Idempotent: safe on every server start; demo data seeds only once. */
+/**
+ * The identity provider for one storefront. Per instance, because the pool is
+ * tenant-bound and a provider string names exactly one pool (K-23).
+ */
+export const shopProvider = (slug: string): string => `better-auth:${slug}`;
+
+/**
+ * Provision ONE instance of this vertical — what a customer gets (#31 blocker 3).
+ *
+ * Tenant, scope, entitlements, roles, identity pool, and an owner holding
+ * `shop-admin`. No cast, no fixtures, no second company. Idempotent, so it is
+ * safe on every start and safe against an instance that already exists.
+ *
+ * This is the function an instantiate button calls.
+ */
+export async function provisionShop(
+  host: SqliteScopeHost,
+  input: { tenantId: TenantId; scopeId: ScopeId; owner: PrincipalId; slug: string; name: string },
+): Promise<ShopInstance> {
+  const staff = platformActorId.parse(ulid());
+
+  await host.admin.createTenant(staff, { id: input.tenantId, slug: input.slug, name: input.name });
+  // K-23: a provider declares its topology before it may link an identity.
+  //
+  // TENANT-BOUND here, unlike the other templates: a white-label storefront is
+  // the case §4.3 reserves it for — a shopper at two shops is correctly two
+  // accounts, and the shop must never learn the platform exists.
+  //
+  // Which forces a per-instance provider string. A provider names exactly ONE
+  // pool, so two tenant-bound instances both calling themselves `better-auth`
+  // would collide on the second registration. `shopProvider` derives it from the
+  // slug — the same rule K-23 states for separate per-tenant deployments.
+  await host.admin.registerIdentityPool(staff, {
+    provider: shopProvider(input.slug),
+    topology: 'tenant-bound',
+    tenantId: input.tenantId,
+  });
+  // Entitlements (§4.3) are default-deny, so the SKU flags for the modules this
+  // vertical runs must be granted before any of its operations resolve.
+  for (const key of ['invoicing', 'shop']) {
+    await host.admin.grantEntitlement(staff, input.tenantId, key);
+  }
+  await host.provisionScope(staff, {
+    tenantId: input.tenantId,
+    scopeId: input.scopeId,
+    jurisdiction: 'eu',
+  });
+  for (const role of ROLES) await host.admin.defineRole(staff, input.tenantId, role);
+  await host.admin.assignRole(staff, {
+    principalId: input.owner,
+    roleKey: 'shop-admin',
+    node: { tenantId: input.tenantId, scopeId: null },
+  });
+
+  return { tenantId: input.tenantId, scopeId: input.scopeId, owner: input.owner };
+}
+
 export async function seedShop(host: SqliteScopeHost, dir: string): Promise<ShopWorld> {
   const castPath = join(dir, 'cast.json');
   const fresh = !existsSync(castPath);
@@ -100,6 +173,9 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
     : (JSON.parse(readFileSync(castPath, 'utf8')) as Record<string, string>);
 
   const world: ShopWorld = {
+    tenantId: tenantId.parse(raw.t1),
+    scopeId: scopeId.parse(raw.s1),
+    owner: principalId.parse(raw.astrid),
     t1: tenantId.parse(raw.t1), t2: tenantId.parse(raw.t2),
     s1: scopeId.parse(raw.s1), s2: scopeId.parse(raw.s2),
     astrid: principalId.parse(raw.astrid), gustav: principalId.parse(raw.gustav),
@@ -115,41 +191,36 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
 
   const staff = platformActorId.parse(ulid());
 
-  await host.admin.createTenant(staff, { id: world.t1, slug: 'kallkalla', name: 'Kallkälla Kaffe AB' });
-  await host.admin.createTenant(staff, { id: world.t2, slug: 'bonfeber', name: 'Bönfeber Rosteri AB' });
-
-  // K-23: a provider declares its topology before it may link an identity. This demo
-  // runs one Better Auth instance for one tenant, so the pool is tenant-bound — the
-  // same external user id in another tenant would be a different person.
-  await host.admin.registerIdentityPool(staff, {
-    provider: 'better-auth',
-    topology: 'tenant-bound',
+  // The real instance — everything a customer would get, and nothing else.
+  await provisionShop(host, {
     tenantId: world.t1,
+    scopeId: world.s1,
+    owner: world.astrid,
+    slug: 'kallkalla',
+    name: 'Kallkälla Kaffe AB',
   });
 
-  // Entitlements (§4.3): default-deny — grant the SKU flags for the modules the
-  // shop runs before its operations resolve.
-  for (const t of [world.t1, world.t2]) {
-    for (const key of ['invoicing', 'shop']) {
-      await host.admin.grantEntitlement(staff, t, key);
-    }
-  }
+  // ---------------------------------------------------------------------------
+  // DEMO ONLY, below. A second roastery and an admin nobody hired, so the
+  // scenario can watch the tenant boundary turn them away (#31 blocker 4). Never
+  // reachable from provisioning: instantiating the template would otherwise hand
+  // a customer a company they do not own with an admin account they did not
+  // create — and since #71 that account has a working login.
+  // ---------------------------------------------------------------------------
+  await provisionShop(host, {
+    tenantId: world.t2,
+    scopeId: world.s2,
+    owner: world.rurik,
+    slug: 'bonfeber',
+    name: 'Bönfeber Rosteri AB',
+  });
 
-  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
-  await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
-
-  // Roles: identical definitions in both tenants (vertical-defined) — see ROLES.
-  for (const t of [world.t1, world.t2]) {
-    for (const role of ROLES) await host.admin.defineRole(staff, t, role);
-  }
-
-  await host.admin.assignRole(staff, { principalId: world.astrid, roleKey: 'shop-admin', node: { tenantId: world.t1, scopeId: null } });
+  // The demo cast's remaining roles; the tenant-level admins came from provisioning.
   await host.admin.assignRole(staff, { principalId: world.gustav, roleKey: 'warehouse', node: { tenantId: world.t1, scopeId: world.s1 } });
   await host.admin.assignRole(staff, { principalId: world.elin, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
   await host.admin.assignRole(staff, { principalId: world.otto, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
   await host.admin.assignRole(staff, { principalId: world.guest, roleKey: 'shopper', node: { tenantId: world.t1, scopeId: world.s1 } });
   await host.admin.assignRole(staff, { principalId: world.public, roleKey: 'public', node: { tenantId: world.t1, scopeId: world.s1 } });
-  await host.admin.assignRole(staff, { principalId: world.rurik, roleKey: 'shop-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {
     const stub = await host.getScope(world.astrid, world.t1, world.s1);

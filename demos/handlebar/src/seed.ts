@@ -18,7 +18,23 @@ import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-inv
 import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { bikeShopModule, CS_PERM } from './module.js';
 
-export interface BikeShopWorld {
+/**
+ * What ANY instance of this vertical has: one tenant, one scope, an owner.
+ *
+ * The boundary #31 blocker 3 is about. Everything in BikeShopWorld beyond these three is
+ * the DEMO STORY, and a customer who instantiates the template must not receive
+ * it. Separate types make that structural: `provisionHandlebar` cannot return a cast,
+ * because its return type has no room for one.
+ */
+export interface HandlebarInstance {
+  tenantId: TenantId;
+  scopeId: ScopeId;
+  /** The first workshop-admin — whoever provisioned it. */
+  owner: PrincipalId;
+}
+
+/** The demo world: an instance, plus the cast and fixtures the story needs. */
+export interface BikeShopWorld extends HandlebarInstance {
   t1: TenantId; // Kedja & Kugghjul Cykelverkstad AB
   t2: TenantId; // Trampolin Cykel AB (the attack perpetrator's shop)
   s1: ScopeId; // Söder workshop (Kedja & Kugghjul)
@@ -28,10 +44,10 @@ export interface BikeShopWorld {
   lisbeth: PrincipalId; // portal user, Crescent owner
   otto: PrincipalId; // portal user, Bianchi owner
   rutger: PrincipalId; // workshop-admin @ t2 — the attacker
-  lisbethId: string; // customer Lisbeth Sandell
-  ottoId: string; // customer Otto Vinge
-  crescentId: string; // Lisbeth's bike
-  bianchiId: string; // Otto's bike
+  lisbethId?: string; // customer Lisbeth Sandell
+  ottoId?: string; // customer Otto Vinge
+  crescentId?: string; // Lisbeth's bike
+  bianchiId?: string; // Otto's bike
 }
 
 /**
@@ -92,6 +108,48 @@ export function buildBikeShopHost(dir: string): SqliteScopeHost {
 }
 
 /** Idempotent: safe on every server start; demo data seeds only once. */
+/**
+ * Provision ONE instance of this vertical — what a customer gets (#31 blocker 3).
+ *
+ * Tenant, scope, entitlements, roles, identity pool, and an owner holding
+ * `workshop-admin`. No cast, no fixtures, no second company. Idempotent, so it is
+ * safe on every start and safe against an instance that already exists.
+ *
+ * This is the function an instantiate button calls.
+ */
+export async function provisionHandlebar(
+  host: SqliteScopeHost,
+  input: { tenantId: TenantId; scopeId: ScopeId; owner: PrincipalId; slug: string; name: string },
+): Promise<HandlebarInstance> {
+  const staff = platformActorId.parse(ulid());
+
+  await host.admin.createTenant(staff, { id: input.tenantId, slug: input.slug, name: input.name });
+  // K-23: a provider declares its topology before it may link an identity.
+  await host.admin.registerIdentityPool(staff, {
+    provider: 'better-auth',
+    topology: 'central',
+    tenantId: null,
+  });
+  // Entitlements (§4.3) are default-deny, so the SKU flags for the modules this
+  // vertical runs must be granted before any of its operations resolve.
+  for (const key of ['workorder', 'invoicing', 'protocol', 'handlebar']) {
+    await host.admin.grantEntitlement(staff, input.tenantId, key);
+  }
+  await host.provisionScope(staff, {
+    tenantId: input.tenantId,
+    scopeId: input.scopeId,
+    jurisdiction: 'eu',
+  });
+  for (const role of ROLES) await host.admin.defineRole(staff, input.tenantId, role);
+  await host.admin.assignRole(staff, {
+    principalId: input.owner,
+    roleKey: 'workshop-admin',
+    node: { tenantId: input.tenantId, scopeId: null },
+  });
+
+  return { tenantId: input.tenantId, scopeId: input.scopeId, owner: input.owner };
+}
+
 export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<BikeShopWorld> {
   const castPath = join(dir, 'cast.json');
   const fresh = !existsSync(castPath);
@@ -104,6 +162,9 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
     : (JSON.parse(readFileSync(castPath, 'utf8')) as Record<string, string>);
 
   const world: BikeShopWorld = {
+    tenantId: tenantId.parse(raw.t1),
+    scopeId: scopeId.parse(raw.s1),
+    owner: principalId.parse(raw.greta),
     t1: tenantId.parse(raw.t1), t2: tenantId.parse(raw.t2),
     s1: scopeId.parse(raw.s1), s2: scopeId.parse(raw.s2),
     greta: principalId.parse(raw.greta), mans: principalId.parse(raw.mans),
@@ -117,31 +178,33 @@ export async function seedBikeShop(host: SqliteScopeHost, dir: string): Promise<
   // stub; every admin mutation below is stamped with it in the audit trail.
   const staff = platformActorId.parse(ulid());
 
-  // Tenant registry (§4.1): create-then-provision, idempotent on every start.
-  await host.admin.createTenant(staff, {
-    id: world.t1, slug: 'kedja-kugghjul', name: 'Kedja & Kugghjul Cykelverkstad AB',
+  // The real instance — everything a customer would get, and nothing else.
+  await provisionHandlebar(host, {
+    tenantId: world.t1,
+    scopeId: world.s1,
+    owner: world.greta,
+    slug: 'kedja-kugghjul',
+    name: 'Kedja & Kugghjul Cykelverkstad AB',
   });
-  await host.admin.createTenant(staff, { id: world.t2, slug: 'trampolin', name: 'Trampolin Cykel AB' });
 
-  // Entitlements (§4.3): default-deny — grant the SKU flags for the modules the
-  // workshop runs before its operations resolve.
-  for (const t of [world.t1, world.t2]) {
-    for (const key of ['workorder', 'invoicing', 'protocol', 'handlebar']) {
-      await host.admin.grantEntitlement(staff, t, key);
-    }
-  }
+  // ---------------------------------------------------------------------------
+  // DEMO ONLY, below. A second workshop and an admin nobody hired, so the
+  // scenario can watch the tenant boundary turn them away (#31 blocker 4). This
+  // must never be reachable from provisioning: instantiating the template would
+  // otherwise hand a customer a company they do not own with an admin account
+  // they did not create — and since #71 that account has a working login.
+  // ---------------------------------------------------------------------------
+  await provisionHandlebar(host, {
+    tenantId: world.t2,
+    scopeId: world.s2,
+    owner: world.rutger,
+    slug: 'trampolin',
+    name: 'Trampolin Cykel AB',
+  });
 
-  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1, jurisdiction: 'eu' });
-  await host.provisionScope(staff, { tenantId: world.t2, scopeId: world.s2, jurisdiction: 'eu' });
-
-  // Roles: identical definitions in both tenants (vertical-defined).
-  // Roles: identical definitions in both tenants (vertical-defined) — see ROLES.
-  for (const t of [world.t1, world.t2]) {
-    for (const role of ROLES) await host.admin.defineRole(staff, t, role);
-  }
-  await host.admin.assignRole(staff, { principalId: world.greta, roleKey: 'workshop-admin', node: { tenantId: world.t1, scopeId: null } });
+  // The demo cast's extra roles. The two tenant-level admins were assigned by
+  // provisioning; these are the rest of the story.
   await host.admin.assignRole(staff, { principalId: world.mans, roleKey: 'mechanic', node: { tenantId: world.t1, scopeId: world.s1 } });
-  await host.admin.assignRole(staff, { principalId: world.rutger, roleKey: 'workshop-admin', node: { tenantId: world.t2, scopeId: null } });
 
   if (fresh) {
     const stub = await host.getScope(world.greta, world.t1, world.s1);

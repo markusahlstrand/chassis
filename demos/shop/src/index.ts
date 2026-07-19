@@ -7,4 +7,11 @@ export {
   type OrderRow,
   type OrderLineRow,
 } from './module.js';
-export { buildShopHost, seedShop, type ShopWorld } from './seed.js';
+export {
+  buildShopHost,
+  seedShop,
+  provisionShop,
+  shopProvider,
+  type ShopInstance,
+  type ShopWorld,
+} from './seed.js';

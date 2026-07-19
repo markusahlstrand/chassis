@@ -8,4 +8,13 @@ export type {
   TimeEntryRow,
   ExpenseRow,
 } from './module.js';
-export { buildDemoHost, seedDemo, MODULES, ROLES, ENTITY_GRANTS, type DemoWorld } from './seed.js';
+export {
+  buildDemoHost,
+  seedDemo,
+  provisionMeridian,
+  MODULES,
+  ROLES,
+  ENTITY_GRANTS,
+  type MeridianInstance,
+  type DemoWorld,
+} from './seed.js';

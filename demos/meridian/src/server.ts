@@ -42,9 +42,9 @@ interface Persona {
 }
 
 const CAST: Persona[] = [
-  { key: 'elin', display: 'Elin Ek', role: 'employee', country: 'SE', principal: world.elin, tenantId: world.t1, scopeId: world.sSe, employeeId: world.elinEmpId },
-  { key: 'pablo', display: 'Pablo Ruiz', role: 'employee', country: 'ES', principal: world.pablo, tenantId: world.t1, scopeId: world.sEs, employeeId: world.pabloEmpId },
-  { key: 'mats', display: 'Mats Lund (team lead)', role: 'manager', country: 'SE', principal: world.mats, tenantId: world.t1, scopeId: world.sSe, employeeId: world.matsEmpId },
+  { key: 'elin', display: 'Elin Ek', role: 'employee', country: 'SE', principal: world.elin, tenantId: world.t1, scopeId: world.sSe, employeeId: world.elinEmpId ?? null },
+  { key: 'pablo', display: 'Pablo Ruiz', role: 'employee', country: 'ES', principal: world.pablo, tenantId: world.t1, scopeId: world.sEs, employeeId: world.pabloEmpId ?? null },
+  { key: 'mats', display: 'Mats Lund (team lead)', role: 'manager', country: 'SE', principal: world.mats, tenantId: world.t1, scopeId: world.sSe, employeeId: world.matsEmpId ?? null },
   { key: 'hedda', display: 'Hedda (HR admin)', role: 'hr-admin', country: 'SE', principal: world.hedda, tenantId: world.t1, scopeId: world.sSe, employeeId: null },
   { key: 'petra', display: 'Petra (payroll)', role: 'payroll', country: 'SE', principal: world.petra, tenantId: world.t1, scopeId: world.sSe, employeeId: null },
   { key: 'mallory', display: 'Mallory (other company!)', role: 'attacker', country: 'SE', principal: world.mallory, tenantId: world.t2, scopeId: world.s2, employeeId: null },
