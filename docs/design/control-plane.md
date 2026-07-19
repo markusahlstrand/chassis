@@ -16,11 +16,12 @@ queue over runtime permission changes.
 §4.6's **staff access log** is decided (K-24) and not yet built — reads remain
 unaudited until it lands (#43).
 
-§4.7's **hostname map** is built — the directory data, its lifecycle and
-`resolveHostname`, in both adapters and under the shared contract suite. The **router
-worker** that reads it, and hostname *provisioning* (the Cloudflare for SaaS
-custom-hostnames API, DNS validation, cert issuance), are deployment work and still
-unbuilt. Also still unbuilt: §5's meters; **capability-grant enumeration** — a grant is a tuple in the
+§4.7's **hostname map and router** are built: the directory data and its lifecycle in
+both adapters, and `apps/router` — the environment-wide worker that resolves a hostname
+and dispatches over a service binding. Hostname **provisioning** (the Cloudflare for SaaS
+custom-hostnames API, DNS validation, cert issuance) is still unbuilt, so bindings are
+set `active` by hand today; a wildcard under a domain we control is enough to demo
+without it. Also still unbuilt: §5's meters; **capability-grant enumeration** — a grant is a tuple in the
 scope's own database, so listing them needs §5.4's admin-query RPC, unlike roles which are
 directory-local (this is the sharpest remaining consequence of §7's "no back door into scope
 DBs"); and **four-eyes approval**, which §6 says the action list should settle — the action
@@ -381,6 +382,24 @@ Vertical workers get **no public route** — only a service binding from the rou
 Otherwise the router's assertion of `(tenant, scope)` is a header, and anyone who can
 reach the worker directly can forge it. There is precedent: the Callout worker
 already reaches the control plane by service binding rather than public URL.
+
+Built, with one addition the design did not originally call for: the router also
+presents a **shared secret** (`x-substrat-router`), which the vertical verifies through
+`readRoutedNode` in the kernel.
+
+The no-public-route rule is the real boundary, but it is a *deployment fact*, and
+`workers.dev` is on by default — so "only the router can reach this worker" is one
+forgotten toggle away from false, and the consequence is total: a forged tenant header
+reads another tenant's data. The secret makes the boundary hold in code even when the
+configuration slips. Belt and braces, where the failure is silent and unbounded.
+
+The router **strips every inbound `x-substrat-*` header** before setting its own —
+by prefix, not by name, so a header added later is covered by default.
+
+A vertical with no router in front (a single-tenant box, or `wrangler dev`) sets
+`STANDALONE=true` and serves its own node. That is deliberately a *separate* flag from
+`ALLOW_DEV_HEADER`: that one lets any caller be any principal, and wanting a standalone
+deploy should not mean switching on impersonation.
 
 #### Residency is configuration, not topology
 

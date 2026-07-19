@@ -1429,7 +1429,8 @@ export class SqliteScopeHost implements ScopeHost {
           parsed,
         );
       },
-      setHostnameStatus: async (actor, hostname: string, status, note?: string) => {
+      setHostnameStatus: async (actor, raw: string, status, note?: string) => {
+        const hostname = raw.toLowerCase(); // DNS is case-insensitive; the map is normalized
         const row = this.directory
           .prepare('SELECT tenant_id, scope_id, status FROM hostnames WHERE hostname = ?')
           .get(hostname) as
@@ -1466,9 +1467,10 @@ export class SqliteScopeHost implements ScopeHost {
         );
         return rows.map(mapHostname);
       },
-      resolveHostname: async (hostname: string) => {
+      resolveHostname: async (raw: string) => {
         // The router's per-request read. No actor, not logged — same carve-out as
         // resolveIdentity (K-24): this is a machine path, not a staff read.
+        const hostname = raw.toLowerCase();
         const r = this.directory
           .prepare(
             `SELECT tenant_id, scope_id, vertical_slug, surface, region

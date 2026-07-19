@@ -1,0 +1,196 @@
+import { describe, expect, it } from 'vitest';
+import worker, { type Env } from '../src/worker.js';
+
+/**
+ * The router's job is small and the ways it can be wrong are not: forwarding to the
+ * wrong vertical, or letting a caller name its own tenant, both read as "it works"
+ * right up until they don't.
+ */
+
+const T = '01JZ0000000000000000000001';
+const S = '01JZ0000000000000000000002';
+
+interface Row {
+  tenant_id: string;
+  scope_id: string;
+  vertical_slug: string | null;
+  surface: string;
+  region: string | null;
+  status: string;
+}
+
+const row = (over: Partial<Row> = {}): Row => ({
+  tenant_id: T,
+  scope_id: S,
+  vertical_slug: 'fsm',
+  surface: 'app',
+  region: null,
+  status: 'active',
+  ...over,
+});
+
+/** A control-plane namespace whose directory is a plain map. */
+function directory(rows: Record<string, Row>): DurableObjectNamespace {
+  const stub = {
+    readHostname: async (hostname: string) => rows[hostname],
+  };
+  return {
+    idFromName: () => 'id',
+    get: () => stub,
+  } as unknown as DurableObjectNamespace;
+}
+
+/** A vertical that echoes back what it was asked, so we can assert on the assertion. */
+function spyVertical(): { binding: Fetcher; seen: () => Request } {
+  let last: Request | undefined;
+  return {
+    binding: {
+      fetch: async (req: Request) => {
+        last = req;
+        return new Response('ok');
+      },
+    } as unknown as Fetcher,
+    seen: () => {
+      if (!last) throw new Error('vertical was never called');
+      return last;
+    },
+  };
+}
+
+const get = (url: string, headers: Record<string, string> = {}) => new Request(url, { headers });
+
+describe('router', () => {
+  it('resolves the hostname and forwards to that vertical', async () => {
+    const fsm = spyVertical();
+    const env = {
+      CONTROL_PLANE: directory({ 'acme.example.com': row() }),
+      VERTICAL_FSM: fsm.binding,
+    } as unknown as Env;
+
+    const res = await worker.fetch(get('https://acme.example.com/api/repairs'), env);
+
+    expect(res.status).toBe(200);
+    const seen = fsm.seen();
+    expect(seen.headers.get('x-substrat-tenant')).toBe(T);
+    expect(seen.headers.get('x-substrat-scope')).toBe(S);
+    expect(seen.headers.get('x-substrat-surface')).toBe('app');
+    expect(seen.headers.get('x-substrat-vertical')).toBe('fsm');
+    // The path and method survive — this is a forward, not a redirect.
+    expect(new URL(seen.url).pathname).toBe('/api/repairs');
+  });
+
+  it('STRIPS a client-supplied assertion before making its own', async () => {
+    // The whole trust boundary in one test. If a caller can smuggle these through,
+    // the vertical serves whichever tenant the caller named.
+    const fsm = spyVertical();
+    const env = {
+      CONTROL_PLANE: directory({ 'acme.example.com': row() }),
+      VERTICAL_FSM: fsm.binding,
+    } as unknown as Env;
+
+    await worker.fetch(
+      get('https://acme.example.com/', {
+        'x-substrat-tenant': '01JZ00000000000000000000EV',
+        'x-substrat-scope': '01JZ00000000000000000000IL',
+        'x-substrat-router': 'i-guessed-the-secret',
+        'x-substrat-surface': 'back-office',
+      }),
+      env,
+    );
+
+    const seen = fsm.seen();
+    expect(seen.headers.get('x-substrat-tenant')).toBe(T);
+    expect(seen.headers.get('x-substrat-scope')).toBe(S);
+    expect(seen.headers.get('x-substrat-surface')).toBe('app');
+    // No secret is configured here, so none should be forwarded — the caller's
+    // guess must not survive as one.
+    expect(seen.headers.get('x-substrat-router')).toBeNull();
+  });
+
+  it('preserves headers it does not own', async () => {
+    const fsm = spyVertical();
+    const env = {
+      CONTROL_PLANE: directory({ 'acme.example.com': row() }),
+      VERTICAL_FSM: fsm.binding,
+    } as unknown as Env;
+
+    await worker.fetch(
+      get('https://acme.example.com/', { cookie: 'session=abc', 'x-request-id': 'r1' }),
+      env,
+    );
+
+    expect(fsm.seen().headers.get('cookie')).toBe('session=abc');
+    expect(fsm.seen().headers.get('x-request-id')).toBe('r1');
+  });
+
+  it('presents the router secret when one is configured', async () => {
+    const fsm = spyVertical();
+    const env = {
+      CONTROL_PLANE: directory({ 'acme.example.com': row() }),
+      VERTICAL_FSM: fsm.binding,
+      ROUTER_SECRET: 'shhh',
+    } as unknown as Env;
+
+    await worker.fetch(get('https://acme.example.com/'), env);
+    expect(fsm.seen().headers.get('x-substrat-router')).toBe('shhh');
+  });
+
+  it('sends two surfaces of one scope to the binding, distinguished by header', async () => {
+    // A scope fronts a storefront and a back office. Same vertical, same data,
+    // different app — the vertical needs to be told which.
+    const shop = spyVertical();
+    const env = {
+      CONTROL_PLANE: directory({
+        'shop.example.com': row({ vertical_slug: 'shop', surface: 'storefront' }),
+        'admin.shop.example.com': row({ vertical_slug: 'shop', surface: 'back-office' }),
+      }),
+      VERTICAL_SHOP: shop.binding,
+    } as unknown as Env;
+
+    await worker.fetch(get('https://shop.example.com/'), env);
+    expect(shop.seen().headers.get('x-substrat-surface')).toBe('storefront');
+
+    await worker.fetch(get('https://admin.shop.example.com/'), env);
+    expect(shop.seen().headers.get('x-substrat-surface')).toBe('back-office');
+  });
+
+  it('maps a dashed slug to its binding name', async () => {
+    const bikes = spyVertical();
+    const env = {
+      CONTROL_PLANE: directory({ 'bikes.example.com': row({ vertical_slug: 'bike-shop' }) }),
+      VERTICAL_BIKE_SHOP: bikes.binding,
+    } as unknown as Env;
+
+    expect((await worker.fetch(get('https://bikes.example.com/'), env)).status).toBe(200);
+  });
+
+  it('404s an unknown hostname', async () => {
+    const env = { CONTROL_PLANE: directory({}) } as unknown as Env;
+    expect((await worker.fetch(get('https://nobody.example.com/'), env)).status).toBe(404);
+  });
+
+  it('404s a hostname that is bound but not yet active', async () => {
+    // Still validating DNS, or its certificate failed. From outside, all the same:
+    // which of those it is belongs in the console, not in a public response.
+    const env = {
+      CONTROL_PLANE: directory({ 'soon.example.com': row({ status: 'pending' }) }),
+      VERTICAL_FSM: spyVertical().binding,
+    } as unknown as Env;
+    expect((await worker.fetch(get('https://soon.example.com/'), env)).status).toBe(404);
+  });
+
+  it('502s when the map names a vertical nothing is bound to', async () => {
+    // Our misconfiguration, not the caller's, so it must not read as 404.
+    const env = {
+      CONTROL_PLANE: directory({ 'orphan.example.com': row({ vertical_slug: 'ghost' }) }),
+    } as unknown as Env;
+    expect((await worker.fetch(get('https://orphan.example.com/'), env)).status).toBe(502);
+  });
+
+  it('does not leak which tenant a 404 nearly matched', async () => {
+    const env = { CONTROL_PLANE: directory({ 'acme.example.com': row() }) } as unknown as Env;
+    const body = await (await worker.fetch(get('https://typo.example.com/'), env)).text();
+    expect(body).not.toContain(T);
+    expect(body).not.toContain('acme');
+  });
+});

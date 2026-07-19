@@ -559,6 +559,24 @@ export function scopeHostContractSuite(
       expect(forApp.map((h) => h.hostname)).toContain('acme.example.com');
     });
 
+    it('treats hostname case as insignificant, because DNS does', async () => {
+      // Otherwise two scopes could each hold "the same" name and a request would
+      // resolve to whichever casing it arrived in.
+      await host.admin.bindHostname(staff, {
+        hostname: 'MiXeD.Example.COM',
+        tenantId: t1,
+        scopeId: s1,
+        surface: 'app',
+        region: null,
+        canonical: false,
+      });
+      await host.admin.setHostnameStatus(staff, 'mixed.EXAMPLE.com', 'active');
+      expect((await host.admin.resolveHostname('MIXED.example.com'))?.scopeId).toBe(s1);
+      expect(
+        (await host.admin.listHostnames(staff, { scopeId: s1 })).map((h) => h.hostname),
+      ).toContain('mixed.example.com');
+    });
+
     it('refuses to move a hostname to another scope', async () => {
       // A hostname routes to exactly one place. Silently rebinding would move
       // another tenant's traffic.

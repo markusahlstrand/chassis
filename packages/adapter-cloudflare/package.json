@@ -16,6 +16,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./routing": {
+      "types": "./dist/route-resolver.d.ts",
+      "default": "./dist/route-resolver.js"
     }
   },
   "files": [

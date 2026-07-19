@@ -19,6 +19,7 @@ import {
   platformActorId,
 } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
+import { readRoutedNode, RouterAssertionError } from '@substrat-run/kernel';
 import { ControlPlaneClient, ControlPlaneError } from '@substrat-run/control-plane-api';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
@@ -50,7 +51,13 @@ const S = scopeId.parse('01JZ0000000000000000000002');
 const ANNA = principalId.parse('01JZ0000000000000000000003');
 const HARALD = principalId.parse('01JZ0000000000000000000004');
 const STAFF = platformActorId.parse('01JZ0000000000000000000005');
-const NODE: DemoNode = { tenantId: T, scopeId: S };
+/**
+ * The demo world's node. This is what `/api/seed` provisions and what a standalone
+ * deploy serves — it is NO LONGER what a request is assumed to be for. Behind the
+ * router the node comes from the resolved hostname, which is what makes one
+ * deployment able to serve many tenants (K-26).
+ */
+const DEMO_NODE: DemoNode = { tenantId: T, scopeId: S };
 
 /** Persona key → the fixed principal its Better Auth login binds to (in /api/seed). */
 const PERSONA_PRINCIPAL = { anna: ANNA, harald: HARALD } as const;
@@ -65,6 +72,22 @@ interface Env {
   BASE_URL?: string;
   /** Local dev only: when 'true', trust the `x-principal` header. NEVER set in prod. */
   ALLOW_DEV_HEADER?: string;
+  /**
+   * Shared secret the router presents (K-26). When set, a request that does not
+   * carry it cannot assert a tenant — so a vertical worker that is publicly
+   * reachable by accident still cannot be told which tenant to serve.
+   */
+  ROUTER_SECRET?: string;
+  /**
+   * Serve ONLY the demo world, with no router in front. This is the pre-router
+   * deployment shape, kept because it is genuinely useful — `wrangler dev` and a
+   * single-tenant demo box both want it.
+   *
+   * Deliberately NOT folded into `ALLOW_DEV_HEADER`: that flag lets any caller be
+   * any principal, and someone who merely wants a standalone deploy should not have
+   * to switch on impersonation to get it.
+   */
+  STANDALONE?: string;
   /**
    * Connected mode (first-flow.md slice 4): when set, this vertical registers its
    * tenant/scope into a SEPARATELY-deployed shared control plane and gates every
@@ -96,6 +119,28 @@ function cpClientFor(env: Env): ControlPlaneClient | undefined {
   });
 }
 
+/**
+ * Which tenant/scope this request is for.
+ *
+ * Behind the router: whatever the hostname resolved to. Standalone: the demo world.
+ * Neither: refuse — an unrouted request in a multi-tenant deployment has no defensible
+ * default, and picking one would mean serving somebody else's data.
+ */
+function nodeFor(req: Request, env: Env): DemoNode {
+  let routed;
+  try {
+    routed = readRoutedNode(req.headers, { expectedSecret: env.ROUTER_SECRET });
+  } catch (e) {
+    if (e instanceof RouterAssertionError) throw new HTTPException(400, { message: e.message });
+    throw e;
+  }
+  if (routed) return { tenantId: routed.tenantId, scopeId: routed.scopeId };
+  if (env.STANDALONE === 'true') return DEMO_NODE;
+  throw new HTTPException(503, {
+    message: 'no scope was asserted for this request (missing router, or set STANDALONE=true)',
+  });
+}
+
 /** The coordinator is stateless — rebuilt per request; durable state is in the DOs. */
 function hostFor(env: Env): CloudflareScopeHost {
   const host = new CloudflareScopeHost({ scope: env.SCOPE, controlPlane: env.CONTROL_PLANE });
@@ -113,11 +158,15 @@ const originOf = (req: Request): string => new URL(req.url).origin;
  * an impersonation bypass by design, so it is mounted ONLY when
  * `ALLOW_DEV_HEADER=true` (local dev) — secure by default, off in production.
  */
-function authFor(env: Env, origin: string): { auth: Auth; host: CloudflareScopeHost; adapters: AuthAdapter[] } {
+function authFor(
+  env: Env,
+  origin: string,
+  node: DemoNode,
+): { auth: Auth; host: CloudflareScopeHost; adapters: AuthAdapter[] } {
   const auth = buildAuth(env, origin);
   const host = hostFor(env);
-  const adapters: AuthAdapter[] = [betterAuthAdapter(auth, host, NODE)];
-  if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter(NODE));
+  const adapters: AuthAdapter[] = [betterAuthAdapter(auth, host, node)];
+  if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter(node));
   return { auth, host, adapters };
 }
 
@@ -211,7 +260,8 @@ app.post('/api/seed', async (c) => {
 // A protected data route resolves the caller across the mounted adapters, then
 // getScope for the fixed demo tenant/scope. No adapter matched → 401 (fail closed).
 async function stub(c: { env: Env; req: { raw: Request } }) {
-  const { host, adapters } = authFor(c.env, originOf(c.req.raw));
+  const node = nodeFor(c.req.raw, c.env);
+  const { host, adapters } = authFor(c.env, originOf(c.req.raw), node);
   const result = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!result) throw new HTTPException(401, { message: 'unauthorized' });
   // Connected mode: gate on the shared control plane's lifecycle. A suspend in the
@@ -229,7 +279,7 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
 
 // The resolved identity behind the current request (principal, display, role), or 401.
 app.get('/api/me', async (c) => {
-  const { adapters } = authFor(c.env, originOf(c.req.raw));
+  const { adapters } = authFor(c.env, originOf(c.req.raw), nodeFor(c.req.raw, c.env));
   const result = await resolvePrincipal(adapters, c.req.raw.headers);
   if (!result) return c.json({ error: 'unauthorized' }, 401);
   return c.json({
