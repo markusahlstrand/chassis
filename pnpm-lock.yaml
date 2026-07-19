@@ -361,6 +361,9 @@ importers:
       '@substrat-run/engine-booking':
         specifier: workspace:^
         version: link:../../engines/booking
+      '@substrat-run/engine-invites':
+        specifier: workspace:^
+        version: link:../../engines/invites
       '@substrat-run/engine-invoicing':
         specifier: workspace:^
         version: link:../../engines/invoicing

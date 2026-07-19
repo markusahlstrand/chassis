@@ -195,6 +195,8 @@ describe('invites engine', () => {
     const id = await send('quiet@example.com');
     const joiner = await h.as([]);
     await joiner.invoke('invites/accept', { invitationId: id, identifier: 'quiet@example.com' });
+    const accepted = h.eventsOfType('invites.accepted')[0]!.payload as Record<string, unknown>;
+    expect(accepted.principal).toEqual(expect.any(String));
     for (const type of ['invites.sent', 'invites.accepted']) {
       const events = h.eventsOfType(type);
       expect(events).toHaveLength(1);
