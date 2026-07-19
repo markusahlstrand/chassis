@@ -14,7 +14,10 @@ import {
   moduleManifest,
   createOrgInput,
   promotionAcknowledgement,
+  bindHostnameInput,
+  hostnameBinding,
   publishVersionInput,
+  routeTarget,
   registerVerticalInput,
   vertical as verticalSchema,
   verticalChannel,
@@ -46,6 +49,8 @@ import {
   type PlatformActorId,
   type PrincipalId,
   type PromotionAcknowledgement,
+  type BindHostnameInput,
+  type HostnameBinding,
   type PublishVersionInput,
   type RegisterVerticalInput,
   type Vertical,
@@ -207,6 +212,33 @@ function mapMigrationFailure(r: {
   };
 }
 
+interface HostnameRow {
+  hostname: string;
+  tenant_id: string;
+  scope_id: string;
+  vertical_slug: string | null;
+  surface: string;
+  region: string | null;
+  status: string;
+  status_note: string | null;
+  canonical: number;
+  created_at: string;
+}
+
+const mapHostname = (r: HostnameRow): HostnameBinding =>
+  hostnameBinding.parse({
+    hostname: r.hostname,
+    tenantId: r.tenant_id,
+    scopeId: r.scope_id,
+    verticalSlug: r.vertical_slug,
+    surface: r.surface,
+    region: r.region,
+    status: r.status,
+    statusNote: r.status_note,
+    canonical: r.canonical === 1,
+    createdAt: r.created_at,
+  });
+
 interface VerticalRow {
   slug: string;
   name: string;
@@ -356,6 +388,26 @@ export class SqliteScopeHost implements ScopeHost {
         migration_last_attempt_at TEXT,
         created_at TEXT NOT NULL
       );
+      -- The hostname map (K-26). A single environment-wide router resolves against
+      -- this before dispatching to the vertical's worker.
+      --
+      -- The surface column is why one hostname per scope was not enough: the shop
+      -- fronts a storefront AND a back office from one scope. The region column is
+      -- Regional Services, which Cloudflare configures per hostname — the reason
+      -- residency lives here rather than in a router deployed per jurisdiction.
+      CREATE TABLE IF NOT EXISTS hostnames (
+        hostname      TEXT PRIMARY KEY,
+        tenant_id     TEXT NOT NULL,
+        scope_id      TEXT NOT NULL,
+        vertical_slug TEXT,
+        surface       TEXT NOT NULL,
+        region        TEXT,
+        status        TEXT NOT NULL,
+        status_note   TEXT,
+        canonical     INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS hostnames_scope ON hostnames (scope_id, surface);
       -- The vertical + version registry (#31). A scope binds to a VERSION, so
       -- dev/staging/prod are the same vertical pinned differently, and a preview
       -- deployment is a version nothing has been promoted to yet.
@@ -1327,6 +1379,119 @@ export class SqliteScopeHost implements ScopeHost {
       },
       // -- vertical + version registry (#31) ---------------------------------
 
+      // -- the hostname map (K-26) -------------------------------------------
+
+      bindHostname: async (actor: PlatformActorId, input: BindHostnameInput) => {
+        const parsed = bindHostnameInput.parse(input);
+        const scope = this.directory
+          .prepare('SELECT tenant_id, vertical FROM scopes WHERE scope_id = ?')
+          .get(parsed.scopeId) as { tenant_id: string; vertical: string | null } | undefined;
+        if (!scope || scope.tenant_id !== parsed.tenantId) {
+          throw new Error(`unknown scope ${parsed.scopeId} in tenant ${parsed.tenantId}`);
+        }
+        const existing = this.directory
+          .prepare('SELECT scope_id FROM hostnames WHERE hostname = ?')
+          .get(parsed.hostname) as { scope_id: string } | undefined;
+        if (existing && existing.scope_id !== parsed.scopeId) {
+          // A hostname is globally unique and routes to exactly one place. Silently
+          // rebinding it would move another tenant's traffic.
+          throw new Error(`hostname '${parsed.hostname}' is already bound to another scope`);
+        }
+        // Exactly one canonical per (scope, surface): "which one do certs and
+        // redirects use" has to have one answer, so a new canonical demotes the old.
+        if (parsed.canonical) {
+          this.directory
+            .prepare('UPDATE hostnames SET canonical = 0 WHERE scope_id = ? AND surface = ?')
+            .run(parsed.scopeId, parsed.surface);
+        }
+        this.directory
+          .prepare(
+            `INSERT OR REPLACE INTO hostnames
+               (hostname, tenant_id, scope_id, vertical_slug, surface, region,
+                status, status_note, canonical, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+          )
+          .run(
+            parsed.hostname,
+            parsed.tenantId,
+            parsed.scopeId,
+            scope.vertical,
+            parsed.surface,
+            parsed.region,
+            parsed.canonical ? 1 : 0,
+            new Date().toISOString(),
+          );
+        this.recordAdmin(
+          actor,
+          'bindHostname',
+          { tenantId: parsed.tenantId, scopeId: parsed.scopeId, vertical: scope.vertical },
+          null,
+          parsed,
+        );
+      },
+      setHostnameStatus: async (actor, hostname: string, status, note?: string) => {
+        const row = this.directory
+          .prepare('SELECT tenant_id, scope_id, status FROM hostnames WHERE hostname = ?')
+          .get(hostname) as
+          | { tenant_id: string; scope_id: string; status: string }
+          | undefined;
+        if (!row) throw new Error(`unknown hostname '${hostname}'`);
+        if (row.status === status) return; // idempotent, and a no-op is not audited
+        this.directory
+          .prepare('UPDATE hostnames SET status = ?, status_note = ? WHERE hostname = ?')
+          .run(status, note ?? null, hostname);
+        this.recordAdmin(
+          actor,
+          'setHostnameStatus',
+          { tenantId: row.tenant_id as TenantId, scopeId: row.scope_id as ScopeId },
+          { status: row.status },
+          { status, note: note ?? null },
+        );
+      },
+      listHostnames: async (actor, filter) => {
+        const where: string[] = [];
+        const params: string[] = [];
+        if (filter?.tenantId) { where.push('tenant_id = ?'); params.push(filter.tenantId); }
+        if (filter?.scopeId) { where.push('scope_id = ?'); params.push(filter.scopeId); }
+        let sql = 'SELECT * FROM hostnames';
+        if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+        sql += ' ORDER BY hostname';
+        const rows = this.directory.prepare(sql).all(...params) as HostnameRow[];
+        this.recordAccess(
+          actor,
+          'listHostnames',
+          { tenantId: filter?.tenantId ?? null, scopeId: filter?.scopeId ?? null },
+          filter,
+          rows.length,
+        );
+        return rows.map(mapHostname);
+      },
+      resolveHostname: async (hostname: string) => {
+        // The router's per-request read. No actor, not logged — same carve-out as
+        // resolveIdentity (K-24): this is a machine path, not a staff read.
+        const r = this.directory
+          .prepare(
+            `SELECT tenant_id, scope_id, vertical_slug, surface, region
+             FROM hostnames WHERE hostname = ? AND status = 'active'`,
+          )
+          .get(hostname) as
+          | {
+              tenant_id: string;
+              scope_id: string;
+              vertical_slug: string | null;
+              surface: string;
+              region: string | null;
+            }
+          | undefined;
+        if (!r) return undefined;
+        return routeTarget.parse({
+          tenantId: r.tenant_id,
+          scopeId: r.scope_id,
+          verticalSlug: r.vertical_slug,
+          surface: r.surface,
+          region: r.region,
+        });
+      },
       registerVertical: async (actor: PlatformActorId, input: RegisterVerticalInput) => {
         const parsed = registerVerticalInput.parse(input);
         const existing = readVertical(parsed.slug);

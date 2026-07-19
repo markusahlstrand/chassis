@@ -16,9 +16,11 @@ queue over runtime permission changes.
 §4.6's **staff access log** is decided (K-24) and not yet built — reads remain
 unaudited until it lands (#43).
 
-§4.7 decides the router and the hostname map (K-26); it is not yet built. Still
-unbuilt: hostname provisioning and the `hostname → (tenant, scope, vertical)` map
-(§4.2, §5.5); §5's meters; **capability-grant enumeration** — a grant is a tuple in the
+§4.7's **hostname map** is built — the directory data, its lifecycle and
+`resolveHostname`, in both adapters and under the shared contract suite. The **router
+worker** that reads it, and hostname *provisioning* (the Cloudflare for SaaS
+custom-hostnames API, DNS validation, cert issuance), are deployment work and still
+unbuilt. Also still unbuilt: §5's meters; **capability-grant enumeration** — a grant is a tuple in the
 scope's own database, so listing them needs §5.4's admin-query RPC, unlike roles which are
 directory-local (this is the sharpest remaining consequence of §7's "no back door into scope
 DBs"); and **four-eyes approval**, which §6 says the action list should settle — the action
@@ -345,6 +347,13 @@ env var. This is what #31 step 4 builds.
 **One router for the whole environment.** A kernel-owned worker resolves
 `hostname → (tenant, scope, vertical, surface, region)` from directory data and
 dispatches to the vertical's worker.
+
+The map half is built: `bindHostname` / `setHostnameStatus` / `listHostnames` on
+`HostAdmin`, and `resolveHostname` — which takes **no actor and is not logged**, the
+same machine-path carve-out `resolveIdentity` gets (K-24), because it runs once per
+request. It resolves only `active` bindings, and deliberately does **not** re-check
+suspension: `getScope` owns that, and a second enforcement point is a second thing
+that can disagree.
 
 Not one router per vertical: cert and DNS lifecycle in one place means a new
 vertical gets custom domains for free instead of repeating the Cloudflare for SaaS

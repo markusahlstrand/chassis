@@ -70,6 +70,19 @@ export interface ScopeRow {
   created_at: string;
 }
 
+export interface HostnameRow {
+  hostname: string;
+  tenant_id: string;
+  scope_id: string;
+  vertical_slug: string | null;
+  surface: string;
+  region: string | null;
+  status: string;
+  status_note: string | null;
+  canonical: number;
+  created_at: string;
+}
+
 export interface VerticalRow {
   slug: string;
   name: string;
@@ -194,6 +207,19 @@ const DIRECTORY_DDL = `
     migration_last_attempt_at TEXT,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS hostnames (
+    hostname      TEXT PRIMARY KEY,
+    tenant_id     TEXT NOT NULL,
+    scope_id      TEXT NOT NULL,
+    vertical_slug TEXT,
+    surface       TEXT NOT NULL,
+    region        TEXT,
+    status        TEXT NOT NULL,
+    status_note   TEXT,
+    canonical     INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS hostnames_scope ON hostnames (scope_id, surface);
   CREATE TABLE IF NOT EXISTS verticals (
     slug       TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
@@ -773,6 +799,54 @@ export class ControlPlaneDO extends DurableObject {
       object,
       expiresAt,
     );
+  }
+
+  // -- the hostname map (K-26) ------------------------------------------------
+
+  readHostname(hostname: string): HostnameRow | undefined {
+    return this.sql
+      .exec('SELECT * FROM hostnames WHERE hostname = ?', hostname)
+      .toArray()[0] as unknown as HostnameRow | undefined;
+  }
+
+  /** Demote any current canonical for this surface — exactly one may hold it. */
+  demoteCanonical(scopeId: string, surface: string): void {
+    this.sql.exec(
+      'UPDATE hostnames SET canonical = 0 WHERE scope_id = ? AND surface = ?',
+      scopeId, surface,
+    );
+  }
+
+  upsertHostname(h: {
+    hostname: string; tenantId: string; scopeId: string; verticalSlug: string | null;
+    surface: string; region: string | null; canonical: boolean; createdAt: string;
+  }): void {
+    this.sql.exec(
+      `INSERT OR REPLACE INTO hostnames
+         (hostname, tenant_id, scope_id, vertical_slug, surface, region,
+          status, status_note, canonical, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+      h.hostname, h.tenantId, h.scopeId, h.verticalSlug, h.surface, h.region,
+      h.canonical ? 1 : 0, h.createdAt,
+    );
+  }
+
+  setHostnameStatus(hostname: string, status: string, note: string | null): void {
+    this.sql.exec(
+      'UPDATE hostnames SET status = ?, status_note = ? WHERE hostname = ?',
+      status, note, hostname,
+    );
+  }
+
+  listHostnames(filter: { tenantId?: string; scopeId?: string }): HostnameRow[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.tenantId) { where.push('tenant_id = ?'); params.push(filter.tenantId); }
+    if (filter.scopeId) { where.push('scope_id = ?'); params.push(filter.scopeId); }
+    let sql = 'SELECT * FROM hostnames';
+    if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+    sql += ' ORDER BY hostname';
+    return this.sql.exec(sql, ...params).toArray() as unknown as HostnameRow[];
   }
 
   // -- vertical + version registry (#31) --------------------------------------
