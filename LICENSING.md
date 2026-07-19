@@ -11,7 +11,8 @@ ships the full text in its tarball.
 | `@substrat-run/kernel`, `@substrat-run/adapter-sqlite`, `@substrat-run/adapter-cloudflare`, `@substrat-run/contract-tests` | **AGPL-3.0-only** + commercial | The substrate itself. AGPL makes the self-host/escrow story real — you can always run the kernel yourself — while requiring that proprietary derivatives and hosted offerings either open their changes or hold a commercial license. |
 | `@substrat-run/control-plane-api` | **AGPL-3.0-only** + commercial | The audited admin surface over the kernel's `HostAdmin` — tenant registry, scope lifecycle, entitlements, the admin log. Same terms as the substrate, and the clearest case for AGPL rather than a permissive licence: it is served *over a network*, which is exactly what §13 is about. Self-hosting it is part of the escrow guarantee; running a modified one as a hosted offering means publishing the modifications or holding a commercial licence. |
 | `@substrat-run/engine-*` | **AGPL-3.0-only** + commercial | Engines are independently licensable modules; same terms as the kernel. |
-| `demos/*`, `apps/*` | Private, unpublished | Not licensed for distribution. |
+| `demos/*` (the templates: Callout, Handlebar, Meridian, RallyPoint, the shop) | **Apache-2.0** | Starting points, not products. A template is *copied* rather than imported, so it is the strongest case for the rule that governs `contracts`: building on Substrat must never copyleft-capture your application. Same tier and same patent grant. **They depend on AGPL engines** — the template is yours to do anything with, the platform it runs on is AGPL-or-commercial, and each template says so. Per the maturity ladder: fully mutable and fully unmaintained. |
+| `apps/*` | Private, unpublished | Not licensed for distribution. |
 
 ## What this means in practice
 
