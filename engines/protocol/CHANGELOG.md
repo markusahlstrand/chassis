@@ -1,5 +1,18 @@
 # @substrat-run/engine-protocol
 
+## 0.3.4
+
+### Patch Changes
+
+- 40bbbcb: English vocabulary on the published surface. The invoicing engine's permission
+  descriptions now read `Read invoice bases` / `Export an invoice basis (makes it
+immutable)` instead of naming the Swedish _fakturaunderlag_, and the protocol
+  engine's README says "self-inspection" rather than _egenkontroll_.
+
+  Permission **keys** are unchanged (`invoicing:read`, `invoicing:export`) — this is
+  description text only, so nothing to migrate. The engines' README keeps the Swedish
+  term as a parenthetical gloss where it documents the domain it was extracted from.
+
 ## 0.3.3
 
 ### Patch Changes
@@ -35,7 +48,7 @@
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-            z.object({ facility: entityRef, unitPrice: money })
+              z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is
