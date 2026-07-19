@@ -41,7 +41,7 @@ would consume.
 
 ```mermaid
 flowchart TB
-    V["Vertical<br/>Workers-for-Platforms user worker · TypeScript · AI-built"]
+    V["Vertical<br/>user worker we deploy · TypeScript · AI-built"]
     API["Kernel API surface<br/>getScope(tenantId, scopeId) → stub"]
     TR["Tenant-root DO<br/>directory · membership · entitlements"]
     S["Scope DO — one per scope<br/>ACL + data"]

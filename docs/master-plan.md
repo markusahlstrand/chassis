@@ -378,8 +378,11 @@ internals) or polyglot engines — additive, never a platform bet.
 adapters (`adapter-cloudflare`, `adapter-sqlite`), engines as manifest-carrying packages,
 the specs, the CLI (`substrat dev` = pure-SQLite composition locally, §5.7), skills + MCP
 server. Semver everywhere (§6); AGPL + commercial licensing (§9). Runtime distribution:
-hosted control plane; verticals deploy as Workers-for-Platforms user workers (the same
-mechanism §9 relies on for per-tenant cost attribution). The auth-platform packaging
+hosted control plane; verticals deploy as user workers we upload with our own
+credentials — ordinary Workers today, Workers-for-Platforms when script count or
+isolation demands it (D-34; the same mechanism §9 relies on for per-tenant cost
+attribution). WfP is verified to fit and is a paid add-on we have not bought, so it is
+the destination rather than the starting point. The auth-platform packaging
 playbook, applied deliberately.
 
 ## 6. Kernel components and build/buy
