@@ -81,11 +81,12 @@ interface AdminLogRow {
   id: string;
   actor: string;
   action: string;
-  tenant_id: string;
+  tenant_id: string | null;
   scope_id: string | null;
   vertical: string | null;
   before: string | null;
   after: string | null;
+  caused_by: string | null;
   at: string;
 }
 
@@ -109,6 +110,8 @@ export interface AdminEntryInput {
   action: string;
   /** Null for platform-level actions that target no tenant (K-23). */
   tenantId: string | null;
+  /** The event that caused this action, when one did (K-22 §4.2). */
+  causedBy?: string | null;
   scopeId: string | null;
   vertical: string | null;
   before: unknown;
@@ -207,6 +210,9 @@ const DIRECTORY_DDL = `
     vertical TEXT,
     before TEXT,
     after TEXT,
+    -- The event that caused this action, when one did (K-22 §4.2) — the join
+    -- between the connector seam's emit half and its effect half.
+    caused_by TEXT,
     at TEXT NOT NULL
   );
   -- Read-path indexes for the console (control-plane.md §4.5). The admin log is
@@ -344,6 +350,7 @@ export class ControlPlaneDO extends DurableObject {
     }
     // K-21's tombstone on tenant-level tuples (membership lives here).
     this.addColumn('_substrat_tenant_tuples', 'revoked_at TEXT');
+    this.addColumn('_substrat_admin_log', 'caused_by TEXT');
     this.sql.exec("UPDATE scopes SET slug = lower(scope_id) WHERE slug IS NULL");
     this.sql.exec("UPDATE scopes SET kind = 'scope' WHERE kind IS NULL");
     this.sql.exec('UPDATE scopes SET name = slug WHERE name IS NULL');
@@ -947,8 +954,8 @@ export class ControlPlaneDO extends DurableObject {
   recordAdmin(entry: AdminEntryInput): void {
     this.sql.exec(
       `INSERT INTO _substrat_admin_log
-         (id, actor, action, tenant_id, scope_id, vertical, before, after, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, actor, action, tenant_id, scope_id, vertical, before, after, caused_by, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       entry.id,
       entry.actor,
       entry.action,
@@ -957,6 +964,7 @@ export class ControlPlaneDO extends DurableObject {
       entry.vertical,
       entry.before == null ? null : JSON.stringify(entry.before),
       entry.after == null ? null : JSON.stringify(entry.after),
+      entry.causedBy ?? null,
       entry.at,
     );
   }
@@ -1015,6 +1023,7 @@ export class ControlPlaneDO extends DurableObject {
           vertical: r.vertical,
           before: r.before === null ? null : JSON.parse(r.before),
           after: r.after === null ? null : JSON.parse(r.after),
+          causedBy: r.caused_by,
           at: r.at,
         }) as AdminLogEntry,
     );

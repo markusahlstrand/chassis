@@ -3,6 +3,7 @@ export type { ScopeHostFixture, ScopeHostSuiteOptions } from './scope-host-suite
 export { permissionContractSuite } from './permission-suite.js';
 export {
   brokenMod,
+  connectorMod,
   contractTestBareOps,
   contractTestInitialModules,
   contractTestModules,

@@ -385,6 +385,42 @@ export function defineScopeDO(
       return true;
     }
 
+    /**
+     * Events of `eventType` this delivery target has not yet consumed (K-22 §4.2).
+     *
+     * Executors run on the COORDINATOR, not here: they act through `HostAdmin`,
+     * which is outside this DO. So the drain is a read here, the effect happens
+     * there, and `markExecutorDelivered` journals it afterwards — claiming before
+     * running would make delivery at-most-once and lose an effect on any crash in
+     * between.
+     */
+    pendingExecutorEvents(deliveryId: string, eventType: string): DomainEvent[] {
+      const rows = this.sql
+        .exec(
+          `SELECT * FROM _substrat_outbox o
+           WHERE o.type = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM _substrat_deliveries d
+               WHERE d.event_id = o.id AND d.consumer_module = ?
+             )
+           ORDER BY o.id`,
+          eventType,
+          deliveryId,
+        )
+        .toArray() as unknown as OutboxRow[];
+      return rows.map((r) => this.parseOutboxRow(r));
+    }
+
+    /** Journal an executor delivery — after the effect, so retry is the failure mode. */
+    markExecutorDelivered(eventId: string, deliveryId: string): void {
+      this.sql.exec(
+        'INSERT OR IGNORE INTO _substrat_deliveries (event_id, consumer_module, delivered_at) VALUES (?, ?, ?)',
+        eventId,
+        deliveryId,
+        new Date().toISOString(),
+      );
+    }
+
     // -- event dispatch (port of dispatch) ------------------------------------
 
     private async dispatch(tenantId: TenantId, scopeId: ScopeId): Promise<void> {

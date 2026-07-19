@@ -1,6 +1,7 @@
 export type {
   AuditLogFilter,
   ConsumerHandler,
+  ExecutorHandler,
   GuardPredicate,
   HostAdmin,
   ModuleRegistration,

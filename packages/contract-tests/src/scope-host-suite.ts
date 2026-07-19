@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   moduleManifest,
+  orgId,
   platformActorId,
   principalId,
   scopeId,
   tenantId,
+  type OrgId,
   type PrincipalId,
+  type TenantId,
 } from '@substrat-run/contracts';
 import { ulid, type OperationHandler, type ScopeHost } from '@substrat-run/kernel';
 import {
@@ -86,12 +89,25 @@ export function scopeHostContractSuite(
         host.registerModule(reg);
       }
 
+      // The connector seam's out-of-band half (K-22 §4.2). Host code, not module
+      // code: it holds platform authority, which is exactly what a module must
+      // never have. Idempotent because delivery is at-least-once.
+      host.registerExecutor('member-adder', 'member.add-requested', async (admin, event) => {
+        const p = event.payload as { principal: string; orgId: string; tenantId: string };
+        await admin.addMember(
+          staff,
+          p.tenantId as TenantId,
+          p.principal as PrincipalId,
+          p.orgId as OrgId,
+        );
+      });
+
       // A scope requires an existing active tenant (§4.1) — create then provision.
       await host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
       await host.admin.createTenant(staff, { id: t2, slug: 'tenant-two', name: 'Tenant Two' });
       // Entitlements are default-deny (§4.3): t1 invokes these modules' operations,
       // so it must hold their SKU flags. (t2 only exercises bare, ungated ops.)
-      for (const key of ['testmod', 'flow', 'guarded', 'victim', 'late']) {
+      for (const key of ['testmod', 'flow', 'guarded', 'victim', 'late', 'connector']) {
         await host.admin.grantEntitlement(staff, t1, key);
       }
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
@@ -211,6 +227,74 @@ export function scopeHostContractSuite(
         expect(journal).toContainEqual({ module_id: '@test/late', version: '0001-init' });
       },
     );
+
+    // -- the connector seam (K-22 §4.2) --------------------------------------
+    // A module asks, inside its transaction, for an effect it cannot perform:
+    // membership is tenant-wide and lives in the directory, outside this scope's
+    // serialization domain. A privileged executor effects it through HostAdmin.
+
+    it('effects a module\'s request through an executor, and correlates the trail', async () => {
+      const org = orgId.parse(ulid());
+      const joiner = principalId.parse(ulid());
+      await host.admin.createOrg(staff, { id: org, tenantId: t1, slug: 'seam', name: 'Seam' });
+
+      const stub = await host.getScope(alice, t1, s1);
+      await stub.invoke('connector/request-member', { principal: joiner, orgId: org });
+
+      // Prompt dispatch: effected by the time the request returns, not on a timer.
+      const members = await host.admin.listMembers(t1, org);
+      expect(members.map((m) => m.principal)).toEqual([joiner]);
+
+      // The two halves join. The executor's admin row carries the id of the event
+      // that caused it, which is what stops the split trail being unreadable —
+      // control-plane.md §3 named that as the main cost of this pattern.
+      const added = (await host.admin.auditLog({ tenantId: t1 })).find(
+        (e) => e.action === 'addMember' && JSON.stringify(e.after).includes(joiner),
+      );
+      expect(added?.causedBy).toEqual(expect.any(String));
+
+      // A staff member acting directly caused nothing but themselves.
+      const orgRow = (await host.admin.auditLog({ tenantId: t1 })).find(
+        (e) => e.action === 'createOrg',
+      );
+      expect(orgRow?.causedBy).toBeNull();
+    });
+
+    it('effects nothing when the emitting transaction rolls back', async () => {
+      // The property the connector is chosen FOR. `ctx.emit` commits with the
+      // domain write, so a rollback leaves no event and nothing to effect. An
+      // in-scope cross-DO write could not offer this: it could land in the
+      // directory and then be orphaned by the scope's rollback.
+      const org = orgId.parse(ulid());
+      const ghost = principalId.parse(ulid());
+      await host.admin.createOrg(staff, { id: org, tenantId: t1, slug: 'ghost', name: 'Ghost' });
+
+      const stub = await host.getScope(alice, t1, s1);
+      await expect(
+        stub.invoke('connector/request-and-throw', { principal: ghost, orgId: org }),
+      ).rejects.toThrow(/deliberate failure/);
+
+      expect(await host.admin.listMembers(t1, org)).toEqual([]);
+    });
+
+    it('delivers each event to an executor exactly once', async () => {
+      // At-least-once with a journal, so a second dispatch pass must not re-effect.
+      // Membership is idempotent anyway; the audit trail is what would show a
+      // double-run, and it must not.
+      const org = orgId.parse(ulid());
+      const once = principalId.parse(ulid());
+      await host.admin.createOrg(staff, { id: org, tenantId: t1, slug: 'once', name: 'Once' });
+
+      const stub = await host.getScope(alice, t1, s1);
+      await stub.invoke('connector/request-member', { principal: once, orgId: org });
+      // Another operation on the same scope drains the outbox again.
+      await stub.invoke('connector/requests');
+
+      const rows = (await host.admin.auditLog({ tenantId: t1 })).filter(
+        (e) => e.action === 'addMember' && JSON.stringify(e.after).includes(once),
+      );
+      expect(rows).toHaveLength(1);
+    });
 
     it('rejects duplicate module registration', () => {
       expect(() => host.registerModule({ manifest: testModManifest })).toThrow(/already registered/);
