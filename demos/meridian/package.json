@@ -3,7 +3,7 @@
   "version": "0.0.2",
   "private": true,
   "license": "Apache-2.0",
-  "description": "HR demo vertical (Meridian) — see spec/concept.md",
+  "description": "HR demo vertical (Meridian) \u2014 see spec/concept.md",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -18,7 +18,9 @@
     "@substrat-run/kernel": "workspace:^",
     "@hono/node-server": "^1.13.0",
     "hono": "^4.6.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "better-auth": "^1.6.23",
+    "better-sqlite3": "^12.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

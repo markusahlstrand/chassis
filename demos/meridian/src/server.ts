@@ -4,8 +4,15 @@ import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { PermissionDenied, type ScopeStub } from '@substrat-run/kernel';
-import type { PrincipalId, ScopeId, TenantId } from '@substrat-run/contracts';
+import Database from 'better-sqlite3';
+import { PermissionDenied, ulid, type ScopeStub } from '@substrat-run/kernel';
+import { buildAuthNode, migrateAuth } from './auth-node.js';
+import {
+  devHeaderAdapter,
+  resolvePrincipal,
+  type AuthAdapter,
+} from './auth-adapters.js';
+import { platformActorId, type PrincipalId, type ScopeId, type TenantId } from '@substrat-run/contracts';
 import { buildDemoHost, seedDemo, type DemoWorld } from './index.js';
 
 /**
@@ -34,6 +41,12 @@ const WEB_PORT = Number(process.env.WEB_PORT ?? 5275);
 const host = buildDemoHost(dataDir);
 const world: DemoWorld = await seedDemo(host, dataDir);
 
+const auth = buildAuthNode(dataDir, `http://localhost:${PORT}`, [
+  `http://localhost:${PORT}`,
+  `http://localhost:${WEB_PORT}`,
+]);
+await migrateAuth(auth);
+
 interface Persona {
   key: string;
   display: string;
@@ -54,27 +67,55 @@ const CAST: Persona[] = [
   { key: 'mallory', display: 'Mallory (other company!)', role: 'attacker', country: 'SE', principal: world.mallory, tenantId: world.t2, scopeId: world.s2, employeeId: null },
 ];
 
-/** Off unless explicitly opted in. A template must not impersonate by default. */
-const ALLOW_DEV_HEADER = process.env.ALLOW_DEV_HEADER === 'true';
+/**
+ * Real auth first; the dev header only if explicitly opted in.
+ *
+ * A template teaches by example, so the example is a session — not a header that
+ * names whoever it likes. The header stays for local iteration and stays OFF by
+ * default, because a copied template inherits its defaults.
+ *
+ * Meridian's personas each carry their own (tenant, scope) — there is a second
+ * company for the cross-tenant beat — so resolution walks the cast to find whose
+ * principal a session maps to. A login unknown to every company resolves to
+ * nobody, and reads the same as unauthenticated.
+ */
+const adapters: AuthAdapter[] = [];
+if (process.env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter());
 
-function persona(c: Context): Persona {
-  if (!ALLOW_DEV_HEADER) {
-    throw new PermissionDenied(
-      'dev header auth is disabled — set ALLOW_DEV_HEADER=true for local development, ' +
-        'or mount a real auth adapter before exposing this on any network surface',
-    );
+async function persona(c: Context): Promise<Persona> {
+  const headers = c.req.raw.headers;
+  const session = await sessionPersona(headers);
+  if (session) return session;
+
+  const viaAdapters = await resolvePrincipal(adapters, headers);
+  if (viaAdapters) {
+    const found = CAST.find((p) => p.principal === viaAdapters.principal);
+    if (found) return found;
   }
-  const key = c.req.header('x-principal');
-  // No default persona. Falling back to a real employee when the header is absent
-  // means an unauthenticated request is served as SOMEONE — the failure mode is
-  // silent, and it is exactly what a copied template would inherit.
-  if (!key) throw new PermissionDenied('missing x-principal header');
-  const found = CAST.find((p) => p.key === key);
-  if (!found) throw new PermissionDenied(`unknown persona '${key}'`);
-  return found;
+  // The dev header may also name a persona KEY, which is what the app's picker
+  // sends. Kept because it is the ergonomic half of the demo, and gated with the
+  // rest of the header.
+  if (process.env.ALLOW_DEV_HEADER === 'true') {
+    const key = headers.get('x-principal');
+    const byKey = key ? CAST.find((p) => p.key === key) : undefined;
+    if (byKey) return byKey;
+  }
+  throw new PermissionDenied('not authenticated');
 }
+
+/** A Better Auth session → the persona that login is bound to, in whichever company. */
+async function sessionPersona(headers: Headers): Promise<Persona | null> {
+  const s = await auth.api.getSession({ headers });
+  if (!s?.user) return null;
+  for (const p of CAST) {
+    const mapped = await host.admin.resolveIdentity(p.tenantId, 'better-auth', s.user.id);
+    if (mapped && mapped.principal === p.principal) return p;
+  }
+  return null;
+}
+
 async function stub(c: Context): Promise<ScopeStub> {
-  const p = persona(c);
+  const p = await persona(c);
   return host.getScope(p.principal, p.tenantId, p.scopeId);
 }
 
@@ -93,8 +134,8 @@ app.onError((err, c) => {
 app.get('/api/cast', (c) =>
   c.json(CAST.map(({ key, display, role, country, employeeId }) => ({ key, display, role, country, employeeId }))),
 );
-app.get('/api/me', (c) => {
-  const p = persona(c);
+app.get('/api/me', async (c) => {
+  const p = await persona(c);
   return c.json({ key: p.key, display: p.display, role: p.role, country: p.country, employeeId: p.employeeId });
 });
 
@@ -105,7 +146,53 @@ app.post('/api/invoke', async (c) => {
   return c.json((await (await stub(c)).invoke(op, input)) ?? null);
 });
 
+// Better Auth owns /api/auth/*. Mounted last so it cannot shadow a demo route.
+app.on(['GET', 'POST'], '/api/auth/*', (c) => auth.handler(c.req.raw));
+
+await seedPersonaLogins();
+
 serve({ fetch: app.fetch, port: PORT });
 console.log(`\n  Meridian (HR) demo API  http://localhost:${PORT}`);
 console.log(`  employee app            http://localhost:${WEB_PORT}`);
 console.log(`  data                    ${dataDir}\n`);
+
+/**
+ * Demo logins for the cast, so the template runs with a real session out of the
+ * box rather than only with the dev header.
+ *
+ * Idempotent on both sides: sign-up throws when the email exists, in which case
+ * the id is read back, and an already-linked identity is skipped. The two stores
+ * have independent lifecycles, so neither may assume the other is empty.
+ */
+async function seedPersonaLogins(): Promise<void> {
+  const staff = platformActorId.parse(ulid());
+  const db = new Database(join(dataDir, 'better-auth.sqlite'), { readonly: true });
+  try {
+    for (const p of CAST) {
+      const email = `${p.key}@meridian.test`;
+      let externalId: string | undefined;
+      try {
+        externalId = (
+          await auth.api.signUpEmail({
+            body: { email, password: 'meridian-demo', name: p.display },
+          })
+        ).user.id;
+      } catch {
+        externalId = (db.prepare('SELECT id FROM user WHERE email = ?').get(email) as
+          | { id: string }
+          | undefined)?.id;
+      }
+      if (!externalId) continue;
+      if (await host.admin.resolveIdentity(p.tenantId, 'better-auth', externalId)) continue;
+      await host.admin.linkIdentity(staff, {
+        provider: 'better-auth',
+        externalId,
+        principal: p.principal,
+        tenantId: p.tenantId,
+        scopeId: p.scopeId,
+      });
+    }
+  } finally {
+    db.close();
+  }
+}
