@@ -13,6 +13,9 @@ surface over `HostAdmin` (§4.5), and `apps/console` is the console: tenants, th
 directory, lifecycle, entitlements, the admin log with before/after diffs, and the review
 queue over runtime permission changes.
 
+§4.6's **staff access log** is decided (K-24) and not yet built — reads remain
+unaudited until it lands (#43).
+
 Still unbuilt: hostname provisioning and the `hostname → (tenant, scope, vertical)` map
 (§4.2, §5.5); §5's meters; **capability-grant enumeration** — a grant is a tuple in the
 scope's own database, so listing them needs §5.4's admin-query RPC, unlike roles which are
@@ -272,6 +275,65 @@ console adds is the surface for permission state that *only exists at runtime* �
 Plan §6 already lists the ops console as **build, internal first** — registry/tenant health,
 migration and reconciliation status, billing state, and consented, audited support
 impersonation. This is that line item.
+
+### 4.6 The staff access log (K-24)
+
+§4.4 records who **changed** the directory. It does not record who **read** it, and
+until #42 there was no point: every operator shared one actor, so a read log would have
+said "someone" four thousand times.
+
+With per-person actors real, reads get their own log — `_substrat_access_log`, holding
+actor, method, the tenant/scope asked about, a bounded parameter summary, and the
+**result count**.
+
+**Where it lives:** the directory, in the ControlPlaneDO's own SQLite, beside the admin
+log — the same store, because it is the same kind of fact about the same data. Not D1
+(that is Better Auth's store and the staff roster, an app concern), and not the outbox
+(that is per-scope, for domain events).
+
+**Why not in the admin log:**
+
+| | admin log | access log |
+|---|---|---|
+| records | mutations | reads |
+| is | permanent evidence | operational history |
+| lifetime | append-only, forever | drains to Tier 2, then prunes |
+
+One table would force one retention policy on both. The stricter would win, so read
+noise would be kept forever *and* would bury the mutation rows an auditor came for.
+
+**All reads, not a curated subset.** "Who enumerated every tenant" is what an incident
+asks, and a subset decides in advance which reads will not matter. Reading the access
+log is itself logged.
+
+`result_count` is what makes a row worth keeping. *"Called listScopes"* is navigation;
+*"enumerated 4,000 tenants"* is an incident, and only the count tells them apart.
+
+#### Hot storage is not retention
+
+The log ships with a **`drained_at` marker**, and only drained rows are pruned.
+
+Pruning purely on age would destroy evidence while calling itself a retention policy —
+if the window is 90 days and an auditor asks about March, the answer is gone. That is
+the failure K-21 rejected for tuples, one layer up.
+
+So the DO window bounds **storage**, and the record's **lifetime** belongs to Tier 2.
+The precedent is the outbox, which carries `drained_at` for exactly this reason (§5's
+meters note it is written nowhere yet — the column exists ahead of the sink, which is
+the point).
+
+**Until the Tier-2 sink exists, the window *is* the retention.** That is a stated
+limitation of this design, not a policy anyone chose, and it is the thing to fix first
+if a compliance commitment needs longer.
+
+**Volume is not the pressure.** These are staff reads — a handful of operators, thousands
+of rows a day rather than millions, which a singleton DO absorbs comfortably. The
+pressure is **duration**: an append-only log with no drain grows forever in a store that
+cannot be sharded. That argues for the marker, not against the DO.
+
+**The §7 bound stays.** There is no admin-query RPC into scope databases, so this covers
+directory metadata and never tenant business data. The exposure being closed is the
+directory — adding logging must not be the moment that limit quietly widens.
 
 ## 5. Billing: meter, do not bill
 
