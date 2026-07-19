@@ -37,8 +37,8 @@ It is interesting for four reasons the other demos can't show:
 |---|---|
 | **Package** | `demos/rally` (private) |
 | **Tenancy shape** | 2 tenants — RallyPoint AB (Solna + Nacka scopes) · Padelcenter Väst AB (the cross-tenant attack victim) |
-| **Engines composed** | [`booking`](/engines/booking/) · [`invoicing`](/engines/invoicing/) |
-| **Own tables** | `rally_venue` · `rally_members` · `rally_wallet_entries` (append-only) · `rally_credit_packs` · `rally_plans` · `rally_subscriptions` · `rally_courts` · `rally_venue_hours` · `rally_court_hours` · `rally_closures` · `rally_price_rules` · `rally_bookings` · `rally_matches` |
+| **Engines composed** | [`booking`](/engines/booking/) · [`invoicing`](/engines/invoicing/) · [`invites`](/engines/invites/) |
+| **Own tables** | `rally_venue` · `rally_members` · `rally_wallet_entries` (append-only) · `rally_credit_packs` · `rally_plans` · `rally_subscriptions` · `rally_courts` · `rally_venue_hours` · `rally_court_hours` · `rally_closures` · `rally_price_rules` · `rally_bookings` · `rally_matches` · `rally_invited_player` |
 | **Roles** | `club-admin` (tenant) · `receptionist` / `coach` (scope) — players are grants, not a role |
 | **Permission surface** | [`PERMISSIONS.md`](https://github.com/substrat-run/substrat/blob/main/demos/rally/PERMISSIONS.md) — 15 keys, 3 roles |
 | **Apps** | player (mobile, `:5277`) · manager console (desktop, `:5278`) over one API (`:8877`) |
@@ -61,6 +61,35 @@ rally/book-court
 
 A vertical that checked for a clash first would be doing it wrong — it cannot do so
 correctly, and the engine already does.
+
+### `invites` — joining the club
+
+Clubs are **tenants** here, so joining one is a kernel membership, not a row the vertical
+can write. `rally/invite-player` composes the engine; accepting produces two records with
+two owners:
+
+```
+rally/invite-player
+  ├── ENGINE:   sendInvite(…)          ← stores a HASH, never the address
+  └── vertical: remember the name and party ref, keyed by the invitation id
+
+player accepts
+  ├── ENGINE:   emits member.add-requested   ← it cannot write the directory
+  ├── EXECUTOR: admin.addMember(…)           ← the kernel membership
+  └── vertical: creates the rally_members row on invites.accepted
+```
+
+The kernel tuple says *this principal belongs to this club*. `rally_members` says what a
+club knows — name, level, wallet. Neither can own the other: one is tenant-wide directory
+state, the other is per-venue scope data.
+
+Two things this vertical has to get right, and both are easy to miss:
+
+- **Re-inviting must not fail.** The engine returns the *same* invitation id for someone
+  already invited, because it refuses to reveal that they are. A plain `INSERT` on the
+  side table would fail on the primary key and leak exactly the fact the engine hides.
+- **The consumer must be idempotent.** Delivery is at-least-once, and a second member row
+  would give one human two wallets at the same club.
 
 ### The orchestration moment: paying from a balance
 
