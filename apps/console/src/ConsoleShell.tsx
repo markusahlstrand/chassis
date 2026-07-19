@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Breadcrumbs, IconButton, SideNav, SubIcon, SubIcons } from './components';
 import type { BreadcrumbItem } from './components';
 
-export type ViewKey = 'tenants' | 'scopes' | 'admin-log' | 'permissions';
+export type ViewKey = 'tenants' | 'scopes' | 'domains' | 'admin-log' | 'permissions';
 
 /**
  * The nav items with nothing behind them, rendered dead on purpose.
@@ -16,7 +16,6 @@ export type ViewKey = 'tenants' | 'scopes' | 'admin-log' | 'permissions';
 const PLANNED = [
   { label: 'Members', icon: SubIcons.users, dep: 'Needs principal & grant enumeration — permission writes are one-way today' },
   { label: 'Engines', icon: SubIcons.box, dep: 'Needs a per-vertical deployment/version registry' },
-  { label: 'Domains', icon: SubIcons.globe, dep: 'Custom hostname map — not yet built' },
 ] as const;
 
 export interface ConsoleShellProps {
@@ -26,6 +25,7 @@ export interface ConsoleShellProps {
   crumbs: BreadcrumbItem[];
   tenantCount?: number;
   scopeCount?: number;
+  hostnameCount?: number;
   /** The signed-in staff identity shown in the footer (session mode). */
   identityLabel?: string;
   /** When set, the footer offers sign-out (session mode). */
@@ -40,6 +40,7 @@ export function ConsoleShell({
   crumbs,
   tenantCount,
   scopeCount,
+  hostnameCount,
   identityLabel,
   onSignOut,
   children,
@@ -76,6 +77,7 @@ export function ConsoleShell({
             items: [
               { value: 'tenants', label: 'Tenants', icon: <SubIcon d={SubIcons.users} />, count: tenantCount },
               { value: 'scopes', label: 'Scopes', icon: <SubIcon d={SubIcons.layers} />, count: scopeCount },
+              { value: 'domains', label: 'Domains', icon: <SubIcon d={SubIcons.globe} />, count: hostnameCount },
               { value: 'admin-log', label: 'Admin log', icon: <SubIcon d={SubIcons.scroll} /> },
               { value: 'permissions', label: 'Permissions', icon: <SubIcon d={SubIcons.cog} /> },
             ],

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Scope, Tenant, TenantId } from '@substrat-run/contracts';
+import type { HostnameBinding, Scope, Tenant, TenantId } from '@substrat-run/contracts';
 import { Badge, Button, Card, KeyValue, Table, Tabs, Tag } from '../components';
 import type { TableColumn } from '../components';
 import {
@@ -19,6 +19,7 @@ export interface ScopesProps {
   scopes: Scope[];
   tenants: Map<TenantId, Tenant>;
   entitlements: Map<TenantId, string[]>;
+  hostnames: HostnameBinding[];
   onChanged: () => void;
   onToast: (title: string, detail?: string, status?: 'success' | 'danger') => void;
 }
@@ -53,7 +54,7 @@ function Stat({ label, value, meta }: { label: string; value: string | number; m
   );
 }
 
-export function Scopes({ api, scopes, tenants, entitlements, onChanged, onToast }: ScopesProps) {
+export function Scopes({ api, scopes, tenants, entitlements, hostnames, onChanged, onToast }: ScopesProps) {
   const [tab, setTab] = useState('all');
   const [selected, setSelected] = useState<Scope>();
 
@@ -172,9 +173,9 @@ export function Scopes({ api, scopes, tenants, entitlements, onChanged, onToast 
           description={`Scope detail — ${scopeHandle(selected, tenants)}`}
           actions={
             <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-              {portalUrl(selected) && (
+              {portalUrl(selected, hostnames) && (
                 <a
-                  href={portalUrl(selected)!}
+                  href={portalUrl(selected, hostnames)!}
                   target="_blank"
                   rel="noreferrer"
                   style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--brand-700)', textDecoration: 'none', marginRight: 4 }}

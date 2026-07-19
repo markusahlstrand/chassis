@@ -18,10 +18,12 @@ unaudited until it lands (#43).
 
 §4.7's **hostname map and router** are built: the directory data and its lifecycle in
 both adapters, and `apps/router` — the environment-wide worker that resolves a hostname
-and dispatches over a service binding. Hostname **provisioning** (the Cloudflare for SaaS
-custom-hostnames API, DNS validation, cert issuance) is still unbuilt, so bindings are
-set `active` by hand today; a wildcard under a domain we control is enough to demo
-without it. Also still unbuilt: §5's meters; **capability-grant enumeration** — a grant is a tuple in the
+and dispatches over a service binding. The three staff actions are on the audited HTTP surface and in
+the console's **Domains** view, and the console's per-scope portal link now reads the
+scope's canonical hostname instead of a `VITE_PORTAL_BASE` env var. Hostname
+**provisioning** (the Cloudflare for SaaS custom-hostnames API, DNS validation, cert
+issuance) is still unbuilt, so bindings are set `active` by hand; a wildcard under a
+domain we control is enough to demo without it. Also still unbuilt: §5's meters; **capability-grant enumeration** — a grant is a tuple in the
 scope's own database, so listing them needs §5.4's admin-query RPC, unlike roles which are
 directory-local (this is the sharpest remaining consequence of §7's "no back door into scope
 DBs"); and **four-eyes approval**, which §6 says the action list should settle — the action

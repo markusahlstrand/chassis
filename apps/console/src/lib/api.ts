@@ -1,6 +1,8 @@
 import type {
   AdminAction,
   AdminLogEntry,
+  HostnameBinding,
+  HostnameStatus,
   Scope,
   ScopeId,
   ScopeStatus,
@@ -128,6 +130,24 @@ export function createApi(actor: string | null, baseUrl = '/api') {
     // Read only — there is no route that writes a role, by design.
     listRoles: (filter?: { tenantId?: TenantId; source?: string }) =>
       call<TenantRole[]>(`/roles${query({ ...filter })}`),
+
+    // The hostname map (§4.7). `resolveHostname` is absent on purpose — that is the
+    // router's per-request path, not a staff action, and it is not on this surface.
+    listHostnames: (filter?: { tenantId?: TenantId; scopeId?: ScopeId }) =>
+      call<HostnameBinding[]>(`/hostnames${query({ ...filter })}`),
+    bindHostname: (input: {
+      hostname: string;
+      tenantId: TenantId;
+      scopeId: ScopeId;
+      surface: string;
+      region?: 'eu' | null;
+      canonical?: boolean;
+    }) => post<HostnameBinding>('/hostnames', input),
+    setHostnameStatus: (hostname: string, status: HostnameStatus, note?: string) =>
+      call<HostnameBinding>(`/hostnames/${encodeURIComponent(hostname)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, note }),
+      }),
 
     adminLog: (q: AuditLogQuery = {}) => call<AdminLogPage>(`/admin-log${query({ ...q })}`),
   };
