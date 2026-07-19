@@ -111,11 +111,11 @@ export function betterAuthAdapter(auth: SessionAuth, host: ScopeHost, node: Demo
       if (!session?.user) return null;
       const user = session.user;
       const mapped =
-        (await host.admin.resolveIdentity('better-auth', user.id)) ??
+        (await host.admin.resolveIdentity(node.tenantId, 'better-auth', user.id)) ??
         (await provisionTechnician(host, node, user));
       return {
         principal: mapped.principal,
-        tenantId: mapped.tenantId,
+        tenantId: node.tenantId,
         scopeId: mapped.scopeId ?? node.scopeId,
         via: 'better-auth',
         display: user.name ?? user.email ?? 'användare',
@@ -135,7 +135,7 @@ async function provisionTechnician(
   host: ScopeHost,
   node: DemoNode,
   user: { id: string; email?: string | null; name?: string | null },
-): Promise<{ principal: PrincipalId; tenantId: TenantId; scopeId: ScopeId | null }> {
+): Promise<{ principal: PrincipalId; scopeId: ScopeId | null }> {
   const staff = platformActorId.parse(ulid());
   const principal = principalId.parse(ulid());
 
@@ -152,7 +152,7 @@ async function provisionTechnician(
     scopeId: node.scopeId,
   });
 
-  return { principal, tenantId: node.tenantId, scopeId: node.scopeId };
+  return { principal, scopeId: node.scopeId };
 }
 
 /** Resolve a request to a principal across all mounted adapters; null if none match. */

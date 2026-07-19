@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -36,18 +37,17 @@ describe('control-plane identity mapping', () => {
       tenantId: t,
       scopeId: s,
     });
-    expect(await host.admin.resolveIdentity('better-auth', 'ba-user-123')).toEqual({
+    expect(await host.admin.resolveIdentity(t, 'better-auth', 'ba-user-123')).toEqual({
       principal: elin,
-      tenantId: t,
       scopeId: s,
     });
   });
 
   it('resolves an unknown identity to undefined', async () => {
-    expect(await host.admin.resolveIdentity('better-auth', 'nope')).toBeUndefined();
+    expect(await host.admin.resolveIdentity(t, 'better-auth', 'nope')).toBeUndefined();
   });
 
-  it('is idempotent on (provider, externalId) — re-linking is a no-op, not audited twice', async () => {
+  it('is idempotent on (tenantId, provider, externalId) — re-linking is a no-op, not audited twice', async () => {
     await host.admin.linkIdentity(staff, {
       provider: 'better-auth',
       externalId: 'ba-user-123',
@@ -72,9 +72,9 @@ describe('control-plane identity mapping', () => {
       scopeId: s,
     });
     expect(
-      (await host.admin.resolveIdentity('oidc:https://authhero.example', 'ba-user-123'))?.principal,
+      (await host.admin.resolveIdentity(t, 'oidc:https://authhero.example', 'ba-user-123'))?.principal,
     ).toBe(otto);
-    expect((await host.admin.resolveIdentity('better-auth', 'ba-user-123'))?.principal).toBe(elin);
+    expect((await host.admin.resolveIdentity(t, 'better-auth', 'ba-user-123'))?.principal).toBe(elin);
   });
 
   it('supports a tenant-level home (no scope) — resolves scopeId to null', async () => {
@@ -85,9 +85,8 @@ describe('control-plane identity mapping', () => {
       principal: staffUser,
       tenantId: t,
     });
-    expect(await host.admin.resolveIdentity('better-auth', 'ba-admin-1')).toEqual({
+    expect(await host.admin.resolveIdentity(t, 'better-auth', 'ba-admin-1')).toEqual({
       principal: staffUser,
-      tenantId: t,
       scopeId: null,
     });
   });
@@ -95,6 +94,85 @@ describe('control-plane identity mapping', () => {
   it('persists across a reopen of the directory', async () => {
     await host.close();
     host = new SqliteScopeHost({ dir });
-    expect((await host.admin.resolveIdentity('better-auth', 'ba-user-123'))?.principal).toBe(elin);
+    expect((await host.admin.resolveIdentity(t, 'better-auth', 'ba-user-123'))?.principal).toBe(elin);
+  });
+});
+
+/**
+ * The pre-K-22 directory carried `PRIMARY KEY (provider, external_id)`. A PK cannot be
+ * ALTERed, so opening such a directory rebuilds the table. This is the half the shared
+ * contract suite cannot reach — it only ever sees freshly created stores.
+ */
+describe('identity key migration from the pre-K-22 shape', () => {
+  let dir: string;
+  const staff = platformActorId.parse(ulid());
+  const t = tenantId.parse(ulid());
+  const legacy = principalId.parse(ulid());
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'substrat-idmigrate-'));
+    // Hand-build a directory in the OLD shape, with a row in it.
+    const db = new Database(join(dir, '_directory.sqlite'));
+    db.exec(`
+      CREATE TABLE _substrat_identities (
+        provider     TEXT NOT NULL,
+        external_id  TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        tenant_id    TEXT NOT NULL,
+        scope_id     TEXT,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (provider, external_id)
+      );
+    `);
+    db.prepare(
+      `INSERT INTO _substrat_identities
+         (provider, external_id, principal_id, tenant_id, scope_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('oidc:legacy', 'user-1', legacy, t, null, new Date().toISOString());
+    db.close();
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rebuilds the table and preserves existing rows', async () => {
+    const host = new SqliteScopeHost({ dir });
+    try {
+      await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+      // The pre-existing binding still resolves — the copy is lossless.
+      expect((await host.admin.resolveIdentity(t, 'oidc:legacy', 'user-1'))?.principal).toBe(legacy);
+
+      // And the key is now tenant-scoped: a second tenant may reuse the same
+      // externalId, which the old PK made impossible.
+      const other = tenantId.parse(ulid());
+      const otherPrincipal = principalId.parse(ulid());
+      await host.admin.createTenant(staff, {
+        id: other,
+        slug: `o-${other.toLowerCase()}`,
+        name: 'O',
+      });
+      await host.admin.linkIdentity(staff, {
+        provider: 'oidc:legacy',
+        externalId: 'user-1',
+        principal: otherPrincipal,
+        tenantId: other,
+      });
+      expect((await host.admin.resolveIdentity(other, 'oidc:legacy', 'user-1'))?.principal).toBe(
+        otherPrincipal,
+      );
+      expect((await host.admin.resolveIdentity(t, 'oidc:legacy', 'user-1'))?.principal).toBe(legacy);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it('is a no-op on a directory already in the new shape', async () => {
+    const host = new SqliteScopeHost({ dir });
+    try {
+      expect((await host.admin.resolveIdentity(t, 'oidc:legacy', 'user-1'))?.principal).toBe(legacy);
+    } finally {
+      await host.close();
+    }
   });
 });

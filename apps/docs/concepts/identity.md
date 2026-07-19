@@ -34,13 +34,26 @@ _substrat_identities (
 exposed on the host admin as two methods:
 
 ```ts
-linkIdentity(actor, { provider, externalId, principal, tenantId, scopeId? }): void // audited, idempotent
-resolveIdentity(provider, externalId): { principal, tenantId, scopeId } | undefined
+linkIdentity(actor, { provider, externalId, principal, tenantId, scopeId? }): void // audited; idempotent per (tenantId, provider, externalId)
+resolveIdentity(tenantId, provider, externalId): { principal, scopeId } | undefined
 ```
 
 Because the mapping is **keyed by provider**, several auth adapters — and several OIDC
 upstreams — coexist without collision. Adding one is additive: no schema change, no
 permission, no kernel change.
+
+**And keyed by tenant.** The full key is `(tenantId, provider, externalId)`, with the
+tenant as an *input* to the lookup rather than something derived from the identity. That
+matters as soon as tenants have their own identity pools: an external subject id is unique
+only *within* its pool, so two white-label shops can both issue user `123` to different
+people. A globally-keyed mapping would resolve the second as the first.
+
+The same key is what lets one login belong to several tenants — a consultant
+administering five customers is one external identity with one row per tenant, and one
+principal per tenant. Shared identity, separate authority.
+
+The caller always knows which tenant it is asking about: the request arrived on that
+tenant's hostname, or carried a pool-scoped token.
 
 ## Auth adapters at the edge
 
@@ -76,7 +89,7 @@ the plan's §4.3 flow — then binds the identity:
 2. assign the role(s) that user should hold;
 3. create the domain records they own (e.g. a customer);
 4. issue any entity-narrowed grants (e.g. read-your-own-orders);
-5. `linkIdentity(provider, externalId → principal)`.
+5. `linkIdentity((tenantId, provider, externalId) → principal)`.
 
 From then on `resolveIdentity` short-circuits to the same principal — a stable identity with
 real, enforced permissions.

@@ -188,7 +188,7 @@ const DIRECTORY_DDL = `
     tenant_id    TEXT NOT NULL,
     scope_id     TEXT,
     created_at   TEXT NOT NULL,
-    PRIMARY KEY (provider, external_id)
+    PRIMARY KEY (tenant_id, provider, external_id)
   );
   CREATE TABLE IF NOT EXISTS _substrat_admin_log (
     id TEXT PRIMARY KEY,
@@ -262,7 +262,43 @@ export class ControlPlaneDO extends DurableObject {
     }
   }
 
+  /**
+   * Rebuild `_substrat_identities` when it still carries the pre-K-22 global key
+   * (§4.3: a globally-keyed identity mapping is a cross-tenant identity bleed). A
+   * PRIMARY KEY cannot be ALTERed, so this is create-copy-drop-rename.
+   *
+   * Detected from `sqlite_master.sql`, which works here as well as in the pure
+   * adapter — DO SQLite restricts PRAGMA, so this is the one detection strategy both
+   * adapters can share. Rows already carry `tenant_id`, so the copy is lossless.
+   */
+  private ensureIdentityKey(): void {
+    const row = this.sql
+      .exec("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", '_substrat_identities')
+      .toArray()[0] as unknown as { sql: string } | undefined;
+    if (!row || row.sql.includes('PRIMARY KEY (tenant_id, provider, external_id)')) return;
+    for (const stmt of [
+      `CREATE TABLE _substrat_identities_new (
+         provider     TEXT NOT NULL,
+         external_id  TEXT NOT NULL,
+         principal_id TEXT NOT NULL,
+         tenant_id    TEXT NOT NULL,
+         scope_id     TEXT,
+         created_at   TEXT NOT NULL,
+         PRIMARY KEY (tenant_id, provider, external_id)
+       )`,
+      `INSERT OR IGNORE INTO _substrat_identities_new
+         (provider, external_id, principal_id, tenant_id, scope_id, created_at)
+         SELECT provider, external_id, principal_id, tenant_id, scope_id, created_at
+         FROM _substrat_identities`,
+      'DROP TABLE _substrat_identities',
+      'ALTER TABLE _substrat_identities_new RENAME TO _substrat_identities',
+    ]) {
+      this.sql.exec(stmt);
+    }
+  }
+
   private ensureDirectoryColumns(): void {
+    this.ensureIdentityKey();
     for (const ddl of SCOPE_COLUMNS_ADDED) {
       this.addColumn('scopes', ddl);
     }
@@ -756,7 +792,13 @@ export class ControlPlaneDO extends DurableObject {
 
   // -- identities (D-16; control-plane.md §6) ---------------------------------
 
-  /** INSERT OR IGNORE; return whether it changed (idempotent). */
+  /**
+   * Bind an identity within a tenant. Returns false when the key already maps to the
+   * SAME principal (idempotent, unaudited); throws when it maps to a DIFFERENT one.
+   *
+   * Read before write: `INSERT OR IGNORE` alone cannot tell those two apart, and
+   * silently ignoring a genuine collision resolves one person as another.
+   */
   linkIdentity(
     provider: string,
     externalId: string,
@@ -765,17 +807,23 @@ export class ControlPlaneDO extends DurableObject {
     scopeId: string | null,
     createdAt: string,
   ): boolean {
-    const existed =
-      this.sql
-        .exec(
-          'SELECT 1 FROM _substrat_identities WHERE provider = ? AND external_id = ?',
-          provider,
-          externalId,
-        )
-        .toArray()[0] !== undefined;
-    if (existed) return false;
+    const existing = this.sql
+      .exec(
+        `SELECT principal_id FROM _substrat_identities
+         WHERE tenant_id = ? AND provider = ? AND external_id = ?`,
+        tenantId,
+        provider,
+        externalId,
+      )
+      .toArray()[0] as unknown as { principal_id: string } | undefined;
+    if (existing) {
+      if (existing.principal_id === principal) return false;
+      throw new Error(
+        `identity ${provider}:${externalId} in tenant ${tenantId} is already bound to ${existing.principal_id}`,
+      );
+    }
     this.sql.exec(
-      `INSERT OR IGNORE INTO _substrat_identities
+      `INSERT INTO _substrat_identities
          (provider, external_id, principal_id, tenant_id, scope_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       provider,
@@ -789,21 +837,21 @@ export class ControlPlaneDO extends DurableObject {
   }
 
   resolveIdentity(
+    tenantId: string,
     provider: string,
     externalId: string,
-  ): { principal: string; tenantId: string; scopeId: string | null } | undefined {
+  ): { principal: string; scopeId: string | null } | undefined {
     const row = this.sql
       .exec(
-        `SELECT principal_id, tenant_id, scope_id FROM _substrat_identities
-         WHERE provider = ? AND external_id = ?`,
+        `SELECT principal_id, scope_id FROM _substrat_identities
+         WHERE tenant_id = ? AND provider = ? AND external_id = ?`,
+        tenantId,
         provider,
         externalId,
       )
-      .toArray()[0] as
-      | { principal_id: string; tenant_id: string; scope_id: string | null }
-      | undefined;
+      .toArray()[0] as unknown as { principal_id: string; scope_id: string | null } | undefined;
     if (!row) return undefined;
-    return { principal: row.principal_id, tenantId: row.tenant_id, scopeId: row.scope_id };
+    return { principal: row.principal_id, scopeId: row.scope_id };
   }
 
   // -- admin audit log (control-plane.md §4.4) --------------------------------
