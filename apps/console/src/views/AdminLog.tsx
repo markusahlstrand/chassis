@@ -61,7 +61,7 @@ export function AdminLog({ api, tenants }: AdminLogProps) {
 
   const visible = entries.filter((e) => {
     if (!q) return true;
-    const hay = `${e.actor}${e.action}${e.tenantId}${e.scopeId ?? ''}`.toLowerCase();
+    const hay = `${e.actor}${e.action}${e.tenantId ?? 'platform'}${e.scopeId ?? ''}`.toLowerCase();
     return hay.includes(q.toLowerCase());
   });
 
@@ -145,7 +145,14 @@ export function AdminLog({ api, tenants }: AdminLogProps) {
                   </td>
                   <td style={{ ...td, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{e.action}</td>
                   <td style={{ ...td, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
-                    {tenants.get(e.tenantId)?.slug ?? e.tenantId.slice(0, 8)}
+                    {/* A null tenant is not missing data — it is a platform-level
+                        action that targets no tenant (K-23), like registering a
+                        central identity pool. */}
+                    {e.tenantId ? (
+                      (tenants.get(e.tenantId)?.slug ?? e.tenantId.slice(0, 8))
+                    ) : (
+                      <span style={{ color: 'var(--text-placeholder)' }}>platform</span>
+                    )}
                   </td>
                   <td style={{ ...td, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
                     {/* A null scopeId is not missing data — it is a tenant-wide action. */}

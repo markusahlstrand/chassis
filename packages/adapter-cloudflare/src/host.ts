@@ -2,6 +2,7 @@ import {
   adminLogEntry,
   createTenantInput,
   identityLink,
+  identityPool,
   createOrgInput,
   moduleManifest,
   org as orgSchema,
@@ -18,6 +19,7 @@ import {
   type CreateTenantInput,
   type EntityRef,
   type IdentityLink,
+  type IdentityPool,
   type Node,
   type Org,
   type OrgId,
@@ -149,6 +151,16 @@ interface ControlPlaneStub {
     scopeId: string | null,
     createdAt: string,
   ): Promise<boolean>;
+  readPool(
+    provider: string,
+  ): Promise<{ provider: string; topology: string; tenant_id: string | null } | undefined>;
+  registerIdentityPool(
+    provider: string,
+    topology: string,
+    tenantId: string | null,
+    createdAt: string,
+  ): Promise<boolean>;
+  identityTenants(provider: string, externalId: string): Promise<string[]>;
   resolveIdentity(
     tenantId: string,
     provider: string,
@@ -162,7 +174,8 @@ interface AdminEntry {
   id: string;
   actor: string;
   action: string;
-  tenantId: string;
+  /** Null for platform-level actions that target no tenant (K-23). */
+  tenantId: string | null;
   scopeId: string | null;
   vertical: string | null;
   before: unknown;
@@ -678,8 +691,51 @@ export class CloudflareScopeHost implements ScopeHost {
         await this.recordAdmin(actor, 'revokeEntitlement', { tenantId }, { entitlementKey }, null);
       },
       listEntitlements: async (tenantId): Promise<string[]> => this.cp.listEntitlements(tenantId),
+      registerIdentityPool: async (actor, input: IdentityPool) => {
+        const parsed = identityPool.parse(input);
+        const created = await this.cp.registerIdentityPool(
+          parsed.provider,
+          parsed.topology,
+          parsed.tenantId,
+          new Date().toISOString(),
+        );
+        if (!created) return; // identical registration is idempotent, unaudited
+        // Null tenant for a central pool: it belongs to no single tenant, which is
+        // what made the admin log's tenantId nullable.
+        await this.recordAdmin(actor, 'registerIdentityPool', { tenantId: parsed.tenantId }, null, parsed);
+      },
+      getIdentityPool: async (provider: string) => {
+        const r = await this.cp.readPool(provider);
+        return r
+          ? identityPool.parse({ provider: r.provider, topology: r.topology, tenantId: r.tenant_id })
+          : undefined;
+      },
+      listIdentityTenants: async (provider: string, externalId: string) => {
+        const r = await this.cp.readPool(provider);
+        if (!r) throw new Error(`identity pool '${provider}' is not registered`);
+        if (r.topology !== 'central') {
+          throw new Error(
+            `identity pool '${provider}' is tenant-bound — enumerating tenants is only ` +
+              `meaningful on a central pool, where the same externalId is the same person`,
+          );
+        }
+        return (await this.cp.identityTenants(provider, externalId)) as TenantId[];
+      },
       linkIdentity: async (actor, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
+        const pool = await this.cp.readPool(parsed.provider);
+        if (!pool) {
+          throw new Error(
+            `identity pool '${parsed.provider}' is not registered — a pool must declare ` +
+              `its topology before it may link (central vs tenant-bound decides whether ` +
+              `the same externalId in two tenants is one person or two)`,
+          );
+        }
+        if (pool.topology === 'tenant-bound' && pool.tenant_id !== parsed.tenantId) {
+          throw new Error(
+            `identity pool '${parsed.provider}' is bound to tenant ${pool.tenant_id} and cannot link into ${parsed.tenantId}`,
+          );
+        }
         const changed = await this.cp.linkIdentity(
           parsed.provider,
           parsed.externalId,
@@ -734,7 +790,7 @@ export class CloudflareScopeHost implements ScopeHost {
   private async recordAdmin(
     actor: PlatformActorId,
     action: AdminAction,
-    target: { tenantId: TenantId; scopeId?: ScopeId | null; vertical?: string | null },
+    target: { tenantId: TenantId | null; scopeId?: ScopeId | null; vertical?: string | null },
     before: unknown,
     after: unknown,
   ): Promise<void> {

@@ -118,6 +118,15 @@ export async function seedShop(host: SqliteScopeHost, dir: string): Promise<Shop
   await host.admin.createTenant(staff, { id: world.t1, slug: 'kallkalla', name: 'Kallkälla Kaffe AB' });
   await host.admin.createTenant(staff, { id: world.t2, slug: 'bonfeber', name: 'Bönfeber Rosteri AB' });
 
+  // K-23: a provider declares its topology before it may link an identity. This demo
+  // runs one Better Auth instance for one tenant, so the pool is tenant-bound — the
+  // same external user id in another tenant would be a different person.
+  await host.admin.registerIdentityPool(staff, {
+    provider: 'better-auth',
+    topology: 'tenant-bound',
+    tenantId: world.t1,
+  });
+
   // Entitlements (§4.3): default-deny — grant the SKU flags for the modules the
   // shop runs before its operations resolve.
   for (const t of [world.t1, world.t2]) {

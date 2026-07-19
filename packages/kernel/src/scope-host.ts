@@ -8,6 +8,7 @@ import type {
   DomainEventInput,
   EntityRef,
   IdentityLink,
+  IdentityPool,
   Jurisdiction,
   ModuleManifest,
   CreateOrgInput,
@@ -352,6 +353,27 @@ export interface HostAdmin {
    * ignoring it would resolve the second person as the first.
    */
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
+
+  /**
+   * Register an identity pool and its topology (K-23). A provider must be registered
+   * before it may link: an unregistered pool has not said whether the same
+   * `externalId` in two tenants is one human or two, and the kernel will not guess.
+   * Idempotent on an identical registration; a conflicting re-registration throws,
+   * since changing a live pool's topology silently reinterprets every row it owns.
+   */
+  registerIdentityPool(actor: PlatformActorId, pool: IdentityPool): Promise<void>;
+  getIdentityPool(provider: string): Promise<IdentityPool | undefined>;
+
+  /**
+   * Which tenants this login exists in — the cross-tenant question, kept distinct
+   * from resolution because they have different safety conditions.
+   *
+   * **Central pools only.** On a tenant-bound pool the same `externalId` in another
+   * tenant is a different person, so enumerating would hand one person another's
+   * tenant list; this throws there rather than returning the single obvious answer,
+   * because asking at all is a category error the caller should see.
+   */
+  listIdentityTenants(provider: string, externalId: string): Promise<TenantId[]>;
   /**
    * Resolve an external identity within a tenant — the auth adapter's read path.
    *
