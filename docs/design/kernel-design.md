@@ -390,9 +390,14 @@ contract (§5.2 of the plan):
 | Right for | document-spaces product (consumer #2, D-17) | förvaltar-OS (pending §11 benchmark) |
 | Ops path | PITR per scope | D1 read replicas, wrangler tooling, export |
 
-Open (§11): Shape B for case 1 is presumed, not confirmed — the DO-SQLite limits
-benchmark decides. This document treats shape choice as per-vertical configuration, which
-is why it lives on the `Scope` row.
+Open (§11): ~~Shape B for case 1 is presumed~~ — **as of 2026-07-19 the plan proposes
+Shape A for case 1** and the DO-SQLite limits benchmark still decides. The sizing half is
+settled (10 GB/DO against a one-BRF scope); what the benchmark now prices is the missing
+ops surface — **DO SQLite has no export, no import and no HTTP query API**, so per-scope
+export becomes a kernel contract exercised by the contract tests, and question 13's
+A→B hatch has no vendor-side support in either direction. If Shape A holds, Shape B does
+not ship at v1, which retires questions 7 and 10. This document treats shape choice as
+per-vertical configuration, which is why it lives on the `Scope` row.
 
 ### 5.3 Migrations and version skew
 
