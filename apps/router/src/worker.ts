@@ -1,0 +1,139 @@
+/**
+ * The environment-wide router (K-26; control-plane.md §4.7).
+ *
+ * One kernel-owned worker in front of every vertical. It resolves
+ * `hostname → (tenant, scope, vertical, surface)` from the directory and forwards
+ * over a service binding, asserting the resolved node in request headers.
+ *
+ * **Not one router per vertical**: cert and DNS lifecycle in one place means a new
+ * vertical gets custom domains for free. **Not one per jurisdiction**: Cloudflare's
+ * Regional Services is configured per hostname, so residency is a column on the
+ * binding, not a second deployment topology.
+ *
+ * This does not erode D-30. That decision rejects bundling verticals into one DO
+ * class, which would force lockstep engine upgrades across verticals owned by
+ * different companies. A router forwards; deployments stay separate.
+ */
+// The `/routing` subpath, not the package root: the root re-exports the scope-DO
+// class, and the router must not carry code for opening scopes it has no binding to.
+import { createRouteResolver, type RouteResolver } from '@substrat-run/adapter-cloudflare/routing';
+import type { RouteTarget } from '@substrat-run/contracts';
+
+export interface Env {
+  /**
+   * The shared control plane's directory DO. The ONLY binding this worker has —
+   * no `SCOPE` namespace, so the router cannot open a scope even by mistake. It
+   * finds the door; it never opens it.
+   */
+  CONTROL_PLANE: DurableObjectNamespace;
+  /**
+   * Shared secret presented to every vertical as `x-substrat-router`.
+   *
+   * The real trust boundary is that vertical workers have no public route (K-26).
+   * This is the belt to that suspenders, and it earns its keep: `workers.dev` is ON
+   * by default, so "the vertical is only reachable through the router" is a config
+   * fact that one forgotten toggle silently reverses — and the consequence is total,
+   * since a forged tenant header reads another tenant's data. A secret makes the
+   * boundary hold in code even when the config slips.
+   */
+  ROUTER_SECRET?: string;
+  /**
+   * Service bindings to vertical workers, keyed `VERTICAL_<SLUG>` with the slug
+   * upper-cased and dashes as underscores (`bike-shop` → `VERTICAL_BIKE_SHOP`).
+   *
+   * A static binding per vertical is the milestone-one shape and deliberately so:
+   * it works for the demos we ship, and it does not pretend to be the thing that
+   * replaces it. Customer-pushed verticals need a Workers-for-Platforms dispatch
+   * namespace (#31 blocker 1), which swaps this lookup and nothing else.
+   */
+  [binding: string]: unknown;
+}
+
+/** Headers the router asserts. Any inbound copy is stripped before these are set. */
+const ASSERTED_PREFIX = 'x-substrat-';
+
+const bindingNameFor = (slug: string): string =>
+  `VERTICAL_${slug.toUpperCase().replace(/-/g, '_')}`;
+
+function verticalFor(env: Env, target: RouteTarget): Fetcher | undefined {
+  if (!target.verticalSlug) return undefined;
+  const binding = env[bindingNameFor(target.verticalSlug)];
+  // A Fetcher is an object with .fetch; anything else in this slot is misconfiguration.
+  return binding && typeof (binding as Fetcher).fetch === 'function'
+    ? (binding as Fetcher)
+    : undefined;
+}
+
+/**
+ * Build the forwarded request.
+ *
+ * Every `x-substrat-*` header from the client is DROPPED before ours are set. The
+ * vertical trusts these headers absolutely — they are the tenant it serves — so the
+ * router must be the only thing that can write them. Stripping by prefix rather than
+ * by name means a header added later is covered by default instead of by remembering.
+ */
+function assertNode(request: Request, target: RouteTarget, secret?: string): Request {
+  const headers = new Headers();
+  for (const [k, v] of request.headers) {
+    if (!k.toLowerCase().startsWith(ASSERTED_PREFIX)) headers.set(k, v);
+  }
+  headers.set('x-substrat-tenant', target.tenantId);
+  headers.set('x-substrat-scope', target.scopeId);
+  headers.set('x-substrat-surface', target.surface);
+  if (target.verticalSlug) headers.set('x-substrat-vertical', target.verticalSlug);
+  if (secret) headers.set('x-substrat-router', secret);
+  return new Request(request, { headers });
+}
+
+/**
+ * The DO stub is reused across requests in an isolate; the resolution itself is not
+ * cached. Keyed on the binding rather than held in a bare module variable, so it
+ * cannot outlive the env it was built from — in production there is one env per
+ * isolate and the distinction is invisible, but a cache keyed on nothing is a bug
+ * waiting for the first situation where that stops being true.
+ */
+const resolvers = new WeakMap<DurableObjectNamespace, RouteResolver>();
+function resolverFor(env: Env): RouteResolver {
+  let resolver = resolvers.get(env.CONTROL_PLANE);
+  if (!resolver) {
+    resolver = createRouteResolver(env.CONTROL_PLANE);
+    resolvers.set(env.CONTROL_PLANE, resolver);
+  }
+  return resolver;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const hostname = new URL(request.url).hostname;
+
+    const target = await resolverFor(env)(hostname);
+    if (!target) {
+      // Unknown, still validating, or failed — all the same from outside. Which of
+      // those it is belongs in the console, not in a response to an anonymous caller.
+      return new Response('No application is configured for this hostname.', {
+        status: 404,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      });
+    }
+
+    const vertical = verticalFor(env, target);
+    if (!vertical) {
+      // The map says which vertical answers and no binding provides it. That is our
+      // misconfiguration, not the caller's — 502, and it is worth logging loudly.
+      console.error(
+        `router: no service binding ${bindingNameFor(target.verticalSlug ?? '?')} for ` +
+          `hostname ${hostname} (scope ${target.scopeId})`,
+      );
+      return new Response('This application is not available.', {
+        status: 502,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      });
+    }
+
+    // `target.region` is carried but not enforced here: Regional Services pins TLS
+    // termination and processing at the edge, ahead of this worker, and the DO
+    // jurisdiction pins storage and execution (K-7). Both halves are configuration.
+    // Re-checking it in code would be a third enforcement point that can disagree.
+    return vertical.fetch(assertNode(request, target, env.ROUTER_SECRET));
+  },
+};

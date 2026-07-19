@@ -1,0 +1,48 @@
+// The environment-wide router (K-26; control-plane.md §4.7).
+//
+// Every tenant hostname points here. It resolves the hostname against the shared
+// control plane's directory and forwards to the vertical's worker over a service
+// binding.
+//
+// Deploy:
+//   wrangler secret put ROUTER_SECRET      # must match each vertical's own
+//   pnpm --filter @substrat-run/router run deploy
+//
+// Then bind hostnames with `HostAdmin.bindHostname` (console, or the control-plane
+// API) and set them `active`. Until a hostname is bound and active, the router
+// answers 404 — a name it does not know is a name it will not serve.
+{
+	"name": "substrat-router",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+
+	// The directory lives in the CONTROL PLANE's deployment, so this is a
+	// cross-script binding: same DO class, same instance, read from here.
+	// `script_name` is what makes it the control plane's DO rather than a second,
+	// empty one of our own — omitting it is a silent split-brain, not an error.
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CONTROL_PLANE",
+				"class_name": "ControlPlaneDO",
+				"script_name": "substrat-control-plane"
+			}
+		]
+	},
+
+	// No `migrations` block, deliberately: this worker does not OWN the DO class,
+	// it borrows it. The control plane's wrangler.jsonc declares it.
+
+	// No `SCOPE` binding, also deliberately: the router resolves a name and
+	// forwards. It has no business opening a scope, and the surest way to
+	// guarantee that is to not hand it the key.
+
+	// One binding per vertical, named VERTICAL_<SLUG> (dashes become underscores).
+	// This is the milestone-one shape: it serves the demos we ship and does not
+	// pretend to be what replaces it. Customer-pushed verticals need a
+	// Workers-for-Platforms dispatch namespace (#31 blocker 1), which changes this
+	// lookup and nothing else in the worker.
+	"services": [{ "binding": "VERTICAL_FSM", "service": "substrat-fsm" }],
+
+	"observability": { "enabled": true }
+}

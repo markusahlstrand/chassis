@@ -53,8 +53,21 @@ export type HostnameRegion = z.infer<typeof hostnameRegion>;
 export const hostnameStatus = z.enum(['pending', 'verifying', 'active', 'failed']);
 export type HostnameStatus = z.infer<typeof hostnameStatus>;
 
+/**
+ * A hostname, normalized to lower case.
+ *
+ * DNS is case-insensitive, so `ACME.example.com` and `acme.example.com` are the same
+ * name — and if the map stored them as two rows, the global-uniqueness check would
+ * let two different scopes each hold "the same" hostname, and a request would resolve
+ * to whichever casing it happened to arrive in. Normalizing in the schema means both
+ * adapters inherit it rather than each remembering to.
+ *
+ * 253 is the maximum length of a fully-qualified domain name.
+ */
+export const hostname = z.string().min(1).max(253).toLowerCase();
+
 export const hostnameBinding = z.object({
-  hostname: z.string().min(1),
+  hostname,
   tenantId,
   scopeId,
   /** Denormalized from the scope, so the router resolves in one read. */

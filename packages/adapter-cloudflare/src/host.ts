@@ -9,7 +9,6 @@ import {
   bindHostnameInput,
   hostnameBinding,
   publishVersionInput,
-  routeTarget,
   registerVerticalInput,
   vertical as verticalSchema,
   verticalChannel,
@@ -56,6 +55,7 @@ import {
   type TenantRole,
   type TenantStatus,
 } from '@substrat-run/contracts';
+import { normalizeHostname, toRouteTarget } from './route-resolver.js';
 import {
   resolveScopeRecord,
   ulid,
@@ -770,7 +770,8 @@ export class CloudflareScopeHost implements ScopeHost {
           parsed,
         );
       },
-      setHostnameStatus: async (actor, hostname: string, status, note?: string) => {
+      setHostnameStatus: async (actor, raw: string, status, note?: string) => {
+        const hostname = raw.toLowerCase(); // DNS is case-insensitive; the map is normalized
         const row = await this.cp.readHostname(hostname);
         if (!row) throw new Error(`unknown hostname '${hostname}'`);
         if (row.status === status) return; // idempotent, unaudited
@@ -797,19 +798,11 @@ export class CloudflareScopeHost implements ScopeHost {
         );
         return rows.map(mapHostname);
       },
-      resolveHostname: async (hostname: string) => {
+      resolveHostname: async (raw: string) =>
         // The router's per-request read. No actor, not logged — the same machine-path
-        // carve-out resolveIdentity has (K-24).
-        const r = await this.cp.readHostname(hostname);
-        if (!r || r.status !== 'active') return undefined;
-        return routeTarget.parse({
-          tenantId: r.tenant_id,
-          scopeId: r.scope_id,
-          verticalSlug: r.vertical_slug,
-          surface: r.surface,
-          region: r.region,
-        });
-      },
+        // carve-out resolveIdentity has (K-24). Shares its mapping with the router's
+        // own resolver so the two cannot disagree on what resolves.
+        toRouteTarget(await this.cp.readHostname(normalizeHostname(raw))),
       registerVertical: async (actor, input: RegisterVerticalInput) => {
         const parsed = registerVerticalInput.parse(input);
         const existing = await this.cp.readVertical(parsed.slug);

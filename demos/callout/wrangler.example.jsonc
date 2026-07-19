@@ -12,10 +12,33 @@
 //   wrangler d1 migrations apply substrat-fsm-auth --remote
 //   wrangler secret put BETTER_AUTH_SECRET
 //   pnpm cf:deploy                               # DO SQLite needs a Workers Paid plan
+//
+// BEHIND THE ROUTER (K-26). This worker no longer assumes it serves one fixed
+// tenant. The router resolves hostname → (tenant, scope, surface) and asserts it in
+// `x-substrat-*` headers; this worker reads them via `readRoutedNode`.
+//
+// That makes two deployment facts load-bearing:
+//
+//   1. NO PUBLIC ROUTE. Turn `workers.dev` OFF and add no route — the router
+//      reaches this worker by service binding. If it is publicly reachable, anyone
+//      can name a tenant in a header.
+//   2. `wrangler secret put ROUTER_SECRET`, the SAME value as the router's. This is
+//      what keeps (1) from being the only thing standing between a config slip and
+//      a cross-tenant read.
+//
+// For a single-tenant box or `wrangler dev`, set `STANDALONE=true` instead and the
+// worker serves the demo world with no router. That is deliberately a separate flag
+// from ALLOW_DEV_HEADER: standalone should not require switching on impersonation.
+//
+// It is set by `pnpm cf:dev` (--var) rather than in `vars` below, ON PURPOSE: in
+// `vars` it would ride along into a real deploy, where an unrouted request would
+// quietly serve the demo tenant instead of failing as the misconfiguration it is.
 {
   "name": "substrat-fsm",
   "main": "src/worker.ts",
   "compatibility_date": "2025-01-01",
+  // Not reachable except through the router once deployed. See (1) above.
+  "workers_dev": false,
   // Better Auth (edge authentication, M3) needs Node built-ins on workerd.
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
