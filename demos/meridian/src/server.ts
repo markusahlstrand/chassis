@@ -14,9 +14,13 @@ import { buildDemoHost, seedDemo, type DemoWorld } from './index.js';
  * logic here; every route is a wrapper over an operation, and the kernel
  * enforces the permission on every op regardless of how the route reached it.
  *
- * There is no Better Auth here yet — this is the local demo harness. The
- * `x-principal` picker is an impersonation bypass by design, fine for a
- * localhost dev server, never a production posture.
+ * There is no Better Auth here yet. The `x-principal` picker is an
+ * impersonation bypass by design — anyone naming a persona becomes it — so it is
+ * mounted ONLY when ALLOW_DEV_HEADER=true, matching Callout's posture.
+ *
+ * Secure by default matters more here than it did as a demo: this is a template
+ * now (D-33), and a template is COPIED. A default that impersonates is one people
+ * carry into production without noticing they opted into anything.
  */
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '.data');
@@ -50,9 +54,24 @@ const CAST: Persona[] = [
   { key: 'mallory', display: 'Mallory (other company!)', role: 'attacker', country: 'SE', principal: world.mallory, tenantId: world.t2, scopeId: world.s2, employeeId: null },
 ];
 
+/** Off unless explicitly opted in. A template must not impersonate by default. */
+const ALLOW_DEV_HEADER = process.env.ALLOW_DEV_HEADER === 'true';
+
 function persona(c: Context): Persona {
-  const key = c.req.header('x-principal') ?? 'elin';
-  return CAST.find((p) => p.key === key) ?? CAST[0]!;
+  if (!ALLOW_DEV_HEADER) {
+    throw new PermissionDenied(
+      'dev header auth is disabled — set ALLOW_DEV_HEADER=true for local development, ' +
+        'or mount a real auth adapter before exposing this on any network surface',
+    );
+  }
+  const key = c.req.header('x-principal');
+  // No default persona. Falling back to a real employee when the header is absent
+  // means an unauthenticated request is served as SOMEONE — the failure mode is
+  // silent, and it is exactly what a copied template would inherit.
+  if (!key) throw new PermissionDenied('missing x-principal header');
+  const found = CAST.find((p) => p.key === key);
+  if (!found) throw new PermissionDenied(`unknown persona '${key}'`);
+  return found;
 }
 async function stub(c: Context): Promise<ScopeStub> {
   const p = persona(c);

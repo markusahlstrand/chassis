@@ -10,7 +10,8 @@ import { buildBikeShopHost, seedBikeShop, type BikeShopWorld } from './index.js'
 
 /**
  * Dev API server for the Handlebar demo. Deliberately thin: authenticate
- * (dev principal picker via x-principal header) → getScope → invoke. Every
+ * (dev principal picker via x-principal header, gated on ALLOW_DEV_HEADER) →
+ * getScope → invoke. Every
  * route is a wrapper over an operation; there is no business logic here.
  * Runs on :8872 so it can sit next to the Callout demo (:8871).
  */
@@ -31,7 +32,20 @@ const CAST: Record<string, { name: string; role: string; principal: PrincipalId 
 
 const app = new Hono();
 
+/** Off unless explicitly opted in. A template must not impersonate by default. */
+const ALLOW_DEV_HEADER = process.env.ALLOW_DEV_HEADER === 'true';
+
 function principalOf(c: Context): PrincipalId {
+  // The header names any principal and is believed — an impersonation bypass by
+  // design, fine on localhost and never a production posture. Gated because this
+  // is a template now (D-33), and a template is COPIED: the default has to be the
+  // safe one, or someone inherits the unsafe one without choosing it.
+  if (!ALLOW_DEV_HEADER) {
+    throw new PermissionDenied(
+      'dev header auth is disabled — set ALLOW_DEV_HEADER=true for local development, ' +
+        'or mount a real auth adapter before exposing this on any network surface',
+    );
+  }
   const raw = c.req.header('x-principal');
   if (!raw) throw new PermissionDenied('missing x-principal header');
   return principalId.parse(raw);

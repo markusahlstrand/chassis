@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "server": "tsx src/server.ts",
-    "dev": "concurrently -n api,web -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\"",
+    "dev": "concurrently -n api,web -c blue,green \"ALLOW_DEV_HEADER=true tsx src/server.ts\" \"pnpm --dir app dev\"",
     "demo": "pnpm run dev"
   },
   "dependencies": {
