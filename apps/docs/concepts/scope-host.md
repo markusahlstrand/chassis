@@ -12,6 +12,9 @@ interface ScopeHost {
   getScope(principal: PrincipalId, tenantId: TenantId, scopeId: ScopeId): Promise<ScopeStub>;
   provisionScope(actor: PlatformActorId, input: ProvisionScopeInput): Promise<void>;
   registerModule(registration: ModuleRegistration): void;
+  // Out-of-band effects a module asks for but cannot perform — see
+  // /concepts/events#the-connector-seam
+  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void;
   defineOperation<I, O>(name: string, handler: OperationHandler<I, O>): void;
   readonly admin: HostAdmin; // control plane: roles/grants, tenant registry,
                              // scope lifecycle, entitlements, audit log

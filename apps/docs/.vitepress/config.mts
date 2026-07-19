@@ -98,6 +98,7 @@ function guideSidebar() {
         engineSidebar('booking', 'Bookings'),
         engineSidebar('invoicing', 'Invoicing'),
         engineSidebar('protocol', 'Protocols'),
+        engineSidebar('invites', 'Invites'),
       ],
     },
     {

@@ -23,6 +23,7 @@ The adapter seam. Full semantics in
 | `ModuleRegistration` | interface | manifest + migrations + operations + consumers |
 | `SqlMigration` | interface | `{ version, sql }` — ordered, journaled per module |
 | `ScopedSql`, `SqlValue` | types | synchronous scope-local SQL: `query<T>()`, `exec()` |
+| `ExecutorHandler` | type | `(admin, event) => void` — out-of-band host code effecting what a module asked for via an event (K-22). Registered with `registerExecutor`; receives `HostAdmin`, never `ctx`, because it acts with platform authority |
 | `HostAdmin` | interface | the audited control-plane surface — enforcement input (`defineRole`, `assignRole`, `grant`, `grantToOrg`, `addMember`, `removeMember`, `listMembers`), organizations (`createOrg`, `listOrgs`, `getOrg`), identity (`registerIdentityPool`, `linkIdentity`, `resolveIdentity`, `listIdentityTenants`), tenant registry (`createTenant`, `setTenantStatus`, `listTenants`, `getTenant`), scope lifecycle (`suspendScope`, `unsuspendScope`, `archiveScope`, `unarchiveScope`), entitlements (`grantEntitlement`, `revokeEntitlement`, `listEntitlements`), and `auditLog`. Every mutation takes a `PlatformActorId` and writes an append-only audit row |
 | `ProvisionScopeInput` | interface | tenant, scope, optional shape + jurisdiction (provisioned via `provisionScope(actor, input)`) |
 

@@ -39,13 +39,24 @@ jurisdiction, so they must never encode anything.
 
 `tenant` / `Tenant`, `scope` / `Scope`, plus `tenantStatus`, `scopeStatus`,
 `storageShape` (`'A' | 'B'`) and `jurisdiction` (`'eu' | null`), and `createTenantInput`.
-See [Tenants & scopes](/concepts/tenancy) for the semantics.
+Also `org` / `Org` and `createOrgInput` — organizations inside a tenant, which
+membership tuples point at and `grantToOrg` targets. `migrationFailure` on a scope is
+non-null when its last migration attempt failed, which is what stops a scope that
+serves nothing from rendering as healthy. See [Tenants & scopes](/concepts/tenancy).
 
 ## Control plane (`control-plane.ts`)
 
 `adminAction` (the enum of audited control-plane mutations) and `adminLogEntry` /
-`AdminLogEntry` — one append-only audit row: actor, action, target, before/after, timestamp.
-See [The platform layer](/concepts/platform).
+`AdminLogEntry` — one append-only audit row: actor, action, target, before/after,
+timestamp. `tenantId` is nullable for platform-level actions that target no tenant;
+`causedBy` holds the id of the event that caused the action, when one did, which is what
+joins the two halves of the [connector seam](/concepts/events#the-connector-seam).
+
+Identity lives here too: `identityLink`, `resolvedIdentity`, `identityPool` /
+`poolTopology` (`'central' | 'tenant-bound'` — whether the same external subject id in
+two tenants is one human or two), and `orgMembership`, whose `revokedAt` is a tombstone
+rather than a deletion. See [The platform layer](/concepts/platform) and
+[Authentication & identity](/concepts/identity).
 
 ## Events (`events.ts`)
 

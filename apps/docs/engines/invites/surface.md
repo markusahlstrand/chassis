@@ -1,0 +1,53 @@
+# Invites: operations & permissions
+
+## Permissions
+
+| Key | Holder |
+|---|---|
+| `invites:send` | whoever may add people to an organization |
+| `invites:read` | whoever may see pending invitations and their state |
+| `invites:revoke` | whoever may withdraw an unaccepted invitation |
+
+## Operations
+
+```
+invites/send    { orgId, identifier, roleKey, ttlMs? }  → { id }
+invites/accept  { invitationId, identifier }            → Invitation
+invites/list    { orgId }                               → Invitation[]
+invites/revoke  { invitationId }                        → void
+```
+
+Each is the thin binding the engine convention requires: a permission check plus one
+exported in-scope function.
+
+## `invites/accept` checks no permission
+
+Deliberately, and it is the one thing on this page worth arguing about.
+
+The recipient is not yet a member of anything, so there is no grant they could hold. A
+permission check would either be vacuous or would require granting access *before*
+acceptance — which is precisely what accept-required exists to prevent.
+
+The invitation is the authority, and it is proven rather than asserted: accept
+re-hashes the identifier the caller presents and compares it to the stored hash. An
+invitation id alone is not enough, so a leaked id is not a bearer token.
+
+## What comes back
+
+`Invitation` is the row **minus the identifier hash**. The hash never crosses the
+engine boundary, because a leaked hash lets its holder confirm an address offline —
+which is the enumeration the whole design exists to prevent.
+
+```ts
+type Invitation = {
+  id: string;
+  org_id: string;
+  role_key: string;
+  state: 'invited' | 'accepted' | 'revoked' | 'expired';
+  invited_by: string;
+  accepted_by: string | null;
+  created_at: string;
+  expires_at: string;
+  settled_at: string | null;
+};
+```

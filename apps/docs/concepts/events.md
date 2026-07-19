@@ -90,6 +90,45 @@ moment the event happened — which is exactly what an invoice wants.
   be idempotent; the event `id` is the idempotency key.
 - Ordering is guaranteed only within one (scope, module) pair.
 
+## The connector seam
+
+Consumers run **inside** the scope, so they can only touch that scope's data. Some
+effects are not scope-local: adding someone to an organization writes tenant-wide
+directory state, outside any one scope's transaction.
+
+For those, a module *asks* and an **executor** effects:
+
+```
+module (in-scope)                        executor (out-of-band)
+  ctx.emit('member.add-requested')  ──▶    admin.addMember(...)
+  commits WITH the domain write            writes the audit row
+```
+
+```ts
+host.registerExecutor('member-adder', 'member.add-requested', async (admin, event) => {
+  // receives HostAdmin, not ctx — it acts with platform authority,
+  // which is exactly what module code must never hold
+});
+```
+
+Why not just write directly from the module? Because that would be a write to another
+database inside a scope transaction: two independent commits, no coordinator, and an
+orphaned membership if the scope rolls back after the directory write lands.
+
+The connector has no such hazard. The event enters the outbox in the **same
+transaction** as the domain write, so a rollback leaves no event and nothing to effect.
+The executor then runs at-least-once from the outbox, exactly like a consumer.
+
+**Dispatch is prompt** — inline after commit, with the outbox as the retry backstop.
+The contract is eventually consistent, because that is what makes it correct under
+crash, but the common case completes inside the originating request.
+
+**The trail joins.** Splitting a change across two halves would otherwise split its
+audit trail, so admin rows carry `causedBy` — the id of the event that caused them.
+That is the event id rather than a separate correlation field: the envelope already
+carries a unique kernel-stamped id, and reusing it avoids widening a frozen contract to
+say something it already says.
+
 ## Audit as a product feature
 
 Because every event carries tenant, scope, actor, entity, and time — stamped, not

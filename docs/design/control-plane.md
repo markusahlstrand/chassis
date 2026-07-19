@@ -149,6 +149,12 @@ effects on the outside world are connectors.** The control-plane vertical emits
 through the host admin surface, and emits the result back. Module code still never obtains
 a cross-tenant stub, so K-3 and K-8 are untouched.
 
+**That executor is now built** (K-22 §4.2, #61), for membership rather than
+provisioning: `host.registerExecutor(id, eventType, handler)`, dispatched inline after
+commit with the outbox as the retry backstop, and stamping `causedBy` on every admin row
+it writes so the split trail joins. Provisioning would be a second registration on the
+same mechanism, which is what "not a one-off" meant.
+
 **Sequencing, honestly.** The split is more elegant, it dogfoods, and the dogfooding is a
 sales asset. It is also more moving parts: provisioning becomes async (compatible — §3.3
 already requires idempotent and journaled — but *suspend-for-incident* being async is worse
