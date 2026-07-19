@@ -5,6 +5,10 @@ import {
   identityLink,
   identityPool,
   createOrgInput,
+  publishVersionInput,
+  registerVerticalInput,
+  vertical as verticalSchema,
+  verticalVersion,
   moduleManifest,
   org as orgSchema,
   orgMembership,
@@ -29,6 +33,10 @@ import {
   type PermissionKey,
   type PlatformActorId,
   type PrincipalId,
+  type PublishVersionInput,
+  type RegisterVerticalInput,
+  type Vertical,
+  type VerticalVersion,
   type ResolvedIdentity,
   type RoleAssignment,
   type RoleDefinition,
@@ -56,7 +64,15 @@ import {
   type ScopeHost,
   type ScopeStub,
 } from '@substrat-run/kernel';
-import type { AccessLogRow, AuditLogQuery, OrgRow, RoleRow, ScopeRow } from './control-plane-do.js';
+import type {
+  AccessLogRow,
+  AuditLogQuery,
+  OrgRow,
+  RoleRow,
+  ScopeRow,
+  VerticalRow,
+  VersionRow,
+} from './control-plane-do.js';
 
 /**
  * `CloudflareScopeHost` — the coordinator (design doc §5.7). It runs in the
@@ -128,6 +144,18 @@ interface ControlPlaneStub {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  readVertical(slug: string): Promise<VerticalRow | undefined>;
+  insertVertical(slug: string, name: string, source: string, createdAt: string): Promise<void>;
+  listVerticals(): Promise<VerticalRow[]>;
+  readVersion(id: string): Promise<VersionRow | undefined>;
+  insertVersion(v: {
+    id: string; verticalSlug: string; version: string; manifestDigest: string;
+    permissionDigest: string; migrationDigest: string; deploymentRef: string | null;
+    createdAt: string;
+  }): Promise<void>;
+  listVersions(verticalSlug: string): Promise<VersionRow[]>;
+  setAdmission(id: string, admission: string, note: string | null): Promise<void>;
+  bindScopeVersion(scopeId: string, versionId: string, verticalSlug: string): Promise<void>;
   readOrg(tenantId: string, orgId: string): Promise<OrgRow | undefined>;
   createOrg(
     orgId: string,
@@ -477,6 +505,22 @@ export class CloudflareScopeHost implements ScopeHost {
     // table) while the contract requires them, so this parse is where that gap is
     // held shut — and it is the same parse the pure adapter does, which is what
     // makes the shared contract suite meaningful.
+    const mapVertical = (r: VerticalRow): Vertical =>
+      verticalSchema.parse({ slug: r.slug, name: r.name, source: r.source, createdAt: r.created_at });
+    const mapVersion = (r: VersionRow): VerticalVersion =>
+      verticalVersion.parse({
+        id: r.id,
+        verticalSlug: r.vertical_slug,
+        version: r.version,
+        manifestDigest: r.manifest_digest,
+        permissionDigest: r.permission_digest,
+        migrationDigest: r.migration_digest,
+        deploymentRef: r.deployment_ref,
+        admission: r.admission,
+        admissionNote: r.admission_note,
+        createdAt: r.created_at,
+      });
+
     const mapOrg = (r: OrgRow): Org =>
       orgSchema.parse({
         id: r.org_id,
@@ -510,6 +554,7 @@ export class CloudflareScopeHost implements ScopeHost {
         jurisdiction: r.jurisdiction,
         vertical: r.vertical,
         schemaVersion: r.schema_version,
+        verticalVersionId: r.vertical_version_id,
         migrationFailure:
           r.migration_failed_version && r.migration_last_attempt_at
             ? {
@@ -653,6 +698,73 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
           { orgId, permission, node, entity },
         );
+      },
+      // -- vertical + version registry (#31) ---------------------------------
+
+      registerVertical: async (actor, input: RegisterVerticalInput) => {
+        const parsed = registerVerticalInput.parse(input);
+        const existing = await this.cp.readVertical(parsed.slug);
+        if (existing) {
+          if (existing.source === parsed.source && existing.name === parsed.name) return;
+          throw new Error(`vertical '${parsed.slug}' is already registered as ${existing.source}`);
+        }
+        await this.cp.insertVertical(parsed.slug, parsed.name, parsed.source, new Date().toISOString());
+        await this.recordAdmin(actor, 'registerVertical', { tenantId: null }, null, parsed);
+      },
+      listVerticals: async (actor) => {
+        const rows = await this.cp.listVerticals();
+        await this.recordAccess(actor, 'listVerticals', {}, null, rows.length);
+        return rows.map(mapVertical);
+      },
+      publishVersion: async (actor, input: PublishVersionInput) => {
+        const parsed = publishVersionInput.parse(input);
+        if (!(await this.cp.readVertical(parsed.verticalSlug))) {
+          throw new Error(`unknown vertical '${parsed.verticalSlug}'`);
+        }
+        // Lands PENDING — a push is not a deploy.
+        await this.cp.insertVersion({ ...parsed, createdAt: new Date().toISOString() });
+        await this.recordAdmin(actor, 'publishVersion', { tenantId: null }, null, parsed);
+      },
+      listVersions: async (actor, verticalSlug: string) => {
+        const rows = await this.cp.listVersions(verticalSlug);
+        await this.recordAccess(actor, 'listVersions', {}, { verticalSlug }, rows.length);
+        return rows.map(mapVersion);
+      },
+      admitVersion: async (actor, versionId: string) => {
+        const v = await this.cp.readVersion(versionId);
+        if (!v) throw new Error(`unknown version ${versionId}`);
+        if (v.admission === 'admitted') return;
+        if (v.admission === 'rejected') {
+          throw new Error(`version ${versionId} was rejected — publish a new one`);
+        }
+        await this.cp.setAdmission(versionId, 'admitted', null);
+        await this.recordAdmin(actor, 'admitVersion', { tenantId: null }, { admission: v.admission }, { admission: 'admitted' });
+      },
+      rejectVersion: async (actor, versionId: string, note: string) => {
+        const v = await this.cp.readVersion(versionId);
+        if (!v) throw new Error(`unknown version ${versionId}`);
+        if (v.admission === 'admitted') {
+          throw new Error(`version ${versionId} is already admitted — it may be bound`);
+        }
+        if (v.admission === 'rejected') return;
+        await this.cp.setAdmission(versionId, 'rejected', note);
+        await this.recordAdmin(actor, 'rejectVersion', { tenantId: null }, { admission: v.admission }, { admission: 'rejected', note });
+      },
+      bindScopeVersion: async (actor, tenantId, scopeId, versionId: string) => {
+        const v = await this.cp.readVersion(versionId);
+        if (!v) throw new Error(`unknown version ${versionId}`);
+        // The refusal the registry exists for.
+        if (v.admission !== 'admitted') {
+          throw new Error(
+            `version ${versionId} is ${v.admission}, not admitted — it cannot be bound to a scope`,
+          );
+        }
+        const scope = await this.cp.getScopeRecord(tenantId, scopeId);
+        if (!scope) throw new Error(`unknown scope ${scopeId} in tenant ${tenantId}`);
+        await this.cp.bindScopeVersion(scopeId, versionId, v.vertical_slug);
+        await this.recordAdmin(actor, 'bindScopeVersion', { tenantId, scopeId }, null, {
+          versionId, vertical: v.vertical_slug, version: v.version,
+        });
       },
       createOrg: async (actor: PlatformActorId, input: CreateOrgInput) => {
         const parsed = createOrgInput.parse(input);

@@ -25,6 +25,11 @@ export const adminAction = z.enum([
   'removeMember', // K-21 — tombstones the membership tuple, never deletes it
   'createOrg', // K-22 — orgs are a real record, not a free-form string
   'registerIdentityPool',
+  'registerVertical', // #31 — the vertical + version registry
+  'publishVersion',
+  'admitVersion',
+  'rejectVersion',
+  'bindScopeVersion',
   'pruneAccessLog', // K-24 — deleting drained access rows is itself a mutation // K-23 — a provider declares its topology before it may link
   'createTenant', // §4.1
   'setTenantStatus', // §4.1 — before/after carry the transitioned status

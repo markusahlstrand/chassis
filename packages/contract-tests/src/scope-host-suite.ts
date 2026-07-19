@@ -296,6 +296,97 @@ export function scopeHostContractSuite(
       expect(rows).toHaveLength(1);
     });
 
+    // -- vertical + version registry (#31) -----------------------------------
+    // A scope binds to a VERSION, so dev/staging/prod are the same vertical pinned
+    // differently. The invariant that earns the registry its keep is that a push
+    // is not a deploy.
+
+    it('publishes a version as pending, and refuses to bind it until admitted', async () => {
+      const versionId = ulid();
+      await host.admin.registerVertical(staff, {
+        slug: 'callout',
+        name: 'Callout',
+        source: 'builtin',
+      });
+      await host.admin.publishVersion(staff, {
+        id: versionId,
+        verticalSlug: 'callout',
+        version: '1.0.0',
+        manifestDigest: 'm1',
+        permissionDigest: 'p1',
+        migrationDigest: 'g1',
+        deploymentRef: null,
+      });
+
+      const [published] = await host.admin.listVersions(staff, 'callout');
+      expect(published?.admission).toBe('pending');
+
+      // The refusal the registry exists for. Without it "a push lands pending" is
+      // a convention, and D-30's lockstep-upgrade argument is that conventions are
+      // what we cannot afford here.
+      await expect(host.admin.bindScopeVersion(staff, t1, s1, versionId)).rejects.toThrow(
+        /pending, not admitted/,
+      );
+
+      await host.admin.admitVersion(staff, versionId);
+      await host.admin.bindScopeVersion(staff, t1, s1, versionId);
+
+      const scope = await host.admin.getScopeRecord(staff, t1, s1);
+      expect(scope?.verticalVersionId).toBe(versionId);
+      // The slug is denormalized alongside, so the console and the audit target
+      // keep reading a label that survives the version being superseded.
+      expect(scope?.vertical).toBe('callout');
+    });
+
+    it('refuses to bind a rejected version, and rejection is terminal', async () => {
+      const versionId = ulid();
+      await host.admin.publishVersion(staff, {
+        id: versionId,
+        verticalSlug: 'callout',
+        version: '1.1.0-bad',
+        manifestDigest: 'm2',
+        permissionDigest: 'p2',
+        migrationDigest: 'g2',
+        deploymentRef: null,
+      });
+      await host.admin.rejectVersion(staff, versionId, 'permission diff widened a role');
+      await expect(host.admin.bindScopeVersion(staff, t1, s1, versionId)).rejects.toThrow(
+        /rejected, not admitted/,
+      );
+      // Terminal: a rejected version is not resurrected, a new one is published.
+      await expect(host.admin.admitVersion(staff, versionId)).rejects.toThrow(/was rejected/);
+      const rejected = (await host.admin.listVersions(staff, 'callout')).find(
+        (v) => v.id === versionId,
+      );
+      expect(rejected?.admissionNote).toContain('widened a role');
+    });
+
+    it('carries the digests promotion compares', async () => {
+      // "Has the permission surface changed between what is in prod and what I am
+      // promoting?" is a string comparison here. Today it is a person remembering
+      // to look, and a checkpoint that can be skipped is not a checkpoint.
+      const versions = await host.admin.listVersions(staff, 'callout');
+      for (const v of versions) {
+        expect(v.manifestDigest).toEqual(expect.any(String));
+        expect(v.permissionDigest).toEqual(expect.any(String));
+        expect(v.migrationDigest).toEqual(expect.any(String));
+      }
+    });
+
+    it('refuses a version for a vertical nobody registered', async () => {
+      await expect(
+        host.admin.publishVersion(staff, {
+          id: ulid(),
+          verticalSlug: 'ghost',
+          version: '1.0.0',
+          manifestDigest: 'm',
+          permissionDigest: 'p',
+          migrationDigest: 'g',
+          deploymentRef: null,
+        }),
+      ).rejects.toThrow(/unknown vertical/);
+    });
+
     it('rejects duplicate module registration', () => {
       expect(() => host.registerModule({ manifest: testModManifest })).toThrow(/already registered/);
     });
