@@ -114,13 +114,15 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   await host.admin.createTenant(staff, { id: world.t1, slug: 'elmontage', name: 'ElMontage AB' });
   await host.admin.createTenant(staff, { id: world.t2, slug: 'rorservice', name: 'RörService AB' });
 
-  // K-23: a provider declares its topology before it may link an identity. This demo
-  // runs one Better Auth instance for one tenant, so the pool is tenant-bound — the
-  // same external user id in another tenant would be a different person.
+  // K-23: a provider declares its topology before it may link an identity. One Better
+  // Auth store backs every persona here — including Mallory, who belongs to t2, the
+  // other firm the tenant-boundary demo turns away — so the pool is `central`: one
+  // issuer, globally unique external ids, many tenants. Tenant-bound would name a
+  // single tenant and refuse the link for anyone outside it.
   await host.admin.registerIdentityPool(staff, {
     provider: 'better-auth',
-    topology: 'tenant-bound',
-    tenantId: world.t1,
+    topology: 'central',
+    tenantId: null,
   });
 
   // Entitlements (§4.3): default-deny, so grant the SKU flags for the modules
