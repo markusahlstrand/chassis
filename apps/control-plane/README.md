@@ -59,5 +59,20 @@ log forever, so it must never be reused or changed.
 An empty roster means nobody can act — fail-closed is the correct posture, and
 recovery is the grant statement above. A managed surface for this belongs in the
 console and is not built yet.
+
+**The roster also gates account creation.** Better Auth's sign-up endpoint is
+public by default and is mounted on this origin, so before #47 anyone reaching
+the control plane could create an account in the staff store. Sign-up now refuses
+any email that is not on the roster, and refuses revoked entries — so a departed
+operator cannot simply re-register.
+
+The order is therefore: grant first, then the operator signs up and sets their own
+password. That keeps one gate instead of two, and avoids minting password hashes
+out of band.
+
+Still **not** addressed: this is email and password with no MFA and no SSO
+(`minPasswordLength: 8`), on a surface that can suspend every tenant. That is
+kernel open question 14 and wants its own decision — §6 says the action list
+should settle it, and the action list is now real.
 The dev-actor stub — which names a subject with cross-tenant reach — is mounted
 only under `dev`/test, never in `wrangler.jsonc` (control-plane.md §6).

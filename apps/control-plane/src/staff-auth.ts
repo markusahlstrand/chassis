@@ -32,6 +32,44 @@ export function buildStaffAuth(env: StaffAuthEnv, origin?: string) {
     secret: env.BETTER_AUTH_SECRET ?? 'dev-only-secret-substrat-control-plane-32c',
     baseURL,
     trustedOrigins,
+    databaseHooks: {
+      user: {
+        create: {
+          /**
+           * Account creation is gated on the staff roster (#47).
+           *
+           * Better Auth's sign-up endpoint is public by default, and it was
+           * mounted on the deployed origin — so anyone reaching the control plane
+           * could create an account. That was never an access hole on its own
+           * (the roster refuses anyone unlisted, and `sessionPlatformAuth` fails
+           * closed), but it left the roster as the *single* point between an
+           * unauthenticated stranger and a surface that can suspend every tenant,
+           * and allowed unbounded writes to the staff store.
+           *
+           * Gating here rather than `disableSignUp: true` keeps one gate instead
+           * of two: an operator is added to the roster deliberately, then sets
+           * their own password. The alternative would mean minting password
+           * hashes out of band, which is both awkward and easy to get wrong.
+           *
+           * Fails CLOSED — any error refuses the signup rather than allowing it.
+           */
+          before: async (user: { email?: unknown }) => {
+            const email = typeof user.email === 'string' ? user.email.toLowerCase() : null;
+            if (!email) return false;
+            try {
+              const row = await env.AUTH_DB.prepare(
+                'SELECT 1 FROM staff_actor WHERE email = ? AND revoked_at IS NULL',
+              )
+                .bind(email)
+                .first();
+              return row ? undefined : false;
+            } catch {
+              return false;
+            }
+          },
+        },
+      },
+    },
   });
 }
 
