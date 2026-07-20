@@ -1,4 +1,5 @@
 import { scopeId as scopeIdSchema, tenantId as tenantIdSchema } from '@substrat-run/contracts';
+import { secretMatches } from './platform-call.js';
 import type { ScopeId, TenantId } from '@substrat-run/contracts';
 
 /**
@@ -31,15 +32,7 @@ export interface RoutedNode {
 /** Thrown when headers are present but not trustworthy. Never means "no router". */
 export class RouterAssertionError extends Error {}
 
-/** Constant-time compare, so a wrong secret leaks nothing through timing. */
-function secretMatches(presented: string | null, expected: string): boolean {
-  if (!presented || presented.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) {
-    diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return diff === 0;
-}
+
 
 /**
  * The `(tenant, scope)` this request is for, or `null` when no router fronted it.

@@ -17,9 +17,16 @@ import {
   scopeId,
   tenantId,
   platformActorId,
+  z,
 } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
-import { readRoutedNode, RouterAssertionError } from '@substrat-run/kernel';
+import {
+  assertPlatformCall,
+  PlatformCallError,
+  readRoutedNode,
+  RouterAssertionError,
+} from '@substrat-run/kernel';
+import { provisionCallout } from './provision.js';
 import { ControlPlaneClient, ControlPlaneError } from '@substrat-run/control-plane-api';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
@@ -78,6 +85,15 @@ interface Env {
    * reachable by accident still cannot be told which tenant to serve.
    */
   ROUTER_SECRET?: string;
+  /**
+   * Shared secret the CONTROL PLANE presents to provision an instance here (K-31).
+   *
+   * Separate from ROUTER_SECRET because they are different authorities: the router
+   * may say which tenant a request is for, and must not be able to create one. Unset
+   * means provisioning is refused entirely — an unconfigured template must not
+   * provision for strangers.
+   */
+  PLATFORM_SECRET?: string;
   /**
    * Serve ONLY the demo world, with no router in front. This is the pre-router
    * deployment shape, kept because it is genuinely useful — `wrangler dev` and a
@@ -170,11 +186,53 @@ function authFor(
   return { auth, host, adapters };
 }
 
+/**
+ * Parse, don't trust — even from the platform. A malformed id reaching the kernel is
+ * a worse failure than a rejected call, and this is the one entry point where the
+ * caller is not a session we already resolved.
+ */
+const provisionInstanceBody = z.object({
+  tenantId,
+  scopeId,
+  owner: principalId,
+  slug: z.string().min(1),
+  name: z.string().min(1),
+});
+
 const app = new Hono<{ Bindings: Env }>();
 
 // Edge authentication (M3): Better Auth owns identity/credentials/sessions in
 // D1, mounted under /api/auth/*. A per-request instance (stateless coordinator).
 app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env, originOf(c.req.raw)).handler(c.req.raw));
+
+/**
+ * Provision ONE instance of this vertical, on the platform's instruction (K-31).
+ *
+ * The control plane decides an instance should exist and calls this, because only the
+ * vertical can create a usable scope DO — the DO class bundles the modules and lives
+ * in this deployment. The platform cannot do it on the vertical's behalf.
+ *
+ * Deliberately NOT under `/api/*`: that prefix is the tenant-facing surface behind the
+ * router, and this is a platform-to-vertical call that must never be reachable from a
+ * tenant's session. It is authenticated by the platform secret alone — no principal,
+ * no scope, because at this moment neither exists yet.
+ *
+ * Idempotent, so a retried call after a partial failure converges rather than
+ * duplicating. That matters more than usual here: K-31 makes this the second phase of a
+ * two-phase creation, and the reconciliation sweep re-runs exactly this.
+ */
+app.post('/internal/provision', async (c) => {
+  try {
+    assertPlatformCall(c.req.raw.headers, { expectedSecret: c.env.PLATFORM_SECRET });
+  } catch (e) {
+    if (e instanceof PlatformCallError) throw new HTTPException(403, { message: e.message });
+    throw e;
+  }
+
+  const body = provisionInstanceBody.parse(await c.req.json());
+  const instance = await provisionCallout(hostFor(c.env), body);
+  return c.json(instance, 201);
+});
 
 // One-time (idempotent) provisioning of the demo world.
 app.post('/api/seed', async (c) => {

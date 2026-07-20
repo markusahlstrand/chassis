@@ -26,6 +26,12 @@
 //      what keeps (1) from being the only thing standing between a config slip and
 //      a cross-tenant read.
 //
+// PROVISIONING (K-31). `wrangler secret put PLATFORM_SECRET`, matching the control
+// plane's. The control plane calls POST /internal/provision to create an instance
+// here, because only this deployment can create a scope DO carrying the modules.
+// Unset means provisioning is REFUSED — an unconfigured copy of this template must
+// not provision for strangers, which is the opposite of how ROUTER_SECRET behaves.
+//
 // For a single-tenant box or `wrangler dev`, set `STANDALONE=true` instead and the
 // worker serves the demo world with no router. That is deliberately a separate flag
 // from ALLOW_DEV_HEADER: standalone should not require switching on impersonation.

@@ -29,3 +29,8 @@ export type { PermissionChecker } from './permission-checker.js';
 export { ulid } from './ulid.js';
 export { readRoutedNode, RouterAssertionError } from './routed-node.js';
 export type { RoutedNode, HeaderReader } from './routed-node.js';
+export {
+  assertPlatformCall,
+  PlatformCallError,
+  PLATFORM_SECRET_HEADER,
+} from './platform-call.js';
