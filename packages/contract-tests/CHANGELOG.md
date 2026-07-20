@@ -1,5 +1,39 @@
 # @substrat-run/contract-tests
 
+## 0.7.0
+
+### Minor Changes
+
+- c54637b: The hostname map: `hostname → (tenant, scope, vertical, surface, region)`.
+
+  A provisioned scope had no URL, so "validate it works in production" had nowhere to
+  point. `contracts/routing.ts` adds `hostnameBinding` and `routeTarget`, and `HostAdmin`
+  adds `bindHostname` / `setHostnameStatus` / `listHostnames` / `resolveHostname`.
+
+  `surface` is the correction: one hostname per scope was already wrong, because a single
+  scope fronts a storefront and a back office, or a player app and a manager console.
+
+  `region` sits on the binding rather than in a router deployed per jurisdiction, because
+  Cloudflare's Regional Services is configured per hostname — residency is one more
+  column, not a second topology.
+
+  Bindings have a lifecycle (`pending` → `verifying` → `active`, or `failed` with a note),
+  since a custom domain is DNS validation and certificate issuance rather than a string
+  somebody sets. Only `active` resolves. `resolveHostname` takes no actor and is not
+  logged — the machine-path carve-out `resolveIdentity` already has — and does not
+  re-check suspension, which `getScope` owns.
+
+  Additive on every published surface: new schemas, new `HostAdmin` methods, new tables.
+  Nothing existing changed shape.
+
+### Patch Changes
+
+- Updated dependencies [c54637b]
+- Updated dependencies [8c48c93]
+- Updated dependencies [33fb5dd]
+  - @substrat-run/contracts@0.7.0
+  - @substrat-run/kernel@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes
@@ -89,7 +123,7 @@
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-            z.object({ facility: entityRef, unitPrice: money })
+              z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is

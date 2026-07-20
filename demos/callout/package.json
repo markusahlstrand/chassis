@@ -1,9 +1,9 @@
 {
   "name": "@substrat-run/demo-callout",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "license": "Apache-2.0",
-  "description": "FSM demo vertical (Callout) \u2014 see spec/testrun.md",
+  "description": "FSM demo vertical (Callout) — see spec/testrun.md",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
