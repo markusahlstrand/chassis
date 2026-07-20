@@ -312,6 +312,17 @@ export class CloudflareScopeHost implements ScopeHost {
   private readonly withdrawn = new Map<string, string>(); // operation → module
   private readonly operationEntitlement = new Map<string, string>();
 
+  /**
+   * MUST be constructed per request. Never cache an instance across requests.
+   *
+   * The stub below is a Durable Object stub, which is an I/O object owned by the
+   * request that created it — reusing one throws "Cannot perform I/O on behalf of a
+   * different request". Every worker in this repo rebuilds the host per request
+   * (`hostFor(env)`), which is what makes this safe, and it is the only thing that
+   * does. The router learned this the expensive way: it memoised a resolver that
+   * closed over a stub, the first request after each cold start succeeded, and every
+   * request after that returned 1101 in production.
+   */
   constructor(options: CloudflareScopeHostOptions) {
     this.scopeNs = options.scope;
     this.cp = options.controlPlane.get(

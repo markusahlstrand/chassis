@@ -29,15 +29,46 @@ const row = (over: Partial<Row> = {}): Row => ({
   ...over,
 });
 
-/** A control-plane namespace whose directory is a plain map. */
-function directory(rows: Record<string, Row>): DurableObjectNamespace {
-  const stub = {
-    readHostname: async (hostname: string) => rows[hostname],
-  };
-  return {
+/**
+ * A control-plane namespace that enforces what workerd enforces.
+ *
+ * A Durable Object stub is an I/O object owned by the request that created it. Using
+ * one from an earlier request throws "Cannot perform I/O on behalf of a different
+ * request" — and only from the SECOND request onward, so a suite that sends one
+ * request per test cannot see it. That is exactly how this shipped, and why the fake
+ * models the constraint instead of merely counting calls.
+ *
+ * `beginRequest()` marks a request boundary, the way a new invocation would.
+ */
+function directory(rows: Record<string, Row>) {
+  let request = 0;
+  let stubs = 0;
+  const ns = {
     idFromName: () => 'id',
-    get: () => stub,
-  } as unknown as DurableObjectNamespace;
+    get: () => {
+      stubs += 1;
+      const bornIn = request;
+      return {
+        readHostname: async (hostname: string) => {
+          if (bornIn !== request) {
+            throw new Error(
+              'Cannot perform I/O on behalf of a different request. I/O objects ' +
+                '(such as streams, request/response bodies, and others) created in the ' +
+                'context of one request handler cannot be accessed from a different ' +
+                "request's handler.",
+            );
+          }
+          return rows[hostname];
+        },
+      };
+    },
+  };
+  return Object.assign(ns as unknown as DurableObjectNamespace, {
+    beginRequest: () => {
+      request += 1;
+    },
+    stubs: () => stubs,
+  });
 }
 
 /** A vertical that echoes back what it was asked, so we can assert on the assertion. */
@@ -272,5 +303,33 @@ describe('router', () => {
     await worker.fetch(get('https://acme.example.com/'), envWith(binding));
     expect(seen?.headers.get('x-substrat-tenant')).toBe(T);
     expect(seen?.headers.get('x-substrat-scope')).toBe(S);
+  });
+
+  it('builds a fresh Durable Object stub for EVERY request', async () => {
+    // The regression. A stub cached across requests throws "Cannot perform I/O on
+    // behalf of a different request" — but not until the second request, so the
+    // first one succeeds and it looks healthy. Only the namespace may be held.
+    const cp = directory({ 'acme.example.com': row() });
+    const env = { CONTROL_PLANE: cp, VERTICAL_FSM: spyVertical().binding } as unknown as Env;
+
+    for (let i = 0; i < 3; i++) {
+      cp.beginRequest();
+      await worker.fetch(get('https://acme.example.com/'), env);
+    }
+
+    expect(cp.stubs()).toBe(3);
+  });
+
+  it('serves the second request as well as the first', async () => {
+    // Stated separately from the stub count because this is the SYMPTOM: production
+    // returned 1101 on every request after the first, while the first looked fine.
+    const cp = directory({ 'acme.example.com': row() });
+    const env = { CONTROL_PLANE: cp, VERTICAL_FSM: spyVertical().binding } as unknown as Env;
+
+    cp.beginRequest();
+    expect((await worker.fetch(get('https://acme.example.com/'), env)).status).toBe(200);
+    // The one that returned 1101 in production.
+    cp.beginRequest();
+    expect((await worker.fetch(get('https://acme.example.com/'), env)).status).toBe(200);
   });
 });
