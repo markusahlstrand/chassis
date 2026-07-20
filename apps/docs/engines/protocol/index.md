@@ -12,6 +12,10 @@ employee's **onboarding checklist**, all three shipping in the demo verticals ‚Ä
 engine never knows the vertical's vocabulary. (The HR vertical even signs onboarding as the
 *employee*, not a supervisor: same engine, the vertical's grant decides who signs.)
 
+Both content kinds ship in [Meridian](/verticals/meridian#engines-composed): onboarding as a
+`checklist`, and the **anst√§llningsavtal** as a `document` signed by an employer principal
+and a new hire who has no account yet. It is the worked example for everything below.
+
 ## At a glance
 
 | | |

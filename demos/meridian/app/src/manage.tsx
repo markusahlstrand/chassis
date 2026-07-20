@@ -213,27 +213,50 @@ export function OnboardingView({ d }: ManageProps) {
   return (
     <>
       <h1 className="page-title">Onboarding</h1>
-      <div className="page-sub">New hires and their progress · employee-completed tasks update live</div>
+      <div className="page-sub">
+        New hires and their progress · checklists update live, contracts wait on signatures
+      </div>
       {cards.length === 0 && <div className="card muted" style={{ fontSize: 14 }}>No one onboarding right now.</div>}
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))' }}>
         {cards.map(({ m, ob }) => {
           const done = ob!.answered;
           const total = ob!.total;
-          const signed = ob!.instance.status === 'signed';
+          const status = ob!.instance.status;
+          const signed = status === 'signed';
+          const pending = status === 'pending_signature';
+          // A document (the anställningsavtal) is not a progress bar — it is
+          // frozen and waiting on signatures, possibly from someone who has no
+          // account here yet. Showing "0/1" would misdescribe that entirely.
+          const isDoc = ob!.contentKind === 'document';
+          const chip = signed ? 'Signed' : isDoc ? (pending ? 'Out for signature' : 'Draft') : `${done}/${total}`;
+          const note = signed
+            ? isDoc
+              ? 'Signed by both parties.'
+              : 'Onboarding complete.'
+            : isDoc
+              ? pending
+                ? `Frozen at Scrive · ${ob!.pendingSignatures} signature${ob!.pendingSignatures === 1 ? '' : 's'} outstanding`
+                : 'Contract drafted, not yet sent.'
+              : 'Waiting on the employee to finish and e-sign.';
           return (
             <div className="card" key={m.id}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                 <Avatar name={m.name} lg />
                 <div>
                   <div style={{ fontWeight: 600 }}>{m.name}</div>
-                  <div className="muted" style={{ fontSize: 12.5 }}>Started {m.started_at ?? '—'}</div>
+                  <div className="muted" style={{ fontSize: 12.5 }}>
+                    {m.started_at ? `Started ${m.started_at}` : 'Not started yet'}
+                  </div>
                 </div>
-                <span className={`chip ${signed ? 'approved' : 'tint'}`} style={{ marginLeft: 'auto' }}>{signed ? 'Signed' : `${done}/${total}`}</span>
+                <span className={`chip ${signed ? 'approved' : pending ? 'tint' : 'tint'}`} style={{ marginLeft: 'auto' }}>{chip}</span>
               </div>
-              <div style={{ height: 6, borderRadius: 99, background: 'var(--track)' }}>
-                <div style={{ height: 6, borderRadius: 99, background: 'var(--accent)', width: `${(done / Math.max(1, total)) * 100}%` }} />
-              </div>
-              <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>{signed ? 'Onboarding complete.' : 'Waiting on the employee to finish and e-sign.'}</div>
+              <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>{ob!.title}</div>
+              {!isDoc && (
+                <div style={{ height: 6, borderRadius: 99, background: 'var(--track)' }}>
+                  <div style={{ height: 6, borderRadius: 99, background: 'var(--accent)', width: `${(done / Math.max(1, total)) * 100}%` }} />
+                </div>
+              )}
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>{note}</div>
             </div>
           );
         })}

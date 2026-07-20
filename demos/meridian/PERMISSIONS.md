@@ -39,7 +39,7 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 
 | Role | Permissions |
 | --- | --- |
-| `hr-admin` | `absence:approve`, `absence:configure`, `absence:read`, `employee:manage`, `expense:approve`, `expense:read`, `payroll:export`, `project:manage`, `protocol:create`, `protocol:fill`, `protocol:read`, `protocol:sign`, `protocol:void`, `time:read` |
+| `hr-admin` | `absence:approve`, `absence:configure`, `absence:read`, `employee:manage`, `expense:approve`, `expense:read`, `payroll:export`, `project:manage`, `protocol:bind`, `protocol:create`, `protocol:fill`, `protocol:read`, `protocol:request-signature`, `protocol:sign`, `protocol:void`, `time:read` |
 | `manager` | `absence:approve`, `absence:read`, `expense:approve`, `expense:read`, `protocol:read`, `time:read` |
 | `payroll` | `expense:read`, `payroll:export` |
 
@@ -57,13 +57,13 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 | `expense:submit` | — no role — |
 | `payroll:export` | `hr-admin`, `payroll` |
 | `project:manage` | `hr-admin` |
-| `protocol:bind` | — no role — |
+| `protocol:bind` | `hr-admin` |
 | `protocol:countersign` | — no role — |
 | `protocol:create` | `hr-admin` |
 | `protocol:fill` | `hr-admin` |
 | `protocol:read` | `hr-admin`, `manager` |
 | `protocol:record-signature` | — no role — |
-| `protocol:request-signature` | — no role — |
+| `protocol:request-signature` | `hr-admin` |
 | `protocol:sign` | `hr-admin` |
 | `protocol:void` | `hr-admin` |
 | `time:read` | `hr-admin`, `manager` |
