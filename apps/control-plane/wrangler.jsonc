@@ -21,6 +21,15 @@
 	],
 	// Better Auth's staff store (identity, credentials, sessions), separate from
 	// the directory DO. Apply migrations/0001_better_auth.sql to it before deploy.
+	// Vertical deployments this control plane may provision into (K-31). Only the
+	// vertical can create a usable scope DO, so provisioning is a call to it. Named
+	// VERTICAL_<SLUG> with dashes as underscores — the same convention the router uses.
+	//
+	// Also needs `wrangler secret put PLATFORM_SECRET`, matching each vertical's own.
+	// Without it the instances route reports no deployment bound rather than failing
+	// at the far end.
+	"services": [{ "binding": "VERTICAL_FSM", "service": "substrat-fsm" }],
+
 	"d1_databases": [
 		{
 			"binding": "AUTH_DB",

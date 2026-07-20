@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { ulid } from '@substrat-run/kernel';
 import { permissionKey, platformActorId, scopeId, tenantId } from '@substrat-run/contracts';
-import { createControlPlaneApi, DEV_ACTOR_HEADER, UNSAFE_devPlatformActorAuth } from '../src/index.js';
+import {
+  createControlPlaneApi,
+  DEV_ACTOR_HEADER,
+  UNSAFE_devPlatformActorAuth,
+  VerticalClient,
+} from '../src/index.js';
 
 /**
  * The transport contract (control-plane.md §4.5). These drive the HTTP surface
@@ -338,5 +343,94 @@ describe('control-plane API', () => {
     // The router's per-request read is not a staff action and has no route here
     // (K-24). A 404 rather than a resolution is the point.
     expect((await req('/hostnames/acme.example.com/resolve')).status).toBe(404);
+  });
+
+  // -- instances (K-31) -------------------------------------------------------
+
+  it('501s for a vertical with no deployment bound, rather than pretending', async () => {
+    // A control plane that silently does nothing is worse than one that says it
+    // cannot: the caller would believe an instance exists.
+    const res = await json('/verticals/ghost/instances', 'POST', {
+      tenantId: t1,
+      scopeId: scopeId.parse(ulid()),
+      owner: ulid(),
+      slug: 'acme',
+      name: 'Acme AB',
+    });
+    expect(res.status).toBe(501);
+  });
+
+  it('calls the vertical, presenting the platform secret', async () => {
+    let seen: Request | undefined;
+    const vertical = new VerticalClient({
+      platformSecret: 'shhh',
+      fetch: (async (url: string, init: RequestInit) => {
+        seen = new Request(url, init);
+        return new Response(
+          JSON.stringify({ tenantId: t1, scopeId: s1, owner: '01JZ00000000000000000000OW' }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        );
+      }) as unknown as typeof fetch,
+    });
+    const withVertical = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      verticals: { fsm: vertical },
+    });
+
+    const res = await withVertical.request('/verticals/fsm/instances', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        tenantId: t1,
+        scopeId: s1,
+        owner: '01JZ00000000000000000000OW',
+        slug: 'acme',
+        name: 'Acme AB',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(seen?.headers.get('x-substrat-platform')).toBe('shhh');
+    expect(new URL(seen!.url).pathname).toBe('/internal/provision');
+  });
+
+  it('surfaces a refusal from the vertical rather than swallowing it', async () => {
+    // A 403 here means the secrets do not match — a deployment error someone must
+    // see, not a transient failure to paper over.
+    const vertical = new VerticalClient({
+      platformSecret: 'wrong',
+      fetch: (async () =>
+        new Response(JSON.stringify({ error: 'not a platform call' }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        })) as unknown as typeof fetch,
+    });
+    const withVertical = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      verticals: { fsm: vertical },
+    });
+
+    const res = await withVertical.request('/verticals/fsm/instances', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        tenantId: t1,
+        scopeId: scopeId.parse(ulid()),
+        owner: '01JZ00000000000000000000OW',
+        slug: 'acme',
+        name: 'Acme AB',
+      }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('still requires an actor', async () => {
+    const res = await app.request('/verticals/fsm/instances', {
+      method: 'POST',
+      body: JSON.stringify({ tenantId: t1, scopeId: s1, owner: 'x', slug: 'a', name: 'A' }),
+    });
+    expect(res.status).toBe(401);
   });
 });

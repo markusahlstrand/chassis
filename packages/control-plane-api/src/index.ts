@@ -17,3 +17,9 @@ export type {
 } from './auth.js';
 export { ControlPlaneClient, ControlPlaneError } from './client.js';
 export type { ControlPlaneClientOptions, ClientProvisionScopeInput } from './client.js';
+export { VerticalClient } from './vertical-client.js';
+export type {
+  VerticalClientOptions,
+  ProvisionInstanceInput,
+  ProvisionedInstance,
+} from './vertical-client.js';

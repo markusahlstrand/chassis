@@ -17,10 +17,22 @@ import {
 import type { PlatformActorId, ScopeId, TenantId } from '@substrat-run/contracts';
 import type { ScopeHost } from '@substrat-run/kernel';
 import type { PlatformActorAuth } from './auth.js';
+import type { VerticalClient } from './vertical-client.js';
+import { ControlPlaneError } from './client.js';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { mapError } from './errors.js';
 
 export interface ControlPlaneApiOptions {
   host: ScopeHost;
+  /**
+   * How to reach each vertical, by slug (K-31). Absent slugs simply cannot be
+   * provisioned — the route 501s rather than pretending, because a control plane that
+   * silently does nothing is worse than one that says it cannot.
+   *
+   * A static map is the milestone-one shape, the same one the router carries and with
+   * the same Workers-for-Platforms swap later.
+   */
+  verticals?: Record<string, VerticalClient>;
   /**
    * Resolves the platform actor from the request. No default: an unauthenticated
    * control plane is not a sensible fallback, and a package that shipped one
@@ -51,6 +63,14 @@ const provisionScopeBody = z.object({
 });
 
 const setTenantStatusBody = z.object({ status: tenantStatus });
+
+const provisionInstanceBody = z.object({
+  tenantId: tenantIdSchema,
+  scopeId: scopeIdSchema,
+  owner: z.string().min(1),
+  slug: z.string().min(1),
+  name: z.string().min(1),
+});
 
 const bindHostnameBody = z.object({
   hostname: hostnameSchema,
@@ -238,6 +258,41 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       return c.json(await admin.getScopeRecord(c.get('actor'), tenantId, scopeId));
     });
   }
+
+  // -- instances (K-31) -------------------------------------------------------
+  // The one place this surface calls OUT rather than sitting over `HostAdmin`, and
+  // it is unavoidable: only the vertical can create a usable scope DO, because the
+  // DO class bundles the modules and lives in the vertical's own deployment.
+  //
+  // The DIRECTORY row is not written here. The console writes it after this
+  // succeeds, so the ordering is vertical-then-directory: a failure leaves an
+  // orphaned scope nobody can see, rather than a directory row promising a scope
+  // that does not exist. `scopeStatus` has a `provisioning` state for expressing the
+  // in-between properly, and it is still unused — see the PR.
+
+  app.post('/verticals/:slug/instances', async (c) => {
+    const slug = c.req.param('slug');
+    const vertical = options.verticals?.[slug];
+    if (!vertical) {
+      return c.json({ error: `no deployment is bound for vertical '${slug}'` }, 501);
+    }
+    const input = provisionInstanceBody.parse(await c.req.json());
+    try {
+      const instance = await vertical.provisionInstance(
+        input as Parameters<VerticalClient['provisionInstance']>[0],
+      );
+      return c.json(instance, 201);
+    } catch (e) {
+      // Propagate the vertical's own status rather than collapsing it to a 500. A
+      // 403 means the platform secrets do not match — a deployment error someone
+      // must act on, and indistinguishable from "the vertical is broken" once it
+      // has been flattened.
+      if (e instanceof ControlPlaneError) {
+        return c.json({ error: e.message }, e.status as ContentfulStatusCode);
+      }
+      throw e;
+    }
+  });
 
   // -- the hostname map (§4.7, K-26) -----------------------------------------
   // The three STAFF actions land here. `resolveHostname` deliberately does NOT:
