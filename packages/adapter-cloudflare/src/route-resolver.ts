@@ -70,9 +70,19 @@ export const normalizeHostname = (hostname: string): string => hostname.toLowerC
  * serving a suspended tenant blunts suspension — which §7 calls a live weapon.
  */
 export function createRouteResolver(controlPlane: DurableObjectNamespace): RouteResolver {
-  const cp = controlPlane.get(
-    controlPlane.idFromName('control-plane'),
-  ) as unknown as HostnameReader;
-
-  return async (hostname: string) => toRouteTarget(await cp.readHostname(normalizeHostname(hostname)));
+  return async (hostname: string) => {
+    // The stub is created HERE, per request, and never held across one.
+    //
+    // A Durable Object stub is an I/O object bound to the request that created it.
+    // Reusing one from a previous request fails with "Cannot perform I/O on behalf of
+    // a different request", and it fails in the cruellest possible way: the first
+    // request after a cold start succeeds, so it looks fine locally and in any test
+    // that sends one request, then throws for every request after it in production.
+    //
+    // Only the NAMESPACE may be held across requests. Nothing derived from it may be.
+    const cp = controlPlane.get(
+      controlPlane.idFromName('control-plane'),
+    ) as unknown as HostnameReader;
+    return toRouteTarget(await cp.readHostname(normalizeHostname(hostname)));
+  };
 }

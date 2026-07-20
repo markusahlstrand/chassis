@@ -117,21 +117,19 @@ const isTransientDispatchFailure = (e: unknown): boolean =>
 const isReplayable = (request: Request): boolean => request.body === null;
 
 /**
- * The DO stub is reused across requests in an isolate; the resolution itself is not
- * cached. Keyed on the binding rather than held in a bare module variable, so it
- * cannot outlive the env it was built from — in production there is one env per
- * isolate and the distinction is invisible, but a cache keyed on nothing is a bug
- * waiting for the first situation where that stops being true.
+ * Built per request, deliberately — nothing here is cached.
+ *
+ * This used to memoise the resolver in a WeakMap. That was wrong, and it failed in
+ * production with "Cannot perform I/O on behalf of a different request": the resolver
+ * closed over a Durable Object STUB, and a stub belongs to the request that created
+ * it. The comment defending the cache reasoned about the wrong hazard entirely — it
+ * worried about the map outliving its env, and missed that the stub could not outlive
+ * a single request.
+ *
+ * Constructing a closure over a namespace binding costs nothing. Caching anything
+ * derived from one costs a production outage that only appears on the SECOND request.
  */
-const resolvers = new WeakMap<DurableObjectNamespace, RouteResolver>();
-function resolverFor(env: Env): RouteResolver {
-  let resolver = resolvers.get(env.CONTROL_PLANE);
-  if (!resolver) {
-    resolver = createRouteResolver(env.CONTROL_PLANE);
-    resolvers.set(env.CONTROL_PLANE, resolver);
-  }
-  return resolver;
-}
+const resolverFor = (env: Env): RouteResolver => createRouteResolver(env.CONTROL_PLANE);
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
