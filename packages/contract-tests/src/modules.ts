@@ -443,7 +443,16 @@ export const connectorModManifest = moduleManifest.parse({
   version: '1.0.0',
   kernelContract: '^0.0.1',
   permissions: [{ key: 'connector:use', description: 'connector permission' }],
-  events: { emits: [{ type: 'member.add-requested', schemaVersion: 1 }], consumes: [] },
+  events: {
+    emits: [
+      { type: 'member.add-requested', schemaVersion: 1 },
+      // #100's fixtures: an effect that can be made to fail on demand, so the
+      // retry/dead-letter contract is exercised rather than described.
+      { type: 'effect.requested', schemaVersion: 1 },
+      { type: 'effect.doomed', schemaVersion: 1 },
+    ],
+    consumes: [],
+  },
   migrations: { journalDir: './migrations', compatibleFrom: '1.0.0' },
   attachmentTargets: [],
   entitlementKey: 'connector',
@@ -490,6 +499,31 @@ export const connectorMod: ModuleRegistration = {
         payload: { principal: input.principal, orgId: input.orgId, tenantId: ctx.tenantId },
       });
       throw new Error('deliberate failure after emit');
+    }) as unknown as OperationHandler<never, unknown>,
+    /**
+     * Ask for an effect, tagged. The suite's executor throws for any tag starting
+     * `poison`, which is how a *selective* failure gets tested — a handler that
+     * failed for everything could not show that one bad delivery leaves the
+     * others alone.
+     */
+    'connector/request-effect': ((ctx: OperationContext, input: { tag: string }) => {
+      ctx.emit({
+        type: 'effect.requested',
+        schemaVersion: 1,
+        entity: { entityType: 'effect', entityId: input.tag },
+        piiClass: 'none',
+        payload: { tag: input.tag },
+      });
+    }) as unknown as OperationHandler<never, unknown>,
+    /** Handled by an executor whose attempts are exhausted almost immediately. */
+    'connector/request-doomed': ((ctx: OperationContext, input: { tag: string }) => {
+      ctx.emit({
+        type: 'effect.doomed',
+        schemaVersion: 1,
+        entity: { entityType: 'effect', entityId: input.tag },
+        piiClass: 'none',
+        payload: { tag: input.tag },
+      });
     }) as unknown as OperationHandler<never, unknown>,
     'connector/requests': ((ctx: OperationContext) =>
       ctx.sql.query('SELECT id FROM connector_requests')) as unknown as OperationHandler<

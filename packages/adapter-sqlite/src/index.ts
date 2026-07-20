@@ -72,7 +72,12 @@ import {
   type AccessLogFilter,
   type AuditLogFilter,
   type ConsumerHandler,
+  type ExecutorDeadLetter,
+  type ExecutorDrainReport,
   type ExecutorHandler,
+  type ExecutorRetryPolicy,
+  backoffAt,
+  resolveRetryPolicy,
   type GuardPredicate,
   type HostAdmin,
   type ModuleRegistration,
@@ -155,8 +160,18 @@ const KERNEL_DDL = `
   CREATE TABLE IF NOT EXISTS _substrat_deliveries (
     event_id TEXT NOT NULL,
     consumer_module TEXT NOT NULL,
+    -- For a TERMINAL row this is when it was delivered (or dead-lettered). For a
+    -- row still retrying it is when it was last ATTEMPTED. The column predates
+    -- retry state (#100) and is NOT NULL, so it carries both readings rather than
+    -- forcing a table rebuild on every deployed scope.
     delivered_at TEXT NOT NULL,
     error TEXT,
+    -- Retry state, executors only (#100). Consumers leave both at their defaults
+    -- and keep the semantics they always had: a row means "do not deliver again".
+    --   next_attempt_at IS NOT NULL  -> pending, due at that time
+    --   next_attempt_at IS NULL      -> terminal: error IS NULL delivered, else dead
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
     PRIMARY KEY (event_id, consumer_module)
   );
 `;
@@ -334,7 +349,10 @@ export class SqliteScopeHost implements ScopeHost {
   private readonly operationEntitlement = new Map<string, string>();
   private readonly roles = new Map<string, RoleDefinition>(); // 'tenantId/roleKey'
   /** Executor id → {eventType, handler} (K-22 §4.2). Host code, not module code. */
-  private readonly executors = new Map<string, { eventType: string; handler: ExecutorHandler }>();
+  private readonly executors = new Map<
+    string,
+    { eventType: string; handler: ExecutorHandler; retry: Required<ExecutorRetryPolicy> }
+  >();
   /**
    * The event currently being effected by an executor, stamped onto any admin rows
    * it writes. Ambient rather than threaded through every HostAdmin signature: it is
@@ -569,9 +587,14 @@ export class SqliteScopeHost implements ScopeHost {
     this.admin = this.buildAdmin();
   }
 
-  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void {
+  registerExecutor(
+    id: string,
+    eventType: string,
+    handler: ExecutorHandler,
+    retry?: ExecutorRetryPolicy,
+  ): void {
     if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
-    this.executors.set(id, { eventType, handler });
+    this.executors.set(id, { eventType, handler, retry: resolveRetryPolicy(retry) });
   }
 
   registerModule(registration: ModuleRegistration): void {
@@ -878,39 +901,145 @@ export class SqliteScopeHost implements ScopeHost {
    * atomicity that matters already happened — the event only exists because the
    * emitting transaction committed.
    *
-   * A throwing executor leaves the delivery unjournaled, so it is retried on the
-   * next dispatch. That is the backstop; it is not a substitute for idempotent
-   * handlers, which at-least-once still requires.
+   * **Failure is contained here (#100), three ways.** A throwing handler used to
+   * escape `invoke()` after COMMIT, so a caller saw an error for work that had in
+   * fact succeeded; it now records a failed attempt and returns. Failures back off
+   * rather than re-running on every dispatch, so a permanently-poisoned event no
+   * longer re-runs its side effects at request rate. And each event and each
+   * executor is isolated, so one bad delivery cannot wedge the ones behind it —
+   * which the old `ORDER BY o.id` loop did, permanently.
+   *
+   * At-least-once still requires idempotent handlers. Retry is the backstop, not a
+   * substitute.
    */
-  private async dispatchExecutors(rt: ScopeRuntime): Promise<void> {
+  private async dispatchExecutors(rt: ScopeRuntime): Promise<ExecutorDrainReport> {
+    const report: ExecutorDrainReport = {
+      attempted: 0,
+      delivered: 0,
+      retrying: 0,
+      deadLettered: 0,
+    };
+    const now = new Date().toISOString();
     for (const [id, executor] of this.executors) {
       const deliveryId = `executor:${id}`;
+      // Due = never attempted, or retrying and past its next attempt time.
+      // Terminal rows (next_attempt_at IS NULL) are excluded by the join.
       const rows = rt.db
         .prepare(
-          `SELECT * FROM _substrat_outbox o
+          `SELECT o.* FROM _substrat_outbox o
+           LEFT JOIN _substrat_deliveries d
+             ON d.event_id = o.id AND d.consumer_module = ?
            WHERE o.type = ?
-             AND NOT EXISTS (
-               SELECT 1 FROM _substrat_deliveries d
-               WHERE d.event_id = o.id AND d.consumer_module = ?
-             )
+             AND (d.event_id IS NULL
+                  OR (d.next_attempt_at IS NOT NULL AND d.next_attempt_at <= ?))
            ORDER BY o.id`,
         )
-        .all(executor.eventType, deliveryId) as OutboxRow[];
+        .all(deliveryId, executor.eventType, now) as OutboxRow[];
+
       for (const row of rows) {
         const event = this.parseOutboxRow(row);
+        report.attempted += 1;
         this.causedBy = event.id;
         try {
           await executor.handler(this.admin, event);
+          this.recordExecutorDelivery(rt, row.id, deliveryId, null, executor.retry);
+          report.delivered += 1;
+        } catch (err) {
+          const dead = this.recordExecutorDelivery(
+            rt,
+            row.id,
+            deliveryId,
+            err instanceof Error ? (err.stack ?? err.message) : String(err),
+            executor.retry,
+          );
+          if (dead) report.deadLettered += 1;
+          else report.retrying += 1;
         } finally {
           this.causedBy = null;
         }
-        rt.db
-          .prepare(
-            'INSERT OR IGNORE INTO _substrat_deliveries (event_id, consumer_module, delivered_at) VALUES (?, ?, ?)',
-          )
-          .run(row.id, deliveryId, new Date().toISOString());
       }
     }
+    return report;
+  }
+
+  /**
+   * Journal one executor attempt. Returns true when this attempt was the last one
+   * — i.e. the delivery is now dead-lettered.
+   *
+   * Written AFTER the handler ran, so a crash mid-effect retries rather than
+   * silently marking success. Claiming first would make delivery at-most-once and
+   * lose an effect on any crash in between.
+   */
+  private recordExecutorDelivery(
+    rt: ScopeRuntime,
+    eventId: string,
+    deliveryId: string,
+    error: string | null,
+    retry: Required<ExecutorRetryPolicy>,
+  ): boolean {
+    const prior =
+      (
+        rt.db
+          .prepare(
+            'SELECT attempts FROM _substrat_deliveries WHERE event_id = ? AND consumer_module = ?',
+          )
+          .get(eventId, deliveryId) as { attempts: number } | undefined
+      )?.attempts ?? 0;
+    const attempts = prior + 1;
+    const exhausted = attempts >= retry.maxAttempts;
+    // Terminal on success or on exhaustion; otherwise schedule the next attempt.
+    const nextAttemptAt =
+      error === null || exhausted ? null : backoffAt(attempts, retry, new Date());
+    rt.db
+      .prepare(
+        `INSERT INTO _substrat_deliveries
+           (event_id, consumer_module, delivered_at, error, attempts, next_attempt_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (event_id, consumer_module) DO UPDATE SET
+           delivered_at = excluded.delivered_at,
+           error = excluded.error,
+           attempts = excluded.attempts,
+           next_attempt_at = excluded.next_attempt_at`,
+      )
+      .run(eventId, deliveryId, new Date().toISOString(), error, attempts, nextAttemptAt);
+    return error !== null && exhausted;
+  }
+
+  async drainDue(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDrainReport> {
+    const rt = this.runtime(tenantId, scopeId);
+    await this.applyPendingMigrations(rt);
+    return rt.actor.enqueue(() => this.dispatchExecutors(rt));
+  }
+
+  async executorDeadLetters(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDeadLetter[]> {
+    const rt = this.runtime(tenantId, scopeId);
+    await this.applyPendingMigrations(rt);
+    const rows = rt.db
+      .prepare(
+        `SELECT d.event_id, d.consumer_module, d.attempts, d.error, d.delivered_at, o.type
+         FROM _substrat_deliveries d
+         JOIN _substrat_outbox o ON o.id = d.event_id
+         WHERE d.consumer_module LIKE 'executor:%'
+           AND d.error IS NOT NULL
+           AND d.next_attempt_at IS NULL
+         ORDER BY d.event_id`,
+      )
+      .all() as {
+      event_id: string;
+      consumer_module: string;
+      attempts: number;
+      error: string;
+      delivered_at: string;
+      type: string;
+    }[];
+    return rows.map((r) => ({
+      eventId: r.event_id,
+      executorId: r.consumer_module.slice('executor:'.length),
+      eventType: r.type,
+      attempts: r.attempts,
+      error: r.error,
+      lastAttemptAt: r.delivered_at,
+    }));
   }
 
   private async dispatch(rt: ScopeRuntime): Promise<void> {
@@ -2478,6 +2607,12 @@ export class SqliteScopeHost implements ScopeHost {
     // KERNEL_DDL is all IF NOT EXISTS, so a scope DB created before K-21 keeps the
     // old shape — ALTER the tombstone in.
     this.ensureColumn(db, '_substrat_tuples', 'revoked_at', 'revoked_at TEXT');
+    // Executor retry state (#100), same reasoning: scopes provisioned before it
+    // already have the table. Defaults read as "terminal", which is exactly right
+    // for the rows already there — every one of them is a completed delivery or a
+    // consumer dead-letter.
+    this.ensureColumn(db, '_substrat_deliveries', 'attempts', 'attempts INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn(db, '_substrat_deliveries', 'next_attempt_at', 'next_attempt_at TEXT');
     const appliedMigrations = new Set<string>(
       (
         db.prepare('SELECT module_id, version FROM _substrat_migrations').all() as {

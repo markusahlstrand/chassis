@@ -64,6 +64,8 @@ export function scopeHostContractSuite(
   describe(`scope-host contract: ${adapterName}`, () => {
     let fixture: ScopeHostFixture;
     let host: ScopeHost;
+    /** Tags the flaky executor successfully effected — the delivery evidence. */
+    const effected: string[] = [];
     const t1 = tenantId.parse(ulid());
     const t2 = tenantId.parse(ulid());
     const t3 = tenantId.parse(ulid()); // control-plane §4.1 tenant-lifecycle fixture
@@ -101,6 +103,28 @@ export function scopeHostContractSuite(
           p.orgId as OrgId,
         );
       });
+
+      // #100 fixtures. `flaky` fails only for `poison*` tags and backs off far
+      // enough that a retry cannot happen inside a test; `doomed` exhausts almost
+      // immediately so the dead-letter path is reachable without waiting.
+      host.registerExecutor(
+        'flaky-effector',
+        'effect.requested',
+        async (_admin, event) => {
+          const p = event.payload as { tag: string };
+          if (p.tag.startsWith('poison')) throw new Error(`boom:${p.tag}`);
+          effected.push(p.tag);
+        },
+        { maxAttempts: 5, baseDelayMs: 60_000 },
+      );
+      host.registerExecutor(
+        'doomed-effector',
+        'effect.doomed',
+        async () => {
+          throw new Error('always fails');
+        },
+        { maxAttempts: 2, baseDelayMs: 0 },
+      );
 
       // A scope requires an existing active tenant (§4.1) — create then provision.
       await host.admin.createTenant(staff, { id: t1, slug: 'tenant-one', name: 'Tenant One' });
@@ -296,6 +320,64 @@ export function scopeHostContractSuite(
         (e) => e.action === 'addMember' && JSON.stringify(e.after).includes(once),
       );
       expect(rows).toHaveLength(1);
+    });
+
+    // -- executor failure is contained (#100) ---------------------------------
+    //
+    // The seam's whole value is that an effect outside the scope cannot corrupt
+    // the scope. Before this, a throwing executor escaped `invoke()` AFTER the
+    // transaction committed — so the caller was told their work failed when it
+    // had not, and the failing event re-ran on every later dispatch forever.
+
+    it('a failing executor does not fail the operation that emitted the event', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      // The executor throws for `poison*`. The operation must still resolve: its
+      // transaction committed, and the delivery is a separate fact. A rejection
+      // here fails the test — which is exactly what the old behaviour did.
+      await stub.invoke('connector/request-effect', { tag: 'poison-a' });
+
+      // And it is now BACKED OFF, not hammering. Nothing else has work due at
+      // this point in the suite, so an empty pass is a real statement about the
+      // 60s backoff: the old code re-ran the failing effect on every dispatch.
+      const report = await host.drainDue(t1, s1);
+      expect(report.attempted).toBe(0);
+      expect(report.deadLettered).toBe(0);
+    });
+
+    it('one poison delivery does not block the deliveries behind it', async () => {
+      // `poison-a` from the previous test is failing and backed off. A later
+      // event for the SAME executor must still be attempted — the old loop
+      // stopped at the first throw and never reached it.
+      const stub = await host.getScope(alice, t1, s1);
+      await stub.invoke('connector/request-effect', { tag: 'ok-1' });
+      expect(effected).toContain('ok-1');
+      // The poison delivery is still pending, not dead — it is being retried,
+      // not skipped, and it did not take `ok-1` down with it.
+      expect(await host.executorDeadLetters(t1, s1)).toEqual([]);
+    });
+
+    it('exhausting attempts dead-letters the delivery, with the evidence kept', async () => {
+      const stub = await host.getScope(alice, t1, s1);
+      // maxAttempts: 2, baseDelayMs: 0 — attempt one on emit, attempt two on drain.
+      await stub.invoke('connector/request-doomed', { tag: 'doomed-1' });
+      const report = await host.drainDue(t1, s1);
+      expect(report.deadLettered).toBe(1);
+
+      const dead = await host.executorDeadLetters(t1, s1);
+      const entry = dead.find((d) => d.executorId === 'doomed-effector');
+      expect(entry).toBeDefined();
+      expect(entry!.eventType).toBe('effect.doomed');
+      expect(entry!.attempts).toBe(2);
+      expect(entry!.error).toContain('always fails');
+    });
+
+    it('a dead-lettered delivery is terminal — it is not retried again', async () => {
+      const before = await host.executorDeadLetters(t1, s1);
+      const report = await host.drainDue(t1, s1);
+      // Nothing new attempted for the doomed executor: the row is terminal.
+      expect(report.deadLettered).toBe(0);
+      const after = await host.executorDeadLetters(t1, s1);
+      expect(after).toHaveLength(before.length);
     });
 
     // -- vertical + version registry (#31) -----------------------------------
