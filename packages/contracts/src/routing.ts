@@ -26,13 +26,23 @@ export const surfaceName = z.string().min(1).max(32);
 /**
  * Where the hostname's traffic may be processed.
  *
- * The DO jurisdiction (K-7) pins storage and execution and is fixed at
- * provisioning. This is the OTHER half: Cloudflare's Regional Services pins TLS
- * termination and processing, and it is configured **per hostname** — which is why
- * residency is one more column here rather than a router deployed per region.
+ * The DO jurisdiction (K-7) pins storage and execution and is fixed at provisioning.
+ * This is the OTHER half: Regional Services pins TLS termination and processing.
  *
- * Null means unconstrained. Widening beyond `eu` is additive when a customer needs
- * it; Cloudflare also offers `us` and `fedramp`.
+ * **This column records the region; it does not cause it** (K-30). TLS terminates
+ * before any of our code runs, so nothing read from here can move it — the region is
+ * enforced by a wildcard Regional Hostnames config per jurisdiction
+ * (`*.eu.substrat.run`), and default hostnames carry the jurisdiction in the name.
+ * What this column is for is letting the router detect a CONTRADICTION between the
+ * edge configuration and the directory, and refuse the request.
+ *
+ * Which is also why it should be derived from the scope's jurisdiction rather than
+ * accepted as an independent input: two values that must agree, supplied separately,
+ * eventually disagree — and this is the one an EU claim rests on. `bindHostname` does
+ * not enforce that yet.
+ *
+ * Null means unconstrained. Widening beyond `eu` is additive; Cloudflare also offers
+ * `us` and `fedramp`, and `us` is needed as soon as a second jurisdiction ships.
  */
 export const hostnameRegion = z.enum(['eu']).nullable();
 export type HostnameRegion = z.infer<typeof hostnameRegion>;

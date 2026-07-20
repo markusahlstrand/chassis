@@ -14,10 +14,20 @@ Before this, a provisioned scope had no URL — the console faked it with a
 **Not one per vertical.** Cert and DNS lifecycle in one place means a new vertical
 gets custom domains for free instead of repeating the Cloudflare for SaaS dance.
 
-**Not one per jurisdiction.** Regional Services pins TLS termination and processing
-*per hostname*, and the DO jurisdiction pins storage and execution (K-7). Both halves
-are configuration, so residency is a column on the binding rather than a second
-deployment topology.
+**Not one per jurisdiction** — the router specifically. It is stateless and holds
+nothing regional, so a per-region router would duplicate the cert and DNS lifecycle and
+buy nothing.
+
+**Verticals are different, and they DO deploy per jurisdiction** (K-30). Bindings are
+per-deployment, so `substrat-fsm-eu` holds an EU D1 and opens EU-jurisdiction Durable
+Objects: a worker that *cannot* reach US storage beats one that chooses not to — the
+same reasoning as this worker having no `SCOPE` binding. `verticalFor` therefore keys on
+`(slug, region)`.
+
+TLS termination is pinned by a wildcard Regional Hostnames config per jurisdiction
+(`*.eu.substrat.run`), not by anything the router does — termination happens before this
+code runs. The `region` on a binding is there so the router can detect a contradiction
+between the edge configuration and the directory and refuse the request.
 
 **This does not erode D-30.** That decision rejects bundling verticals into one DO
 class, which would force lockstep engine upgrades across verticals owned by different

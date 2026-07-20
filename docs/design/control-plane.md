@@ -416,6 +416,48 @@ covers both halves without deploying anything per region:
 Hostname is already the key the router indexes on, so `region` is one more column
 rather than a second topology.
 
+**Refined by K-30, after getting this wrong once.** The paragraph above is right that
+residency is configuration rather than router topology. It was wrong about where the
+configuration attaches. **TLS terminates before any of our code runs**, so nothing the
+router knows can move it — the hostname is the only lever, and a region carried in the
+map cannot influence termination that already happened.
+
+Regional Hostnames accepts wildcards ("wildcards are supported for one level"), so:
+
+| | Hostname | Regional config |
+|---|---|---|
+| Default | `<slug>.eu.substrat.run` | one wildcard `*.eu.substrat.run`, set once |
+| Custom | `app.acme.com` | per hostname, inside the Cloudflare-for-SaaS onboarding |
+
+Two configs cover every tenant instead of one API call each. That is not just less work:
+a per-hostname call necessarily happens *after* the hostname resolves, leaving a window
+where an EU tenant's TLS terminates outside the EU. A wildcard exists before any tenant
+does, which removes the window rather than sequencing around it.
+
+The cost is that a two-level hostname is beyond Universal SSL, so this **requires
+Advanced Certificate Manager**.
+
+**Verticals deploy per jurisdiction; the router does not.** Bindings are per-deployment,
+so `substrat-fsm-eu` holds an EU D1 and opens EU-jurisdiction DOs — a worker that
+*cannot* reach US storage beats one that chooses not to, the same reasoning as the
+router having no `SCOPE` binding. The router stays single because it is stateless and
+holds nothing regional; `verticalFor` keys on `(slug, region)`.
+
+The router **rejects a request whose hostname region contradicts its scope's
+jurisdiction**. That is an integrity check between the edge configuration and the
+directory — two systems that can drift — not a second enforcement point re-deciding
+something `getScope` owns.
+
+Two things this forecloses:
+
+- **Workers KV cannot be used with Regional Services**, so it is not available as the
+  cache for the router's per-request directory read. That was the obvious fix for the
+  hot path, and it would have voided the residency claim for every hostname it served.
+  Open question 5 inherits the constraint.
+- **D1 carries residency through a `jurisdiction`, never a location hint.** A
+  jurisdiction is a hard constraint and restricts read replicas to it; a hint is
+  explicitly best-effort. This answers kernel-design open question 7.
+
 Two costs, stated:
 
 - **Regional Services is an Enterprise add-on.** The EU-residency claim carries a
@@ -427,6 +469,13 @@ Two costs, stated:
 
 The contract currently allows `jurisdiction: 'eu' | null`. Cloudflare offers `us` and
 `fedramp` too; widening is additive when a customer needs it.
+
+**Consequences for the code, not yet built** (K-30): `hostnameRegion` widens beyond
+`'eu'`; `bindHostname` derives the region from the scope's jurisdiction rather than
+accepting it as an independent input, so the two cannot disagree; `verticalFor` keys on
+`(slug, region)`; and `demos/callout`'s single `AUTH_DB` becomes per-jurisdiction —
+today one database holds Better Auth identities for every tenant regardless of their
+scope's jurisdiction.
 
 #### Two things this defers
 
