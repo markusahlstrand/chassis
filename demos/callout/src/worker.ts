@@ -234,8 +234,27 @@ app.post('/internal/provision', async (c) => {
   return c.json(instance, 201);
 });
 
-// One-time (idempotent) provisioning of the demo world.
+/**
+ * One-time (idempotent) provisioning of the demo world.
+ *
+ * Gated by the platform secret, exactly like `/internal/provision` above. It
+ * creates a tenant, grants entitlements, provisions and activates a scope,
+ * defines and assigns roles, links identities, and mints Better Auth logins with
+ * known demo passwords — every one of which is a platform action. It sits under
+ * `/api/*`, which is the TENANT-facing surface behind the router, so without a
+ * gate anyone who could reach this deployment's hostname could call it.
+ *
+ * It stays at this path because the demo's own tooling and docs point at it;
+ * the fix is the missing check, not a move that would break them.
+ */
 app.post('/api/seed', async (c) => {
+  try {
+    assertPlatformCall(c.req.raw.headers, { expectedSecret: c.env.PLATFORM_SECRET });
+  } catch (e) {
+    if (e instanceof PlatformCallError) throw new HTTPException(403, { message: e.message });
+    throw e;
+  }
+
   const host = hostFor(c.env);
   await host.admin.createTenant(STAFF, { id: T, slug: 'elmontage', name: 'ElMontage AB' });
   for (const key of ['workorder', 'invoicing', 'protocol', 'callout']) {
