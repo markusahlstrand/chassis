@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "engines/*"
+  - "connectors/*"
   - "demos/*"
   - "demos/*/app"
   - "demos/*/admin"
