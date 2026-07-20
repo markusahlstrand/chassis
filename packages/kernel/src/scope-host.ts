@@ -1,5 +1,11 @@
 import type {
   AdminAction,
+  Connection,
+  ConnectionFilter,
+  ConnectionId,
+  ConnectionSecret,
+  CreateConnectionInput,
+  OpenConnection,
   AccessLogEntry,
   BindHostnameInput,
   AdminLogEntry,
@@ -578,6 +584,66 @@ export interface HostAdmin {
    * DIFFERENT principal **throws** — it means two subjects collided, and silently
    * ignoring it would resolve the second person as the first.
    */
+  // -- the integrations hub (#101; design/connections.md §3) ------------------
+
+  /**
+   * Store a tenant's authorization for one provider, held by one vertical.
+   *
+   * The credential is sealed by the host's `SecretBox` before it touches the
+   * directory, and the admin-log row carries **metadata only** — provider,
+   * label, scopes. That is structural, not careful: `_substrat_admin_log` is
+   * append-only, so a secret written into it could never be removed.
+   *
+   * Takes a `PlatformActorId` today. Connecting a provider is really a tenant
+   * admin's act, and routing it through a platform actor is the same defect
+   * D-31 named for `addMember` — so this is a deliberate deferral, recorded in
+   * connections.md §3.5, not an answer. No console flow should be built on this
+   * signature until the question is settled together with membership's.
+   */
+  createConnection(actor: PlatformActorId, input: CreateConnectionInput): Promise<void>;
+
+  /** Metadata only — never the credential, at any privilege level. */
+  listConnections(actor: PlatformActorId, filter?: ConnectionFilter): Promise<Connection[]>;
+
+  /** Replace the sealed credential — the OAuth refresh path. */
+  updateConnectionSecret(
+    actor: PlatformActorId,
+    id: ConnectionId,
+    secret: ConnectionSecret,
+    expiresAt?: string,
+  ): Promise<void>;
+
+  /**
+   * Withdraw a connection. Tombstones like K-21 rather than deleting: a
+   * credential that once had access is evidence of why an access was allowed.
+   * Terminal — a replacement is a new connection, which is why the uniqueness
+   * constraint ignores revoked rows.
+   */
+  revokeConnection(actor: PlatformActorId, id: ConnectionId): Promise<void>;
+
+  /**
+   * Open the credential for one (tenant, vertical, provider) — the connector's
+   * read, and the only path in the system that yields plaintext.
+   *
+   * **Takes no actor and is not audited**, the same exemption `resolveHostname`
+   * and `resolveIdentity` hold and for the same reason: it is a machine read on
+   * the request path, and an audit row per outbound HTTP call would drown the
+   * log that matters. What *is* recorded is health — `recordConnectionUse` below
+   * — which is the signal an operator can actually act on.
+   */
+  openConnection(
+    tenantId: TenantId,
+    vertical: string,
+    provider: string,
+  ): Promise<OpenConnection | undefined>;
+
+  /**
+   * Record that a connection worked, or did not (§3.7). Written by the connector
+   * runtime; read by a console. Not audited — it is telemetry about a machine
+   * read, not a control-plane mutation.
+   */
+  recordConnectionUse(id: ConnectionId, outcome: { ok: true } | { ok: false; error: string }): Promise<void>;
+
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
 
   /**

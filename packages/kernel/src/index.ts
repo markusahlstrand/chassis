@@ -21,6 +21,8 @@ export type {
   SqlValue,
 } from './scope-host.js';
 export { backoffAt, resolveRetryPolicy } from './scope-host.js';
+export { unconfiguredSecretBox, webCryptoSecretBox } from './secret-box.js';
+export type { SealedSecret, SecretBox } from './secret-box.js';
 export { resolveScopeRecord } from './scope-record.js';
 export type { ResolvedScopeRecord } from './scope-record.js';
 export {

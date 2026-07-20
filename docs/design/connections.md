@@ -123,15 +123,42 @@ to look.
 One tenant's authorization to act against one external provider.
 
 ```
-connection        id, tenant_id, provider ('scrive'|'fortnox'|…), label, status,
-                  external_account_ref, scopes, created_by, created_at,
-                  expires_at, last_ok_at, last_error, last_error_at
-connection_secret connection_id, key_id, sealed  — never in the same read path
+connection        id, tenant_id, VERTICAL, provider ('scrive'|'fortnox'|…), label,
+                  status, external_account_ref, scopes, created_by, created_at,
+                  expires_at, last_ok_at, last_error, last_error_at, revoked_at
+                  UNIQUE (tenant_id, vertical, provider) WHERE revoked_at IS NULL
+connection_secret connection_id, key_id, ciphertext — never in the same read path
 ```
 
 Split deliberately: **metadata is readable, secret material is not.** Listing connections for
 a console, checking health, and resolving "does this tenant have Scrive?" must not touch
 ciphertext.
+
+### 3.1.1 Keyed on (tenant, vertical, provider) — not on tenant alone
+
+An earlier draft keyed on `tenant_id` alone, which would have made one connection visible to
+**every vertical deployment serving that tenant**. That is wrong on three counts:
+
+- **D-30 makes a vertical a blast-radius boundary.** One deployment per vertical exists so a
+  problem in one does not reach another; a shared credential punches straight through it.
+- **D-33 makes vertical builders third parties.** Verticals are built and hosted by different
+  companies. Tenant-wide credentials would let vendor A's host code act against a provider
+  that vendor B connected. Module code still cannot read a credential — but the connector is
+  host code in that vertical's own deployment, so the boundary would be doing no work.
+- **It is not how the provider issues credentials anyway.** Scrive is OAuth2 with registered
+  clients: two vendors acting for one tenant each register their own client and hold their own
+  tokens. A single shared row is a shape we would be inventing, not one that exists.
+
+`vertical` is already first-class — `scopes.vertical` is a real column, `RouteTarget` carries
+`verticalSlug`, and the admin log has a `vertical` target — so a connector resolves it from the
+scope the event came from. No new plumbing.
+
+**Cross-vertical sharing is therefore an explicit grant, if a real case ever appears.**
+Additive, auditable, revocable, and fails closed meanwhile. Building the sharing machinery now
+would be designing ahead of the second consumer, which is exactly what D-27 forbids.
+
+The honest cost: a tenant running two Substrat verticals connects Scrive twice. Given they
+would hold two OAuth clients regardless, that is the true shape rather than a tax.
 
 ### 3.2 It lives in the directory, not the scope
 
@@ -336,9 +363,44 @@ capability anywhere in the repo, [master-plan.md §6](../master-plan.md) puts ge
 build list against a documents engine that does not exist, and
 [engine-protocol.md §7](engine-protocol.md) lists PDF rendering as an explicit non-goal.
 
-Scrive has `setfile` separate from `new`, and supports template documents, so this may be far
-smaller than "the documents engine" — plausibly a single-purpose renderer for one avtal, or a
-Scrive-side template. **Worth an hour of investigation before it is planned as a project.**
+### 6.1 The PDF question, answered
+
+Investigated. Three findings:
+
+1. **Scrive has no HTML/text → PDF endpoint.** It takes an uploaded file, or a template that
+   already exists in Scrive.
+2. **The template path is real**: `POST /api/v2/documents/newfromtemplate/{template_id}`
+   uploads nothing. But per-document values must be threaded as **signatory fields**, so an
+   avtal's salary and start date get modelled as attributes of a person rather than of the
+   document — and the template itself then lives in Scrive's UI, outside version control and
+   outside the protocol engine's immutable-template guarantee.
+3. **Generating it ourselves is far smaller than "the documents engine".** PDF is a text
+   format; a single page of text needs no library and no font embedding, because Helvetica is
+   one of the base-14 fonts every reader ships. A working prototype — valid PDF 1.4, correct
+   Swedish text — is **34 lines and 1.1 KB of output**, using only Web-standard APIs, so it
+   runs unchanged in Workers.
+
+**Recommendation: generate it, in the connector, for v0.** The decisive argument is not size,
+it is consistency: the bytes we send to Scrive are derived from the same rows the content hash
+covers, so the artifact and the attestation cannot drift. With a Scrive-side template they are
+two independent renderings of the same intent, and nothing checks that they agree.
+
+Keep the documents engine (master plan §6) for when a customer wants branded, laid-out output.
+A Scrive-side template remains available per-customer without any code change.
+
+::: danger The sharp edge, found by rendering rather than parsing
+The first prototype produced a PDF that `file(1)` accepted, that parsed cleanly, and whose
+em-dash rendered as **`€24`** and ellipsis as **`€46`**. Anything outside the character map
+fell through and was silently mangled.
+
+PDF text encoding is WinAnsi (CP1252), which differs from Latin-1 exactly in `0x80`–`0x9F`,
+which is exactly where typographic punctuation lives. So the failure mode is silent
+substitution in a legal document — and it is invisible to every check short of looking at the
+rendered page.
+
+The mitigation is to **throw on any character that cannot be encoded**, never approximate. A
+contract that fails to render is recoverable; one that renders wrongly and gets signed is not.
+:::
 
 ---
 

@@ -13,6 +13,9 @@ import {
   vertical as verticalSchema,
   verticalChannel,
   verticalVersion,
+  connection,
+  connectionSecret,
+  createConnectionInput,
   moduleManifest,
   org as orgSchema,
   orgMembership,
@@ -22,6 +25,11 @@ import {
   tenant as tenantSchema,
   tenantRole,
   type AdminAction,
+  type Connection,
+  type ConnectionFilter,
+  type ConnectionId,
+  type ConnectionSecret,
+  type CreateConnectionInput,
   type AccessLogEntry,
   type AdminLogEntry,
   type CapabilityGrant,
@@ -67,6 +75,8 @@ import {
   type ExecutorRetryPolicy,
   backoffAt,
   resolveRetryPolicy,
+  unconfiguredSecretBox,
+  type SecretBox,
   type HostAdmin,
   type ModuleRegistration,
   type OperationHandler,
@@ -81,6 +91,7 @@ import type {
   AccessLogRow,
   AuditLogQuery,
   ChannelRow,
+  ConnectionDoRow,
   HostnameRow,
   OrgRow,
   RoleRow,
@@ -116,6 +127,26 @@ import type {
  * parsing stays here too, so only clean data crosses to the DO and the DO throws
  * only plain Errors whose messages survive the RPC hop.
  */
+
+/** DO row → contract shape. Never reads the secrets table — that is the split. */
+const toConnection = (r: ConnectionDoRow): Connection =>
+  connection.parse({
+    id: r.id,
+    tenantId: r.tenant_id,
+    vertical: r.vertical,
+    provider: r.provider,
+    label: r.label,
+    status: r.status,
+    externalAccountRef: r.external_account_ref,
+    scopes: JSON.parse(r.scopes) as string[],
+    expiresAt: r.expires_at,
+    lastOkAt: r.last_ok_at,
+    lastError: r.last_error,
+    lastErrorAt: r.last_error_at,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    revokedAt: r.revoked_at,
+  });
 
 interface ControlPlaneStub {
   createTenant(id: string, slug: string, name: string, createdAt: string): Promise<Tenant | null>;
@@ -202,6 +233,41 @@ interface ControlPlaneStub {
   revokeEntitlement(tenantId: string, key: string): Promise<boolean>;
   tenantHoldsEntitlement(tenantId: string, key: string): Promise<boolean>;
   listEntitlements(tenantId: string): Promise<string[]>;
+  insertConnection(row: {
+    id: string;
+    tenantId: string;
+    vertical: string;
+    provider: string;
+    label: string;
+    externalAccountRef: string | null;
+    scopes: string;
+    expiresAt: string | null;
+    createdBy: string;
+    createdAt: string;
+    keyId: string;
+    ciphertext: string;
+  }): Promise<void>;
+  listConnections(filter: {
+    tenantId?: string;
+    vertical?: string;
+    provider?: string;
+    includeRevoked?: boolean;
+  }): Promise<ConnectionDoRow[]>;
+  readConnection(id: string): Promise<ConnectionDoRow | undefined>;
+  readLiveConnection(
+    tenantId: string,
+    vertical: string,
+    provider: string,
+  ): Promise<(ConnectionDoRow & { key_id: string; ciphertext: string }) | undefined>;
+  updateConnectionSecret(
+    id: string,
+    keyId: string,
+    ciphertext: string,
+    expiresAt: string | null,
+    at: string,
+  ): Promise<void>;
+  revokeConnection(id: string, at: string): Promise<boolean>;
+  recordConnectionUse(id: string, error: string | null, at: string): Promise<void>;
   linkIdentity(
     provider: string,
     externalId: string,
@@ -299,6 +365,13 @@ export interface CloudflareScopeHostOptions {
    * boundary), so this is informational only — the DO builds the tuple checker.
    */
   checker?: PermissionChecker;
+  /**
+   * Seals per-tenant credentials at rest (#101). Lives on the COORDINATOR, not
+   * in the ControlPlaneDO: the DO stores ciphertext and has never held a key.
+   * Omitted, the host refuses to store a credential rather than storing one in
+   * the clear.
+   */
+  secretBox?: SecretBox;
 }
 
 export class CloudflareScopeHost implements ScopeHost {
@@ -313,6 +386,7 @@ export class CloudflareScopeHost implements ScopeHost {
   private readonly operations = new Set<string>();
   private readonly predicateNames = new Map<string, string>(); // name → module
   /** Executor id → {eventType, handler} (K-22 §4.2). Coordinator-side, not in the DO. */
+  private readonly secretBox: SecretBox;
   private readonly executors = new Map<
     string,
     { eventType: string; handler: ExecutorHandler; retry: Required<ExecutorRetryPolicy> }
@@ -339,6 +413,7 @@ export class CloudflareScopeHost implements ScopeHost {
    * request after that returned 1101 in production.
    */
   constructor(options: CloudflareScopeHostOptions) {
+    this.secretBox = options.secretBox ?? unconfiguredSecretBox;
     this.scopeNs = options.scope;
     this.cp = options.controlPlane.get(
       options.controlPlane.idFromName('control-plane'),
@@ -1174,6 +1249,122 @@ export class CloudflareScopeHost implements ScopeHost {
         await this.recordAccess(actor, 'listIdentityTenants', {}, { provider }, tenants.length);
         return tenants;
       },
+      // -- the integrations hub (#101) ---------------------------------------
+
+      createConnection: async (actor, raw: CreateConnectionInput) => {
+        const input = createConnectionInput.parse(raw);
+        // Sealed HERE, on the coordinator: the DO never holds a SecretBox and has
+        // never seen a plaintext credential.
+        const sealed = await this.secretBox.seal(JSON.stringify(input.secret));
+        const now = new Date().toISOString();
+        await this.cp.insertConnection({
+          id: input.id,
+          tenantId: input.tenantId,
+          vertical: input.vertical,
+          provider: input.provider,
+          label: input.label,
+          externalAccountRef: input.externalAccountRef ?? null,
+          scopes: JSON.stringify(input.scopes),
+          expiresAt: input.expiresAt ?? null,
+          createdBy: actor,
+          createdAt: now,
+          keyId: sealed.keyId,
+          ciphertext: sealed.ciphertext,
+        });
+        // METADATA ONLY — the admin log is append-only, so a credential written
+        // here could never be removed.
+        await this.recordAdmin(
+          actor,
+          'createConnection',
+          { tenantId: input.tenantId, vertical: input.vertical },
+          null,
+          {
+            id: input.id,
+            provider: input.provider,
+            label: input.label,
+            scopes: input.scopes,
+            externalAccountRef: input.externalAccountRef ?? null,
+          },
+        );
+      },
+
+      listConnections: async (actor, filter?: ConnectionFilter) => {
+        const f = filter ?? {};
+        const rows = await this.cp.listConnections(f);
+        await this.recordAccess(actor, 'listConnections', {}, f, rows.length);
+        return rows.map(toConnection);
+      },
+
+      updateConnectionSecret: async (
+        actor,
+        id: ConnectionId,
+        secret: ConnectionSecret,
+        expiresAt?: string,
+      ) => {
+        const row = await this.cp.readConnection(id);
+        if (!row) throw new Error(`connection not found: ${id}`);
+        const sealed = await this.secretBox.seal(JSON.stringify(connectionSecret.parse(secret)));
+        const now = new Date().toISOString();
+        await this.cp.updateConnectionSecret(
+          id,
+          sealed.keyId,
+          sealed.ciphertext,
+          expiresAt ?? row.expires_at,
+          now,
+        );
+        await this.recordAdmin(
+          actor,
+          'updateConnectionSecret',
+          { tenantId: row.tenant_id as TenantId, vertical: row.vertical },
+          null,
+          { id, provider: row.provider, rotatedAt: now, expiresAt: expiresAt ?? row.expires_at },
+        );
+      },
+
+      revokeConnection: async (actor, id: ConnectionId) => {
+        const row = await this.cp.readConnection(id);
+        if (!row) throw new Error(`connection not found: ${id}`);
+        const now = new Date().toISOString();
+        const changed = await this.cp.revokeConnection(id, now);
+        if (!changed) return; // idempotent, and a no-op is not audited
+        await this.recordAdmin(
+          actor,
+          'revokeConnection',
+          { tenantId: row.tenant_id as TenantId, vertical: row.vertical },
+          { status: row.status },
+          { id, provider: row.provider, status: 'revoked', revokedAt: now },
+        );
+      },
+
+      openConnection: async (tenantId, vertical: string, provider: string) => {
+        const row = await this.cp.readLiveConnection(tenantId, vertical, provider);
+        if (!row) return undefined;
+        const secret = connectionSecret.parse(
+          JSON.parse(
+            await this.secretBox.open({ keyId: row.key_id, ciphertext: row.ciphertext }),
+          ),
+        );
+        return {
+          id: row.id as ConnectionId,
+          tenantId: row.tenant_id,
+          vertical: row.vertical,
+          provider: row.provider,
+          secret,
+          expiresAt: row.expires_at,
+        };
+      },
+
+      recordConnectionUse: async (
+        id: ConnectionId,
+        outcome: { ok: true } | { ok: false; error: string },
+      ) => {
+        await this.cp.recordConnectionUse(
+          id,
+          outcome.ok ? null : outcome.error,
+          new Date().toISOString(),
+        );
+      },
+
       linkIdentity: async (actor, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
         const pool = await this.cp.readPool(parsed.provider);
