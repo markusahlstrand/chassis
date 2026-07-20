@@ -224,6 +224,9 @@ export async function engineHarness(opts: EngineHarnessOptions): Promise<EngineH
   for (const key of [...new Set(keys)]) await host.admin.grantEntitlement(staff, t, key);
 
   await host.provisionScope(staff, { tenantId: t, scopeId: s, jurisdiction: 'eu' });
+  // Provisioned rows are inert until confirmed (K-31). In a harness the platform and
+  // the vertical are the same process, so the confirmation is immediate.
+  await host.admin.activateScope(staff, t, s);
 
   /**
    * One throwaway role per permission set — roles are cheap, isolation is not.

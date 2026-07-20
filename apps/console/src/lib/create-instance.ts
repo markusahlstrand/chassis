@@ -8,22 +8,28 @@ import type { Api } from './api';
  * dialog can be re-laid-out freely; this sequence cannot be reordered without
  * breaking a property something else depends on:
  *
- *   1. tenant    — the directory root everything hangs from
- *   2. instance  — the VERTICAL provisions, because only it can create a usable scope
- *                  DO: the class bundles the modules and lives in its deployment (K-31)
- *   3. scope     — the directory row, AFTER the vertical succeeds, so a failure leaves
- *                  an invisible orphan rather than a row promising a scope that is not
- *                  there. `scopeStatus.provisioning` exists to model this properly and
- *                  is still unused, so ordering is what carries the property today
- *   4. hostname  — bound, not yet serving
- *   5. activate  — last, because a hostname must never resolve before the thing behind
- *                  it exists (K-26)
+ *   1. tenant     — the directory root everything hangs from
+ *   2. scope      — the directory row, written as `provisioning`: recorded, and
+ *                   unusable until something confirms the vertical built it
+ *   3. instance   — the VERTICAL provisions, because only it can create a usable scope
+ *                   DO: the class bundles the modules and lives in its deployment (K-31)
+ *   4. activate   — the confirmation. `getScope` refuses anything not active, so a row
+ *                   whose vertical never ran is inert rather than misleading
+ *   5. hostname   — bound, not yet serving
+ *   6. activate   — the hostname, last, because it must never resolve before the thing
+ *                   behind it exists (K-26)
+ *
+ * Directory BEFORE vertical, which is the correction: the earlier order wrote the row
+ * last so a failure left an "invisible orphan", and invisible is exactly the problem —
+ * nothing can reconcile what nothing knows about. A row stuck in `provisioning` is a
+ * work item a sweep can find and retry (#49).
  */
 
 export const INSTANCE_STEPS = [
   { key: 'tenant', label: 'Create tenant' },
-  { key: 'instance', label: 'Provision instance in the vertical' },
   { key: 'scope', label: 'Record the scope' },
+  { key: 'instance', label: 'Provision instance in the vertical' },
+  { key: 'activateScope', label: 'Activate the scope' },
   { key: 'hostname', label: 'Bind the hostname' },
   { key: 'activate', label: 'Activate' },
 ] as const;
@@ -86,12 +92,13 @@ export async function createInstance(
   }
 
   await step('tenant', () => api.createTenant({ id: tenantId, slug, name }));
-  await step('instance', () =>
-    api.provisionInstance(verticalSlug, { tenantId, scopeId, owner, slug, name }),
-  );
   await step('scope', () =>
     api.provisionScope({ tenantId, scopeId, slug, name, vertical: verticalSlug }),
   );
+  await step('instance', () =>
+    api.provisionInstance(verticalSlug, { tenantId, scopeId, owner, slug, name }),
+  );
+  await step('activateScope', () => api.activateScope(tenantId, scopeId));
 
   if (!hostname) return { tenantId, scopeId, url: null };
 

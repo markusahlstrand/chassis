@@ -244,6 +244,7 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   // status the transition graph forbids. The graph is enforced below the seam;
   // an illegal transition surfaces as a 409.
   const transitions = {
+    activate: (a: PlatformActorId, t: TenantId, s: ScopeId) => admin.activateScope(a, t, s),
     suspend: (a: PlatformActorId, t: TenantId, s: ScopeId) => admin.suspendScope(a, t, s),
     unsuspend: (a: PlatformActorId, t: TenantId, s: ScopeId) => admin.unsuspendScope(a, t, s),
     archive: (a: PlatformActorId, t: TenantId, s: ScopeId) => admin.archiveScope(a, t, s),

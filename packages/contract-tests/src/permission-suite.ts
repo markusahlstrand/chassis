@@ -70,7 +70,9 @@ export function permissionContractSuite(
       await host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
       await host.admin.grantEntitlement(staff, t1, 'perm'); // default-deny (§4.3): perm/* needs it
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1 });
+      await host.admin.activateScope(staff, t1, s1);
       await host.provisionScope(staff, { tenantId: t1, scopeId: s2 });
+      await host.admin.activateScope(staff, t1, s2);
 
       await host.admin.defineRole(staff, t1, {
         key: 'admin',

@@ -40,7 +40,8 @@ export const adminAction = z.enum([
   'suspendScope', // §4.2
   'unsuspendScope', // §4.2
   'archiveScope', // §4.2
-  'unarchiveScope', // §4.2 — an explicit restore, never a silent flag flip
+  'unarchiveScope',
+  'activateScope', // §4.2 — an explicit restore, never a silent flag flip
   'grantEntitlement', // §4.3 — the SKU flag turned on for a tenant
   'revokeEntitlement', // §4.3
   'linkIdentity', // D-16 — bind an external identity to a principal

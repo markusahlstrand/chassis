@@ -583,7 +583,7 @@ export class ControlPlaneDO extends DurableObject {
         `INSERT INTO scopes
            (scope_id, tenant_id, parent_scope_id, slug, kind, name, vertical,
             storage_shape, jurisdiction, status, created_at)
-         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'provisioning', ?)`,
         scopeId,
         tenantId,
         record.slug,
@@ -696,6 +696,24 @@ export class ControlPlaneDO extends DurableObject {
       throw new Error(`tenant not active (status: ${tenantRow.status}): ${tenantId}`);
     }
     if (row.status !== 'active') {
+      // A scope stuck in provisioning because its migrations failed must say so.
+      // Reporting only "not active" is true and useless: it sends an operator looking
+      // for a missing activation when the cause is a broken migration, which is
+      // already recorded on this very row.
+      const failure = this.sql
+        .exec(
+          'SELECT migration_failed_version, migration_error FROM scopes WHERE scope_id = ?',
+          scopeId,
+        )
+        .toArray()[0] as
+        | { migration_failed_version: string | null; migration_error: string | null }
+        | undefined;
+      if (failure?.migration_failed_version) {
+        throw new Error(
+          `migration failed for ${failure.migration_failed_version} — scope fails closed: ` +
+            `${failure.migration_error ?? 'unknown error'}`,
+        );
+      }
       throw new Error(`scope not active (status: ${row.status}): ${scopeId}`);
     }
   }

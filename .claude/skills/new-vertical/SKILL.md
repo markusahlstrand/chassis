@@ -78,11 +78,59 @@ customers, cross-tenant attacker gets `unknown scope` / `permission denied`) →
 pricing math exact to the öre → event consumed by invoicing (if used) → state
 machine can't skip. Denial assertions are not optional — they are the demo.
 
+Two things that decide whether these assertions are worth anything:
+
+- **Never write a bare `.rejects.toThrow()`.** In a demo whose whole point is denials, an
+  unpatterned rejection passes for reasons you have not verified — wrong permission, wrong
+  state, a typo'd operation name. Pin the message. Done well it becomes a real test of the
+  machinery: a guard's refusal should *move* from "must be signed" to "must be
+  counter-signed" as state changes. And pair every "this door is closed" assertion with a
+  control proving a neighbouring door is still open — otherwise a withdrawal test passes
+  just as happily if the engine were never registered.
+- **Compute money literals with the real helpers before asserting them.** Write a throwaway
+  script that runs the pricing moment through `mulDecimal`/`addDecimal` and prints the
+  result; don't hand-derive it. `fromMicro` strips trailing zeros
+  (`packages/contracts/src/money.ts`), so 34 894,80 kr serialises as `'34894.8'` —
+  asserting `'34894.80'` fails on a *correct* number.
+
 ### 6. App skin (`app/`)
 
 Copy-and-own from `demos/callout/app`: Vite + React, hash routing, principal picker in
 the top bar, views renamed to the vertical's vocabulary. Change brand, labels, and
 which columns matter; keep the api.ts pattern (typed wrappers over the server routes).
+
+### 7. Drive it over HTTP — the step the scenario test cannot do for you
+
+**A vertical's scenario test can be 100% green while the demo is 100% broken.** The test
+calls `stub.invoke(...)` directly, so it never executes `server.ts`, the route table, the
+`x-principal` picker, `auth-adapters.ts`, or the `onError` status mapping. Nothing in
+`pnpm test` covers that layer — across the existing demos, only `rally` has a test that
+touches it at all. A principal-resolution bug there 403s every request in the browser and
+does not move a single assertion.
+
+So before you call it done: boot the server and walk the spec's scenario over HTTP as at
+least two different personas — one who should succeed and one who should be denied.
+
+```bash
+PORT=<api> pnpm --filter @substrat-run/demo-<name> server &
+curl -s -H 'x-principal: <someone>'    localhost:<api>/api/<happy-path>
+curl -s -o /dev/null -w '%{http_code}\n' \
+     -H 'x-principal: <someone-else>'  localhost:<api>/api/<denied-path>   # expect 403
+```
+
+Confirm three things the test structurally cannot:
+
+1. **The principal picker resolves.** Whatever the app puts in `x-principal` must be what
+   the server looks up. If the app stores a principal id and the server keys a cast map by
+   nickname, every request is `not authenticated`.
+2. **Denials keep their meaning through the transport.** `PermissionDenied` → 403, refused
+   transitions and guard refusals → 409, unknown → 404. A denial that arrives as a generic
+   400 has lost the thing the demo exists to show.
+3. **The Vite proxy reaches the kernel** — `curl localhost:<web>/api/...`, not just the API
+   port, so `PORT`/`WEB_PORT` are genuinely wired at both ends.
+
+Shell quoting mangles this quickly; a throwaway Python/node driver that walks the whole arc
+and prints each persona's status code is more reliable than a chain of `curl | jq`.
 
 ## Conventions the reference doesn't show
 
@@ -109,8 +157,13 @@ Run all of these from the repo root; all must pass:
 ```bash
 pnpm -r build && pnpm -r typecheck
 node tools/boundary-lint.mjs
+pnpm lint:permissions --check          # PERMISSIONS.md is checked in; CI fails on drift
 pnpm --filter @substrat-run/demo-<name> test
 ```
+
+…and then the one that is not a command — **step 7: drive the arc over HTTP**. Green tests
+plus a broken `server.ts` is a real and unremarkable outcome here, so a vertical you have
+not actually run is not finished, however green the suite.
 
 Then STOP and present the two human checkpoints — never merge past them yourself:
 

@@ -27,6 +27,7 @@ function fakeApi(overrides: Partial<Record<keyof Api, unknown>> = {}) {
     };
   const api = {
     createTenant: rec('createTenant'),
+    activateScope: rec('activateScope'),
     provisionInstance: rec('provisionInstance'),
     provisionScope: rec('provisionScope'),
     bindHostname: rec('bindHostname'),
@@ -36,12 +37,32 @@ function fakeApi(overrides: Partial<Record<keyof Api, unknown>> = {}) {
 }
 
 describe('createInstance', () => {
-  it('provisions the VERTICAL before recording the directory row', async () => {
-    // The other order would leave a directory row promising a scope that does not
-    // exist. This way a failure leaves an orphan nobody can see.
+  it('records the directory row BEFORE calling the vertical, then activates', async () => {
+    // Directory-first, which is K-31's order. The reverse would leave an "invisible
+    // orphan" on failure, and invisible is the problem — nothing can reconcile what
+    // nothing knows about. A row stuck in `provisioning` is a work item (#49).
     const { api, calls } = fakeApi();
     await createInstance(api, { ...ids, verticalSlug: 'fsm', slug: 'acme', name: 'Acme' });
-    expect(calls).toEqual(['createTenant', 'provisionInstance', 'provisionScope']);
+    expect(calls).toEqual([
+      'createTenant',
+      'provisionScope',
+      'provisionInstance',
+      'activateScope',
+    ]);
+  });
+
+  it('does not activate the scope when the vertical failed', async () => {
+    // The whole point of the state: the row stays `provisioning`, so it is inert and
+    // findable rather than active and broken.
+    const { api, calls } = fakeApi({
+      provisionInstance: async () => {
+        throw new Error('vertical exploded');
+      },
+    });
+    await expect(
+      createInstance(api, { ...ids, verticalSlug: 'fsm', slug: 'acme', name: 'Acme' }),
+    ).rejects.toThrow(InstanceStepError);
+    expect(calls).not.toContain('activateScope');
   });
 
   it('activates the hostname LAST', async () => {
@@ -56,8 +77,9 @@ describe('createInstance', () => {
     });
     expect(calls).toEqual([
       'createTenant',
-      'provisionInstance',
       'provisionScope',
+      'provisionInstance',
+      'activateScope',
       'bindHostname',
       'setHostnameStatus',
     ]);
@@ -75,8 +97,8 @@ describe('createInstance', () => {
     await expect(
       createInstance(api, { ...ids, verticalSlug: 'ghost', slug: 'acme', name: 'Acme' }),
     ).rejects.toThrow(InstanceStepError);
-    // The directory row is NOT written when the vertical refused.
-    expect(calls).toEqual(['createTenant', 'provisionInstance']);
+    // The scope row exists but was never activated — inert, and findable.
+    expect(calls).toEqual(['createTenant', 'provisionScope', 'provisionInstance']);
   });
 
   it('carries the failing step, not just a message', async () => {

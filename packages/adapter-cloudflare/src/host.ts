@@ -1045,6 +1045,16 @@ export class CloudflareScopeHost implements ScopeHost {
         await this.recordAccess(actor, 'getScopeRecord', { tenantId, scopeId }, null, row ? 1 : 0);
         return row ? mapScope(row) : undefined;
       },
+      activateScope: async (actor, tenantId, scopeId) => {
+        // Idempotent on `active`, unaudited because nothing changed. Provisioning is
+        // a two-phase creation that the reconciliation sweep re-runs (K-31), so a
+        // retry of an already-finished instance must converge rather than throw.
+        // Every OTHER state still refuses: reviving a suspended scope through here
+        // would route around unsuspend and its audit entry.
+        const current = await this.cp.getScopeRecord(tenantId, scopeId);
+        if (current?.status === 'active') return;
+        await transitionScope(actor, 'activateScope', tenantId, scopeId, ['provisioning'], 'active');
+      },
       suspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'suspendScope', tenantId, scopeId, ['active'], 'suspended'),
       unsuspendScope: async (actor, tenantId, scopeId) =>

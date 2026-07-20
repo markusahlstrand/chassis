@@ -39,6 +39,9 @@ describe('ControlPlaneClient — the connect seam', () => {
     await client.createTenant({ id: T, slug: 'acme', name: 'Acme' });
     await client.grantEntitlement(T, 'notes');
     await client.provisionScope({ tenantId: T, scopeId: S, slug: 'main', vertical: 'demo', jurisdiction: 'eu' });
+    // Registration and confirmation are the same moment in this direction, but they
+    // stay two calls — the directory never decides on its own that a scope is ready.
+    await client.activateScope(T, S);
 
     // Registered and active → the gate passes and the entitlement is visible.
     await expect(client.assertScopeActive(T, S)).resolves.toBeUndefined();
