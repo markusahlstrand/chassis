@@ -46,7 +46,7 @@ const cannots = [
 
 const demos = [
   ['RallyPoint', 'Padel club', 'engine', 'Court booking as allocation over an interval rather than a state machine — the lost race rejected with no locking code anywhere, multi-venue tenancy, and a player who holds no role at all reaching their own booking through an entity-narrowed grant.', '/verticals/rallypoint'],
-  ['Meridian', 'HR', 'kernel', 'The shape-breaker: a domain with no ready-made engine, so the kernel carries it alone. Multi-country scopes diverging from one codebase, and one role-adaptive app serving employee and manager in the same surface.', '/verticals/meridian'],
+  ['Meridian', 'HR', 'kernel', 'The shape-breaker: no engine exists for its core domain, so leave, time and expenses are vertical code on the kernel alone. Multi-country scopes diverging from one codebase, and one role-adaptive app serving employee and manager in the same surface.', '/verticals/meridian'],
   ['Callout', 'Field service', 'vertical', 'The canonical composition — a Swedish service & installation firm where two engines cooperate through events with zero imports between them. Runs on SQLite locally and deployed on Cloudflare from one codebase.', '/verticals/'],
 ];
 

@@ -230,11 +230,18 @@ version of this seam, deferred with Slice 3.
 - **The scaling shape.** One vertical, one control plane. Facets-as-generic vs
   N-deployments ([generated-verticals](generated-verticals.md) §6.3) is untouched.
 - **The deploy *trigger*.** `wrangler deploy` by hand is the trigger for this milestone.
+  Still true, with the target now named: D-34 puts the orchestration layer — *we* deploy,
+  with *our* credentials, against the ordinary Workers upload API — as the next step, and
+  Workers for Platforms as the later swap rather than the prerequisite.
   Git-hook-on-branch and a `substrat` CLI push are ergonomics layered on a proven loop,
   and the earlier analysis rules out an *untrusted* zip/CLI path regardless
   ([generated-verticals](generated-verticals.md) §1).
-- **Custom hostnames.** `workers.dev` URLs throughout; the `hostname → (tenant, scope,
-  vertical)` router (control-plane.md §4.2/§5.5) stays unbuilt.
+- ~~**Custom hostnames.**~~ **Built** (K-26/K-27, control-plane.md §4.7). The map is
+  `hostname → (tenant, scope, vertical, surface, region)` — `surface` because one scope
+  fronts more than one app, which §5.5's original tuple could not say — and a single
+  environment-wide router resolves it and dispatches over a service binding. What
+  remains deferred is hostname *provisioning*: DNS validation and certificate issuance
+  ride Cloudflare for SaaS and are not wired, so bindings are activated by hand.
 - **Billing/meters.** Out of scope per D-30 ("meter, don't bill"), and nothing here needs
   them.
 

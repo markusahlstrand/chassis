@@ -6,17 +6,19 @@ tool and a manager's console at once.
 
 ## Overview
 
-Meridian is the deliberate **shape-breaker**. Every other demo composes a domain engine;
-Meridian has *none to compose* — there is no absence engine, no time-tracking engine, no
-expenses engine. So leave/absence, time reporting, and expenses are all **vertical code**,
+Meridian is the deliberate **shape-breaker**. Every other demo leans on a domain engine for
+the work at its centre; Meridian has *none to lean on* — there is no absence engine, no
+time-tracking engine, no expenses engine. So leave/absence, time reporting, and expenses are all **vertical code**,
 and that is the point: it proves the kernel's guarantees — nested tenancy, permissions,
 audit, GDPR — hold with **zero engine support**, and that Substrat's value isn't quietly
 borrowed from the work-order state machine.
 
 It's interesting for three reasons the field-service demos can't show:
 
-- **A domain with no engine.** The kernel carries HR alone. The only engine it touches is
-  [`protocol`](/engines/protocol/), reused a third time for onboarding checklists.
+- **A core domain with no engine.** The kernel carries leave, time and expenses alone. It
+  does compose one engine — [`protocol`](/engines/protocol/), for onboarding checklists —
+  but that sits beside the work rather than under it, and is itself the third proof of
+  protocol reuse.
 - **Two countries from one codebase.** Sweden (25 days + saved days, VAB) and Spain (22
   days, *registro de jornada*) are two scopes under one tenant, diverging by **data and
   per-scope config**, not a fork.

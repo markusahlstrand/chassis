@@ -33,7 +33,7 @@ range, and no two demos teach the same lesson.
 
 | Vertical | Package | The shape it uniquely shows | Engines composed |
 |---|---|---|---|
-| **[Meridian](/verticals/meridian)** (HR) | `demos/meridian` | The **shape-breaker** — a domain with *no ready-made engine*, so the kernel carries it alone; multi-country scopes diverging from one codebase; one **role-adaptive app** (employee + manager in the same surface) | `protocol` only |
+| **[Meridian](/verticals/meridian)** (HR) | `demos/meridian` | The **shape-breaker** — its *core* domain has no engine, so leave, time and expenses are vertical code on the kernel alone (`protocol` is composed for onboarding only); multi-country scopes diverging from one codebase; one **role-adaptive app** (employee + manager in the same surface) | `protocol` only |
 | **Callout** (field service) | `demos/callout` | The **canonical composition** — two engines cooperating through events with zero imports between them (the star-topology showpiece), plus the *pricing moment* where vertical logic meets an engine transition | `workorder` · `invoicing` · `protocol` |
 | **Handlebar** (bike workshop) | `demos/handlebar` | **Engine reuse** — the same engines under new vocabulary; the second shape that *forced the protocol engine to be extracted* from Callout | `workorder` · `invoicing` · `protocol` |
 | **Kallkälla** (coffee shop) | `demos/shop` | **Two audiences, one source of truth** — a customer storefront and a staff back-office as separate apps over one API; `invoicing` reused far outside field service | `invoicing` (+ its own commerce module) |
