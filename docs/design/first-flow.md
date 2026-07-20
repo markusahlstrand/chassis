@@ -253,10 +253,16 @@ version of this seam, deferred with Slice 3.
 2. **How does the vertical authenticate *to* the control plane when registering?** A
    privileged service binding (the K-8 shape) vs an out-of-band admin credential. Decide
    during slice 4.
-3. **Does registration belong in the vertical at all, or is it a control-plane-driven
-   provision?** The demo pushes from the vertical; the eventual model may pull from the
-   control plane. The skeleton can start with push and invert later without changing the
-   directory contract.
+3. ~~**Does registration belong in the vertical at all?**~~ **Answered: pull (K-31).**
+   Control-plane-driven, because only the vertical can create a usable scope DO — the DO
+   class bundles the modules and lives in the vertical's deployment, so the control plane
+   must ask it, and once that call exists push is a second way to do the same thing.
+   Self-serve needs it regardless: a customer creating an instance is a decision the
+   vertical cannot learn about on its own. Push survives as a gated dev affordance.
+
+   Note the half of this the skeleton got wrong: it said push could "invert later without
+   changing the directory contract". The contract does survive — the *authority* model
+   does not, and inverting it after customer code is running is a migration.
 
 ## 7. Definition of done for the milestone
 
