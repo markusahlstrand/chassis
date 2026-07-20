@@ -214,6 +214,9 @@ if (cpUrl) {
           vertical: s.vertical,
           jurisdiction: (s.jurisdiction ?? null) as 'eu' | null,
         });
+        // The scope exists locally already; this confirms it to the shared directory
+        // so the row is not left inert (K-31).
+        await cpClient.activateScope(s.tenantId, s.id);
       }
       break;
     } catch (e) {

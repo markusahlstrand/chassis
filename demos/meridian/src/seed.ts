@@ -249,6 +249,7 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   // creates one scope because that is what an instance needs; more are the
   // customer's to add.
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.sEs, kind: 'entity', name: 'Spain', jurisdiction: 'eu' });
+  await host.admin.activateScope(staff, world.t1, world.sEs);
 
   // ---------------------------------------------------------------------------
   // DEMO ONLY, below. A second company and an admin nobody hired, so the scenario

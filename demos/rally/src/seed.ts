@@ -400,6 +400,7 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
   // A second venue in the SAME club. Provisioning creates one scope because that
   // is what an instance needs; more venues are the club's to add.
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1b, jurisdiction: 'eu' });
+  await host.admin.activateScope(staff, world.t1, world.s1b);
 
   // ---------------------------------------------------------------------------
   // DEMO ONLY, below. A second club and an admin nobody hired, so the scenario
