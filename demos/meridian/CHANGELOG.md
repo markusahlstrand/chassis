@@ -1,5 +1,14 @@
 # @substrat-run/demo-hr
 
+## 0.0.4
+
+### Patch Changes
+
+- @substrat-run/contracts@0.8.0
+- @substrat-run/kernel@0.8.0
+- @substrat-run/adapter-sqlite@0.8.0
+- @substrat-run/engine-protocol@0.3.6
+
 ## 0.0.3
 
 ### Patch Changes
