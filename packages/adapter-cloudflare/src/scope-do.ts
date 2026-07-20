@@ -109,8 +109,16 @@ const KERNEL_DDL = `
   CREATE TABLE IF NOT EXISTS _substrat_deliveries (
     event_id TEXT NOT NULL,
     consumer_module TEXT NOT NULL,
+    -- Terminal row: when it was delivered (or dead-lettered). Retrying row: when
+    -- it was last ATTEMPTED. The column predates retry state (#100) and is NOT
+    -- NULL, so it carries both readings rather than forcing a rebuild.
     delivered_at TEXT NOT NULL,
     error TEXT,
+    -- Retry state, executors only (#100). Consumers leave the defaults.
+    --   next_attempt_at IS NOT NULL  -> pending, due at that time
+    --   next_attempt_at IS NULL      -> terminal: error IS NULL delivered, else dead
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
     PRIMARY KEY (event_id, consumer_module)
   );
 `;
@@ -163,10 +171,19 @@ export function defineScopeDO(
       // the old shape. Attempt-and-tolerate: DO SQLite restricts PRAGMA, so there
       // is no column probe, and a duplicate is the steady state after the first
       // cold start (same argument as ControlPlaneDO.addColumn).
-      try {
-        this.sql.exec('ALTER TABLE _substrat_tuples ADD COLUMN revoked_at TEXT');
-      } catch (err) {
-        if (!/duplicate column name/i.test((err as Error).message)) throw err;
+      for (const alter of [
+        'ALTER TABLE _substrat_tuples ADD COLUMN revoked_at TEXT',
+        // Executor retry state (#100). The defaults read as "terminal", which is
+        // right for every row already there: each is a completed delivery or a
+        // consumer dead-letter.
+        'ALTER TABLE _substrat_deliveries ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE _substrat_deliveries ADD COLUMN next_attempt_at TEXT',
+      ]) {
+        try {
+          this.sql.exec(alter);
+        } catch (err) {
+          if (!/duplicate column name/i.test((err as Error).message)) throw err;
+        }
       }
 
       for (const registration of modules) this.registerModule(registration);
@@ -390,35 +407,124 @@ export function defineScopeDO(
      *
      * Executors run on the COORDINATOR, not here: they act through `HostAdmin`,
      * which is outside this DO. So the drain is a read here, the effect happens
-     * there, and `markExecutorDelivered` journals it afterwards — claiming before
+     * there, and `recordExecutorAttempt` journals it afterwards — claiming before
      * running would make delivery at-most-once and lose an effect on any crash in
      * between.
+     *
+     * "Not yet consumed" means never attempted, or retrying and now due (#100).
+     * Terminal rows — delivered or dead-lettered — are excluded by the join.
      */
     pendingExecutorEvents(deliveryId: string, eventType: string): DomainEvent[] {
       const rows = this.sql
         .exec(
-          `SELECT * FROM _substrat_outbox o
+          `SELECT o.* FROM _substrat_outbox o
+           LEFT JOIN _substrat_deliveries d
+             ON d.event_id = o.id AND d.consumer_module = ?
            WHERE o.type = ?
-             AND NOT EXISTS (
-               SELECT 1 FROM _substrat_deliveries d
-               WHERE d.event_id = o.id AND d.consumer_module = ?
-             )
+             AND (d.event_id IS NULL
+                  OR (d.next_attempt_at IS NOT NULL AND d.next_attempt_at <= ?))
            ORDER BY o.id`,
-          eventType,
           deliveryId,
+          eventType,
+          new Date().toISOString(),
         )
         .toArray() as unknown as OutboxRow[];
       return rows.map((r) => this.parseOutboxRow(r));
     }
 
-    /** Journal an executor delivery — after the effect, so retry is the failure mode. */
-    markExecutorDelivered(eventId: string, deliveryId: string): void {
+    /**
+     * Journal one executor attempt (#100). `error` null means delivered;
+     * `nextAttemptAt` null means terminal — so a failed attempt with no next time
+     * is a dead letter.
+     *
+     * Written AFTER the effect, so a crash mid-effect retries rather than silently
+     * marking success. The coordinator computes the backoff because it owns the
+     * per-executor policy; the DO owns the state.
+     */
+    recordExecutorAttempt(
+      eventId: string,
+      deliveryId: string,
+      error: string | null,
+      nextAttemptAt: string | null,
+    ): number {
+      const prior = (
+        this.sql
+          .exec(
+            'SELECT attempts FROM _substrat_deliveries WHERE event_id = ? AND consumer_module = ?',
+            eventId,
+            deliveryId,
+          )
+          .toArray() as unknown as { attempts: number }[]
+      )[0];
+      const attempts = (prior?.attempts ?? 0) + 1;
       this.sql.exec(
-        'INSERT OR IGNORE INTO _substrat_deliveries (event_id, consumer_module, delivered_at) VALUES (?, ?, ?)',
+        `INSERT INTO _substrat_deliveries
+           (event_id, consumer_module, delivered_at, error, attempts, next_attempt_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (event_id, consumer_module) DO UPDATE SET
+           delivered_at = excluded.delivered_at,
+           error = excluded.error,
+           attempts = excluded.attempts,
+           next_attempt_at = excluded.next_attempt_at`,
         eventId,
         deliveryId,
         new Date().toISOString(),
+        error,
+        attempts,
+        nextAttemptAt,
       );
+      return attempts;
+    }
+
+    /** How many attempts this delivery has already had — the backoff input. */
+    executorAttempts(eventId: string, deliveryId: string): number {
+      const row = (
+        this.sql
+          .exec(
+            'SELECT attempts FROM _substrat_deliveries WHERE event_id = ? AND consumer_module = ?',
+            eventId,
+            deliveryId,
+          )
+          .toArray() as unknown as { attempts: number }[]
+      )[0];
+      return row?.attempts ?? 0;
+    }
+
+    /** Executor deliveries that exhausted their attempts. */
+    executorDeadLetters(): {
+      eventId: string;
+      executorId: string;
+      eventType: string;
+      attempts: number;
+      error: string;
+      lastAttemptAt: string;
+    }[] {
+      const rows = this.sql
+        .exec(
+          `SELECT d.event_id, d.consumer_module, d.attempts, d.error, d.delivered_at, o.type
+           FROM _substrat_deliveries d
+           JOIN _substrat_outbox o ON o.id = d.event_id
+           WHERE d.consumer_module LIKE 'executor:%'
+             AND d.error IS NOT NULL
+             AND d.next_attempt_at IS NULL
+           ORDER BY d.event_id`,
+        )
+        .toArray() as unknown as {
+        event_id: string;
+        consumer_module: string;
+        attempts: number;
+        error: string;
+        delivered_at: string;
+        type: string;
+      }[];
+      return rows.map((r) => ({
+        eventId: r.event_id,
+        executorId: r.consumer_module.slice('executor:'.length),
+        eventType: r.type,
+        attempts: r.attempts,
+        error: r.error,
+        lastAttemptAt: r.delivered_at,
+      }));
     }
 
     // -- event dispatch (port of dispatch) ------------------------------------

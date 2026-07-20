@@ -2,7 +2,10 @@ export type {
   AccessLogFilter,
   AuditLogFilter,
   ConsumerHandler,
+  ExecutorDeadLetter,
+  ExecutorDrainReport,
   ExecutorHandler,
+  ExecutorRetryPolicy,
   GuardPredicate,
   HostAdmin,
   ModuleRegistration,
@@ -17,6 +20,7 @@ export type {
   SqlMigration,
   SqlValue,
 } from './scope-host.js';
+export { backoffAt, resolveRetryPolicy } from './scope-host.js';
 export { resolveScopeRecord } from './scope-record.js';
 export type { ResolvedScopeRecord } from './scope-record.js';
 export {

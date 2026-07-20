@@ -61,7 +61,12 @@ import {
   ulid,
   type AccessLogFilter,
   type AuditLogFilter,
+  type ExecutorDeadLetter,
+  type ExecutorDrainReport,
   type ExecutorHandler,
+  type ExecutorRetryPolicy,
+  backoffAt,
+  resolveRetryPolicy,
   type HostAdmin,
   type ModuleRegistration,
   type OperationHandler,
@@ -260,7 +265,14 @@ interface ScopeStubRpc {
   /** The applied-migration count if this call applied any, else null (nothing changed). */
   migrate(): Promise<number | null>;
   pendingExecutorEvents(deliveryId: string, eventType: string): Promise<DomainEvent[]>;
-  markExecutorDelivered(eventId: string, deliveryId: string): Promise<void>;
+  recordExecutorAttempt(
+    eventId: string,
+    deliveryId: string,
+    error: string | null,
+    nextAttemptAt: string | null,
+  ): Promise<number>;
+  executorAttempts(eventId: string, deliveryId: string): Promise<number>;
+  executorDeadLetters(): Promise<ExecutorDeadLetter[]>;
   /** The migration that failed on this instance, read on `migrate()`'s reject path. */
   migrationFailure(): Promise<{ version: string; error: string; applied: number } | null>;
   invoke(
@@ -301,7 +313,10 @@ export class CloudflareScopeHost implements ScopeHost {
   private readonly operations = new Set<string>();
   private readonly predicateNames = new Map<string, string>(); // name → module
   /** Executor id → {eventType, handler} (K-22 §4.2). Coordinator-side, not in the DO. */
-  private readonly executors = new Map<string, { eventType: string; handler: ExecutorHandler }>();
+  private readonly executors = new Map<
+    string,
+    { eventType: string; handler: ExecutorHandler; retry: Required<ExecutorRetryPolicy> }
+  >();
   /**
    * The event currently being effected, stamped onto admin rows the executor writes.
    * Ambient rather than threaded through every HostAdmin signature: set and cleared
@@ -333,9 +348,14 @@ export class CloudflareScopeHost implements ScopeHost {
 
   // -- registration mechanics (validation only) -----------------------------
 
-  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void {
+  registerExecutor(
+    id: string,
+    eventType: string,
+    handler: ExecutorHandler,
+    retry?: ExecutorRetryPolicy,
+  ): void {
     if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
-    this.executors.set(id, { eventType, handler });
+    this.executors.set(id, { eventType, handler, retry: resolveRetryPolicy(retry) });
   }
 
   /**
@@ -343,26 +363,69 @@ export class CloudflareScopeHost implements ScopeHost {
    *
    * Runs on the coordinator because executors act through `HostAdmin`, which the
    * ScopeDO cannot reach. Prompt: called inline after the operation returns, so the
-   * common case completes inside the request. A throwing executor leaves the
-   * delivery unjournaled and is retried on the next drain — the outbox is the
-   * backstop, not a substitute for idempotent handlers.
+   * common case completes inside the request.
+   *
+   * **Failure is contained here (#100).** A throwing handler used to escape
+   * `invoke()` after the scope had already committed, reporting an error for work
+   * that succeeded. It now records a failed attempt, backs off, dead-letters at
+   * `maxAttempts`, and isolates each event and each executor so one poison
+   * delivery cannot wedge the ones behind it. At-least-once still requires
+   * idempotent handlers.
    */
-  private async drainExecutors(scopeId: ScopeId): Promise<void> {
-    if (this.executors.size === 0) return;
+  private async drainExecutors(scopeId: ScopeId): Promise<ExecutorDrainReport> {
+    const report: ExecutorDrainReport = {
+      attempted: 0,
+      delivered: 0,
+      retrying: 0,
+      deadLettered: 0,
+    };
+    if (this.executors.size === 0) return report;
     const stub = this.scopeStub(scopeId);
     for (const [id, executor] of this.executors) {
       const deliveryId = `executor:${id}`;
       const events = await stub.pendingExecutorEvents(deliveryId, executor.eventType);
       for (const event of events) {
+        report.attempted += 1;
         this.causedBy = event.id;
         try {
           await executor.handler(this.admin, event);
+          await stub.recordExecutorAttempt(event.id, deliveryId, null, null);
+          report.delivered += 1;
+        } catch (err) {
+          const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          // The DO owns the attempt count; the coordinator owns the policy, so it
+          // reads the count to decide whether this attempt was the last.
+          const prior = await stub.executorAttempts(event.id, deliveryId);
+          const attempts = prior + 1;
+          const exhausted = attempts >= executor.retry.maxAttempts;
+          await stub.recordExecutorAttempt(
+            event.id,
+            deliveryId,
+            message,
+            exhausted ? null : backoffAt(attempts, executor.retry, new Date()),
+          );
+          if (exhausted) report.deadLettered += 1;
+          else report.retrying += 1;
         } finally {
           this.causedBy = null;
         }
-        await stub.markExecutorDelivered(event.id, deliveryId);
       }
     }
+    return report;
+  }
+
+  async drainDue(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDrainReport> {
+    // Same lifecycle gate `getScope` applies (K-3): a suspended or archived scope
+    // does not get its effects driven either.
+    await this.cp.validateScopeAccess(tenantId, scopeId);
+    await this.migrateAndRecord(scopeId);
+    return this.drainExecutors(scopeId);
+  }
+
+  async executorDeadLetters(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDeadLetter[]> {
+    await this.cp.validateScopeAccess(tenantId, scopeId);
+    await this.migrateAndRecord(scopeId);
+    return this.scopeStub(scopeId).executorDeadLetters();
   }
 
   registerModule(registration: ModuleRegistration): void {

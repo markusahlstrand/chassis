@@ -142,6 +142,77 @@ export type ConsumerHandler = (ctx: OperationContext, event: DomainEvent) => voi
 export type ExecutorHandler = (admin: HostAdmin, event: DomainEvent) => void | Promise<void>;
 
 /**
+ * How hard the host tries before it gives up on one delivery (#100).
+ *
+ * Defaults suit a directory write. A connector making an outbound HTTP call
+ * wants a longer tail — that is the whole reason this is per-executor rather
+ * than a host-wide constant.
+ */
+export interface ExecutorRetryPolicy {
+  /** Total attempts including the first. Reaching it dead-letters. Default 5. */
+  maxAttempts?: number;
+  /** First backoff step; doubles per attempt. Default 1000ms. `0` retries at once. */
+  baseDelayMs?: number;
+  /** Ceiling on the doubling. Default 300_000ms (5 min). */
+  maxDelayMs?: number;
+}
+
+/**
+ * What one drain pass did. `retrying` and `deadLettered` are the numbers a
+ * health surface reports; a caller that ignores them learns nothing, which is
+ * the failure mode the old silent path had.
+ */
+export interface ExecutorDrainReport {
+  attempted: number;
+  delivered: number;
+  /** Failed, still under `maxAttempts` — scheduled for a later pass. */
+  retrying: number;
+  /** Failed at `maxAttempts` — terminal, and the row keeps the last error. */
+  deadLettered: number;
+}
+
+/** A delivery that exhausted its attempts. The evidence, not a silent drop. */
+export interface ExecutorDeadLetter {
+  eventId: string;
+  executorId: string;
+  eventType: string;
+  attempts: number;
+  error: string;
+  lastAttemptAt: string;
+}
+
+/**
+ * Retry defaults (#100). Tuned for the directory write the first executor does;
+ * a connector making an outbound call should raise `maxAttempts` explicitly,
+ * which is why the policy is per-executor rather than a host constant.
+ */
+export function resolveRetryPolicy(retry?: ExecutorRetryPolicy): Required<ExecutorRetryPolicy> {
+  return {
+    maxAttempts: retry?.maxAttempts ?? 5,
+    baseDelayMs: retry?.baseDelayMs ?? 1_000,
+    maxDelayMs: retry?.maxDelayMs ?? 300_000,
+  };
+}
+
+/**
+ * When attempt `attempts` should next be tried: exponential, capped, jittered.
+ *
+ * Jitter is ±20% and is skipped entirely at zero delay, so a test setting
+ * `baseDelayMs: 0` gets deterministic immediate retries rather than a race. It
+ * matters at real delays because every scope in a fleet retries a downed
+ * provider on the same schedule otherwise.
+ */
+export function backoffAt(
+  attempts: number,
+  retry: Required<ExecutorRetryPolicy>,
+  from: Date,
+): string {
+  const raw = Math.min(retry.baseDelayMs * 2 ** (attempts - 1), retry.maxDelayMs);
+  const jittered = raw === 0 ? 0 : raw * (0.8 + Math.random() * 0.4);
+  return new Date(from.getTime() + jittered).toISOString();
+}
+
+/**
  * A named, manifest-wired pre-condition on an operation (K-17; engine-protocol
  * §6, open question 11). One module CONTRIBUTES a predicate under a name; a
  * (usually different) module's manifest WIRES it to an operation via
@@ -691,8 +762,40 @@ export interface ScopeHost {
    * is what makes it correct under crash — but the common case completes inside the
    * originating request, so "requested but not yet effected" is a rare-case fallback
    * rather than the normal experience.
+   *
+   * **A failing handler never fails the operation** (#100). The operation already
+   * committed; the delivery did not. Those are different facts, and reporting the
+   * second as the first told a caller their work had been rolled back when it had
+   * not. A failure is retried with backoff, dead-lettered at `maxAttempts`, and
+   * surfaced through `drainDue`/`executorDeadLetters` — never thrown at whoever happened
+   * to be holding the request.
    */
-  registerExecutor(id: string, eventType: string, handler: ExecutorHandler): void;
+  registerExecutor(
+    id: string,
+    eventType: string,
+    handler: ExecutorHandler,
+    retry?: ExecutorRetryPolicy,
+  ): void;
+
+  /**
+   * Run every executor delivery that is due for this scope — the retry driver.
+   *
+   * Inline dispatch after an operation covers the common case, but a delivery
+   * that failed has no way back on its own: before this existed, retry happened
+   * only if someone happened to invoke another operation on the same scope, so a
+   * quiet scope could hold a failed effect forever with nothing reporting it.
+   *
+   * Call it from whatever scheduling the deployment has — a cron trigger, a
+   * Durable Object alarm, a dev-server timer. Idempotent and safe to call when
+   * nothing is due.
+   */
+  drainDue(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDrainReport>;
+
+  /**
+   * Executor deliveries that exhausted their attempts, oldest first — the evidence a
+   * dead-letter is a decision rather than a disappearance.
+   */
+  executorDeadLetters(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDeadLetter[]>;
 
   /** Bare operation registration (tests, glue). Names are module-namespaced: 'workorder/create'. */
   defineOperation<I, O>(name: string, handler: OperationHandler<I, O>): void;
