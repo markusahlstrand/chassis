@@ -131,6 +131,9 @@ Tracked as [#96](https://github.com/substrat-run/substrat/issues/96) (webhook in
 [#97](https://github.com/substrat-run/substrat/issues/97) (inbound authority seam).
 :::
 
+A worked example of steps 1 and the shape of 3:
+[Meridian's anställningsavtal](/verticals/meridian#a-document-the-anstallningsavtal).
+
 ### The shape to copy
 
 The engine defines what evidence *is* and what must be true of it — the hash matches the

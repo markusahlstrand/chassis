@@ -15,7 +15,10 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import {
+  bindDocument,
+  getProtocol,
   instantiateProtocol,
+  requestSignatures,
   PROTOCOL_PERM as PROTO,
   type ProtocolInstanceRow,
 } from '@substrat-run/engine-protocol';
@@ -68,6 +71,7 @@ export const meridianManifest = moduleManifest.parse({
   events: {
     emits: [
       { type: 'hr.employee-created', schemaVersion: 1 },
+      { type: 'hr.employment-terms-set', schemaVersion: 1 },
       { type: 'hr.absence-accrued', schemaVersion: 1 },
       { type: 'hr.leave-requested', schemaVersion: 1 },
       { type: 'hr.leave-decided', schemaVersion: 1 },
@@ -177,6 +181,33 @@ export const meridianMigrations = [
       );
     `,
   },
+  // 0002 — the anställningsavtal's TERMS. This vertical owns the content of the
+  // employment contract; the protocol engine only ever sees its hash.
+  //
+  // Append-only, like the absence ledger: renegotiated terms are a NEW row and
+  // latest-per-employee wins. A signed contract pinned the hash of the row that
+  // was current when it was issued, so an edit-in-place would silently move what
+  // somebody signed — the same reason protocol templates version rather than
+  // update.
+  {
+    version: '0002-employment-terms',
+    sql: `
+      CREATE TABLE hr_employment_terms (
+        id             TEXT PRIMARY KEY,
+        employee_id    TEXT NOT NULL,
+        role_title     TEXT NOT NULL,
+        monthly_salary TEXT NOT NULL,   -- decimal string, never a float (K-14)
+        currency       TEXT NOT NULL,
+        scope_pct      TEXT NOT NULL,   -- sysselsättningsgrad: '100', '80'
+        start_date     TEXT NOT NULL,
+        notice_months  TEXT NOT NULL,
+        created_by     TEXT NOT NULL,
+        created_at     TEXT NOT NULL
+      );
+      CREATE INDEX hr_employment_terms_by_employee
+        ON hr_employment_terms (employee_id);
+    `,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -191,6 +222,19 @@ export interface EmployeeRow {
   national_id: string | null;
   principal_ref: string | null;
   started_at: string | null;
+  created_at: string;
+}
+
+export interface EmploymentTermsRow {
+  id: string;
+  employee_id: string;
+  role_title: string;
+  monthly_salary: string;
+  currency: string;
+  scope_pct: string;
+  start_date: string;
+  notice_months: string;
+  created_by: string;
   created_at: string;
 }
 
@@ -815,6 +859,218 @@ const payrollExportOp: OperationHandler<z.infer<typeof payrollExportInput>, Payr
 };
 
 // ---------------------------------------------------------------------------
+// The anställningsavtal — a DOCUMENT protocol, and the reason the protocol
+// engine has a second content kind.
+//
+// An employment contract is not checklist-shaped. It has articles: a role, a
+// salary, an occupancy rate, a start date, a notice period. Those live HERE,
+// in this vertical's own table, because they are this vertical's vocabulary —
+// and the engine never sees them. What the engine gets is a hash.
+//
+// The honest limit, stated where a reader will meet it: the engine proves a
+// signature was made over exactly this hash and that the hash has not moved.
+// It CANNOT prove that `hr_employment_terms` still hashes to it, because it
+// never read that table. Re-deriving the hash is this vertical's obligation —
+// which is why `hr/verify-contract` exists below and why the template's
+// `hashRecipe` spells the recipe out.
+//
+// The alternative — one checklist item reading "I accept this contract" — was
+// rejected upstream: the engine would attest to that sentence and nothing else,
+// producing a signature that looks like evidence and is not.
+// ---------------------------------------------------------------------------
+
+/** Latest terms win; the history stays as audit material (append-only). */
+function latestTerms(ctx: OperationContext, employeeId: string): EmploymentTermsRow | undefined {
+  return ctx.sql.query<EmploymentTermsRow>(
+    'SELECT * FROM hr_employment_terms WHERE employee_id = ? ORDER BY rowid DESC LIMIT 1',
+    [employeeId],
+  )[0];
+}
+
+// Web Crypto + TextEncoder are runtime globals everywhere this runs (Node,
+// Workers, browsers). Node-only imports never — and never a hand-rolled hash.
+declare const crypto: {
+  subtle: { digest(algorithm: 'SHA-256', data: Uint8Array): Promise<ArrayBuffer> };
+};
+declare const TextEncoder: new () => { encode(input: string): Uint8Array };
+
+/**
+ * THE RECIPE. Must match `hashRecipe` on the template word for word, because
+ * that string is what an auditor gets handed years later — and a signature over
+ * a hash nobody can reproduce is worth nothing.
+ *
+ * Fields in fixed order, one per line, `key=value`, terminated by a newline.
+ * Money stays a decimal string (K-14): a float here would make the hash depend
+ * on IEEE rounding, and two systems would disagree about what was signed.
+ */
+export async function employmentTermsHash(terms: EmploymentTermsRow): Promise<string> {
+  const input =
+    `anstallningsavtal/1\n` +
+    `employee=${terms.employee_id}\n` +
+    `role=${terms.role_title}\n` +
+    `salary=${terms.monthly_salary} ${terms.currency}\n` +
+    `scope=${terms.scope_pct}\n` +
+    `start=${terms.start_date}\n` +
+    `notice=${terms.notice_months}\n`;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const setTermsInput = z.object({
+  employeeId: z.string().min(1),
+  roleTitle: z.string().min(1),
+  monthlySalary: posDecimal,
+  currency: z.string().length(3),
+  scopePct: posDecimal,
+  startDate: isoDate,
+  noticeMonths: posDecimal,
+});
+
+const setTermsOp: OperationHandler<z.infer<typeof setTermsInput>, EmploymentTermsRow> = async (
+  ctx,
+  raw,
+) => {
+  assertAllowed(await ctx.check(HR_PERM.employeeManage));
+  const input = setTermsInput.parse(raw);
+  getEmployee(ctx, input.employeeId);
+  const id = ulid();
+  ctx.sql.exec(
+    `INSERT INTO hr_employment_terms
+       (id, employee_id, role_title, monthly_salary, currency, scope_pct,
+        start_date, notice_months, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      input.employeeId,
+      input.roleTitle,
+      input.monthlySalary,
+      input.currency,
+      input.scopePct,
+      input.startDate,
+      input.noticeMonths,
+      ctx.principal,
+      new Date().toISOString(),
+    ],
+  );
+  // Compensation is not spine material: the event says terms exist, not what
+  // they are. Same rule `hr.employee-created` follows for national_id.
+  ctx.emit({
+    type: 'hr.employment-terms-set',
+    schemaVersion: 1,
+    entity: employeeRef(input.employeeId),
+    piiClass: 'pseudonymous',
+    subjectId: dataSubjectId.parse(input.employeeId),
+    payload: { employeeId: input.employeeId, termsId: id, roleTitle: input.roleTitle },
+  });
+  return ctx.sql.query<EmploymentTermsRow>('SELECT * FROM hr_employment_terms WHERE id = ?', [
+    id,
+  ])[0]!;
+};
+
+const termsOp: OperationHandler<{ employeeId: string }, EmploymentTermsRow | null> = async (
+  ctx,
+  input,
+) => {
+  assertAllowed(await ctx.check(HR_PERM.employeeManage));
+  return latestTerms(ctx, z.string().min(1).parse(input.employeeId)) ?? null;
+};
+
+const issueContractInput = z.object({
+  templateKey: z.string().min(1),
+  employeeId: z.string().min(1),
+});
+
+/**
+ * Issue the contract for signature — instantiate, bind, dispatch, in ONE
+ * transaction.
+ *
+ * The two signatories are deliberately different in kind, and that asymmetry is
+ * the whole point of the engine change:
+ *
+ *   arbetsgivaren — a `principal`. Someone with an account, who signs as
+ *     themselves. This is the issuing party, so `primary`.
+ *   den anställde — `external`. A new hire on their first day has NO account
+ *     (see `hr_employees.principal_ref`, nullable for exactly this), and will
+ *     sign with BankID through a provider, days from now.
+ *
+ * Their ref is the EMPLOYEE ID — an opaque `DataSubjectId`, the same one
+ * `hr.employee-created` already shreds on. NOT `national_id`. That column is
+ * this vertical's declared crypto-shred target, and writing it into a signature
+ * row would make `direct` PII permanent in a table whose whole purpose is that
+ * nothing in it can ever be edited.
+ */
+const issueContractOp: OperationHandler<
+  z.infer<typeof issueContractInput>,
+  { instance: ProtocolInstanceRow; contentHash: string }
+> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(HR_PERM.employeeManage));
+  assertAllowed(await ctx.check(PROTO.create));
+  const input = issueContractInput.parse(raw);
+  const employee = getEmployee(ctx, input.employeeId);
+  const terms = latestTerms(ctx, employee.id);
+  if (!terms) throw new Error(`no employment terms set for ${employee.number} — set them first`);
+
+  const instance = instantiateProtocol(ctx, {
+    templateKey: input.templateKey,
+    entity: employeeRef(employee.id),
+  });
+
+  assertAllowed(await ctx.check(PROTO.bind, { entityType: 'protocol', entityId: instance.id }));
+  bindDocument(ctx, {
+    instanceId: instance.id,
+    contentRef: { entityType: 'employment-terms', entityId: terms.id },
+    contentHash: await employmentTermsHash(terms),
+  });
+
+  assertAllowed(
+    await ctx.check(PROTO.requestSignature, { entityType: 'protocol', entityId: instance.id }),
+  );
+  const sent = await requestSignatures(ctx, {
+    instanceId: instance.id,
+    method: 'scrive',
+    parties: [
+      { label: 'Arbetsgivare', kind: 'principal', ref: ctx.principal, signatureKind: 'primary' },
+      { label: 'Anställd', kind: 'external', ref: employee.id },
+    ],
+  });
+  return { instance: sent.instance, contentHash: sent.contentHash };
+};
+
+/**
+ * Re-derive the hash from this vertical's own rows and compare it to what the
+ * protocol froze — the check the ENGINE cannot do for us.
+ *
+ * `matches: false` does not mean the signature is invalid. It means the terms
+ * row moved after the contract was issued, and what somebody signed is no
+ * longer what this table says. That is a real finding, and the only reason it
+ * is findable is that the recipe is written down.
+ */
+const verifyContractOp: OperationHandler<
+  { instanceId: string },
+  { matches: boolean; boundHash: string | null; replayedHash: string | null; status: string }
+> = async (ctx, input) => {
+  const instanceId = z.string().min(1).parse(input.instanceId);
+  assertAllowed(await ctx.check(PROTO.read, { entityType: 'protocol', entityId: instanceId }));
+  const detail = getProtocol(ctx, instanceId);
+  const termsId = detail.instance.content_ref_id;
+  const terms = termsId
+    ? ctx.sql.query<EmploymentTermsRow>('SELECT * FROM hr_employment_terms WHERE id = ?', [
+        termsId,
+      ])[0]
+    : undefined;
+  const replayedHash = terms ? await employmentTermsHash(terms) : null;
+  return {
+    // Compare against `bound_hash` — the hash WE computed over our own rows —
+    // not `frozen_hash`, which is the engine's recipe run over it. The two are
+    // different values and conflating them would make this check vacuous.
+    matches: replayedHash !== null && replayedHash === detail.instance.bound_hash,
+    boundHash: detail.instance.bound_hash,
+    replayedHash,
+    status: detail.instance.status,
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Onboarding — the protocol engine, composed. Vertical policy: checklists hang
 // off employees. The invariants (version pinning, sign→immutable, events) live
 // in the engine's in-scope function; fill/sign/read use the engine's default
@@ -880,6 +1136,10 @@ export const meridianModule: ModuleRegistration = {
     'hr/list-expenses': listExpensesOp as never,
     'hr/my-expenses': myExpensesOp as never,
     'hr/payroll-export': payrollExportOp as never,
+    'hr/set-employment-terms': setTermsOp as never,
+    'hr/employment-terms': termsOp as never,
+    'hr/issue-employment-contract': issueContractOp as never,
+    'hr/verify-contract': verifyContractOp as never,
     'hr/start-onboarding': startOnboardingOp as never,
     'hr/timeline': timelineOp as never,
   },

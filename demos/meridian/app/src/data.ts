@@ -141,7 +141,11 @@ export function useManagerData(personaKey: string, enabled: boolean): { data: Ma
           roster.map(async (m) => {
             timesheets[m.id] = await api.timesheet(m.id);
             const ob = await api.onboardingSummaryFor(m.id);
-            onboarding[m.id] = ob.find((o) => o.instance.status !== 'voided') ?? null;
+            // A new hire can carry both an onboarding checklist and an
+            // anställningsavtal. The contract is the one that gates their start
+            // date, so it wins the card when both are live.
+            const live = ob.filter((o) => o.instance.status !== 'voided');
+            onboarding[m.id] = live.find((o) => o.contentKind === 'document') ?? live[0] ?? null;
           }),
         );
         if (!cancelled) {

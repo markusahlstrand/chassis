@@ -81,7 +81,8 @@ reproducing it has to be written where an auditor will find it.
 
 What the engine proves for a document: this signature was made over exactly this hash, at
 this time, by this signatory, and the hash has not changed since. What it cannot prove: that
-your rows still hash to it. That check is yours.
+your rows still hash to it. That check is yours — see Meridian's `hr/verify-contract` for
+what owning it looks like.
 :::
 
 ## The signature model: provider-agnostic evidence

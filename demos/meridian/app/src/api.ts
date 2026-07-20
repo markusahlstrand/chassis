@@ -120,10 +120,20 @@ export interface RosterMember {
   started_at: string | null;
 }
 export interface OnboardingSummary {
-  instance: { id: string; status: 'open' | 'signed' | 'voided' };
+  instance: {
+    id: string;
+    // `pending_signature` is the state a DOCUMENT sits in while it is out at a
+    // signing provider: frozen, unwritable, waiting on people who may not have
+    // accounts here at all.
+    status: 'open' | 'pending_signature' | 'signed' | 'voided';
+  };
   title: string;
+  /** 'checklist' (items to tick) or 'document' (an avtal, bound by hash). */
+  contentKind: 'checklist' | 'document';
   answered: number;
   total: number;
+  /** How many requested signatures are still outstanding. */
+  pendingSignatures: number;
 }
 
 export const api = {
@@ -160,9 +170,10 @@ export const api = {
   // Onboarding is the protocol engine, reached through the employee's own-record
   // grant. The employee fills and e-signs their own.
   onboardingFor: (employeeId: string) =>
-    invoke<
-      { instance: { id: string; status: 'open' | 'signed' | 'voided' }; title: string; answered: number; total: number }[]
-    >('protocol/list-for-entity', { entityType: 'employee', entityId: employeeId }),
+    invoke<OnboardingSummary[]>('protocol/list-for-entity', {
+      entityType: 'employee',
+      entityId: employeeId,
+    }),
   onboardingDetail: (instanceId: string) =>
     invoke<{
       instance: { id: string; status: string };

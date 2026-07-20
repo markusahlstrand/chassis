@@ -77,6 +77,13 @@ const hrAdminPerms: PermissionKey[] = [
   HR_PERM.payrollExport,
   PROTO.create,
   PROTO.fill,
+  // The contract half: freeze the document and send it to Scrive. Note that
+  // PROTO.recordSignature is deliberately NOT here and belongs to no role —
+  // it speaks for the provider, not for a person, and nothing in this demo can
+  // legitimately hold it until webhook ingress (#96) and the inbound authority
+  // seam (#97) exist.
+  PROTO.bind,
+  PROTO.requestSignature,
   PROTO.sign,
   PROTO.read,
   PROTO.void,
@@ -140,7 +147,9 @@ const ONBOARDING_SE = {
       {
         title: 'Första dagen',
         items: [
-          { key: 'anstallningsavtal', label: 'Anställningsavtal signerat', type: 'check' as const },
+          // 'anstallningsavtal' used to be a checkbox here. It is a signed
+          // DOCUMENT now (ANSTALLNINGSAVTAL_SE below) — a checkbox recording
+          // that a contract was signed is not evidence that it was.
           { key: 'utrustning', label: 'Dator och passerkort utlämnade', type: 'check' as const },
           { key: 'bankuppgifter', label: 'Bankuppgifter för lön registrerade', type: 'check' as const },
         ],
@@ -157,12 +166,55 @@ const ONBOARDING_ES = {
       {
         title: 'Primer día',
         items: [
-          { key: 'contrato', label: 'Contrato firmado', type: 'check' as const },
+          // 'contrato' moved to ANSTALLNINGSAVTAL_ES for the same reason.
           { key: 'equipo', label: 'Equipo y tarjeta de acceso entregados', type: 'check' as const },
           { key: 'registro_jornada', label: 'Registro de jornada explicado', type: 'check' as const },
         ],
       },
     ],
+  },
+};
+
+/**
+ * The employment contract — a `document` protocol, not a checklist.
+ *
+ * There are no items. The engine holds a hash and a pointer to
+ * `hr_employment_terms`; the terms themselves never leave this vertical.
+ *
+ * `hashRecipe` is REQUIRED by the engine, and it is the load-bearing half of a
+ * document signature: an auditor reading this template years from now must be
+ * able to recompute the hash from the vertical's own rows. It has to match
+ * `employmentTermsHash()` in module.ts word for word.
+ */
+const HASH_RECIPE =
+  "SHA-256 over, in this exact order, one field per line, each line terminated by \\n: " +
+  "'anstallningsavtal/1', 'employee=<employee id>', 'role=<role title>', " +
+  "'salary=<monthly salary> <currency>', 'scope=<occupancy pct>', " +
+  "'start=<ISO start date>', 'notice=<notice months>'. " +
+  'Values are taken verbatim from the latest hr_employment_terms row for the ' +
+  'employee; money is a decimal string, never a float. See employmentTermsHash().';
+
+const ANSTALLNINGSAVTAL_SE = {
+  key: 'anstallningsavtal-se',
+  title: 'Anställningsavtal — Sverige',
+  content: {
+    kind: 'document' as const,
+    documentType: 'anstallningsavtal',
+    hashRecipe: HASH_RECIPE,
+    description:
+      'Signeras av arbetsgivaren och den anställde med BankID via Scrive. Den ' +
+      'anställde har normalt inget konto i systemet när avtalet signeras.',
+  },
+};
+
+const ANSTALLNINGSAVTAL_ES = {
+  key: 'anstallningsavtal-es',
+  title: 'Contrato de trabajo — España',
+  content: {
+    kind: 'document' as const,
+    documentType: 'anstallningsavtal',
+    hashRecipe: HASH_RECIPE,
+    description: 'Firmado por la empresa y la persona contratada.',
   },
 };
 
@@ -288,9 +340,29 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     const project = await se.invoke<{ id: string }>('hr/create-project', { code: 'nordljus-app', name: 'Nordljus App' });
     await se.invoke('hr/create-project', { code: 'internal', name: 'Internal' });
     await se.invoke('protocol/define-template', ONBOARDING_SE);
+    await se.invoke('protocol/define-template', ANSTALLNINGSAVTAL_SE);
     // Elin is a new hire: start her onboarding checklist so the app opens on the
     // new-hire state. She fills and e-signs it herself through her own grant.
     await se.invoke('hr/start-onboarding', { templateKey: 'onboarding-se', employeeId: elinEmp.id });
+
+    // Karin has been offered a job and has NOT started: no principal_ref, no
+    // started_at. Her anställningsavtal is out at Scrive awaiting two BankID
+    // signatures, so the app opens on a contract that is frozen and pending —
+    // the state the whole document/async change exists to represent. Nothing
+    // can advance it until #96/#97 land, and that is the honest demo.
+    await se.invoke('hr/set-employment-terms', {
+      employeeId: karinEmp.id,
+      roleTitle: 'Systemutvecklare',
+      monthlySalary: '52000',
+      currency: 'SEK',
+      scopePct: '100',
+      startDate: '2026-09-01',
+      noticeMonths: '3',
+    });
+    await se.invoke('hr/issue-employment-contract', {
+      templateKey: 'anstallningsavtal-se',
+      employeeId: karinEmp.id,
+    });
 
     // --- Spain (Madrid): different statutory rules, same code ---
     const es = await host.getScope(world.hedda, world.t1, world.sEs);
@@ -301,6 +373,7 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     });
     await es.invoke('hr/accrue', { employeeId: pabloEmp.id, leaveTypeKey: 'vacation', days: '22' });
     await es.invoke('protocol/define-template', ONBOARDING_ES);
+    await es.invoke('protocol/define-template', ANSTALLNINGSAVTAL_ES);
 
     world.elinEmpId = elinEmp.id;
     world.karinEmpId = karinEmp.id;
