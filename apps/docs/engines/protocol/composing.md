@@ -101,21 +101,41 @@ entity ids, `EntityRef`s, and event payloads.
 Nothing in this engine talks to anything external, and it never will: module code may not
 `fetch`, and connectors handle the outside world.
 
-The seam here is unusually well-designed and worth studying: the `method` column on a
-signature is a **reserved slot**. A BankID or Scrive connector runs the external flow and
-calls the *same* `sign` operation with upgraded evidence in `evidence_ref` — a sealed PDF, a
-transaction id, a provider audit log. eIDAS advanced/qualified is an evidence-quality upgrade,
-not a second code path.
+The external signing flow is split across that boundary deliberately:
 
-That's the shape to copy: the engine defines what evidence *is*, and a connector supplies a
-better grade of it. There's no `signWithBankID` waiting to be written.
+1. Your vertical calls `requestSignatures(ctx, { instanceId, method: 'scrive', parties })`.
+   That freezes the content, computes the hash **once**, writes a request row per party, and
+   emits a fat `protocol.signatures-requested` carrying everything a connector needs to
+   dispatch — the hash, the parties, the content ref. All inside your transaction.
+2. An **executor** outside the scope picks that event off the outbox and makes the HTTP call.
+   It holds platform authority, which module code must never have.
+3. Days later the provider reports a signature, and something invokes
+   `recordSignature(ctx, { requestId, signatory, signedAt, contentHash, evidenceRef })`.
 
-::: warning Connectors are not built yet
-The connector interface, connection store, token refresh, and webhook ingress are **planned,
-not implemented** — there is no connector code in the repo, and no signature method other than
-`in-app` works today. The `_substrat_outbox` is real and transactional, but drains only to
-in-process consumers.
+::: warning Step 3 has no caller yet
+Steps 1 and 2 are buildable today — the outbox and `ExecutorHandler` are real. Step 3 is not,
+and the gap is in the **kernel**, not this engine:
 
-The `method` column is a slot with nothing to put in it yet. That's deliberate sequencing —
-the schema doesn't need to change when connectors land — but don't read it as BankID support.
+- there is **no webhook ingress** anywhere. `apps/router` resolves hostname → target and has
+  no such surface; `kernel-design.md` reserves the idea and nothing implements it. No
+  signature verification, no replay protection, no connection store.
+- there is **no inbound authority seam**. `ExecutorHandler` has no return path into a scope,
+  and the only stub minter — `ScopeHost.getScope(principal, …)` — demands a `PrincipalId`. A
+  provider callback is not a principal.
+
+So `recordSignature` is reachable only by a principal holding `protocol:record-signature`, a
+key deliberately held by **no human role** in any demo. It is shaped to be callable by that
+ingress when it lands; it is not a claim that BankID works today.
+
+Tracked as [#96](https://github.com/substrat-run/substrat/issues/96) (webhook ingress) and
+[#97](https://github.com/substrat-run/substrat/issues/97) (inbound authority seam).
 :::
+
+### The shape to copy
+
+The engine defines what evidence *is* and what must be true of it — the hash matches the
+frozen content, the signatory matches the request, the timestamp is the provider's. A
+connector supplies the evidence. What the engine does **not** do is pretend an asynchronous,
+non-principal signature fits a synchronous, principal-shaped operation: that assumption is
+what left the freeze window open, and the correction was a new noun (the signature request),
+not a better comment.

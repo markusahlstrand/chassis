@@ -1,11 +1,11 @@
 # Events
 
-The engine **emits 5 and consumes none** — protocols are driven by operations, not by
+The engine **emits 9 and consumes none** — protocols are driven by operations, not by
 upstream facts.
 
 ```ts
 events: {
-  emits: [ /* the 5 below */ ],
+  emits: [ /* the 9 below */ ],
   consumes: [],
 }
 ```
@@ -16,9 +16,17 @@ events: {
 |---|---|---|---|
 | `protocol.instantiated` | 1 | none | instance id, template `(key, version)`, entity |
 | `protocol.response-recorded` | 1 | none | instance id, response id, item key, value |
-| `protocol.signed` | 1 | pseudonymous | signer, content hash, **frozen answers** |
-| `protocol.countersigned` | 1 | pseudonymous | signer, counter-signer, hash, **frozen answers** |
+| `protocol.content-bound` | 1 | none | instance id, document type, content ref, bound hash |
+| `protocol.signatures-requested` | 1 | none | content hash, method, parties (label, kind, request id) |
+| `protocol.signature-declined` | 1 | none | request id, party label, outcome, reason |
+| `protocol.signatures-cancelled` | 1 | none | instance id, how many were withdrawn, reason |
+| `protocol.signed` | 1 | pseudonymous | signatory, content hash, **frozen answers** |
+| `protocol.countersigned` | 1 | pseudonymous | signatory, counter-signatory, hash, **frozen answers** |
 | `protocol.voided` | 1 | none | instance id, reason |
+
+`protocol.signatures-requested` is the connector's dispatch order: it carries the hash, the
+parties and the content ref, so an executor never needs a read back into the scope to know
+what to send where.
 
 ## The signature events carry the whole document
 
@@ -35,6 +43,12 @@ snapshot discipline exists to prevent. The event **is** the archival record.
 
 Events referencing a person carry `piiClass: 'pseudonymous'` and that person's `subjectId`.
 A GDPR erasure crypto-shreds the person while the fact that a signed protocol exists survives.
+
+**`subjectId` is not always the acting principal.** On a signature recorded from an external
+provider it is the *signatory* — a `DataSubjectId` for someone with no account in the system
+at all. That is what makes an external signature shreddable, and it is why a personnummer must
+never be used as the signatory reference: it would be `direct` PII written into a row that
+immutability makes permanent. The provider's own party identifier goes in `evidence_ref`.
 
 That split is deliberate and slightly subtle: the *compliance* claim ("this protocol was
 signed, and here is its hash") outlives the *personal* claim ("by this named individual").

@@ -354,9 +354,11 @@ describe('Handlebar demo scenario (spec §7)', () => {
     expect(counter.signature.signed_by).toBe(w.lisbeth);
     expect(counter.signature.content_hash).toBe(signed.signature.content_hash);
 
-    // Once is enough.
+    // Once is enough. The rule is stated over SIGNATORIES rather than
+    // principals since milestone D, so it covers an external BankID signatory
+    // the same way it covers Lisbeth.
     await expect(lisbeth.invoke('protocol/countersign', { instanceId: reportId })).rejects.toThrow(
-      /already counter-signed/,
+      /has not already signed/,
     );
 
     // The customer can read the document she counter-signed (per-entity walk)

@@ -43,6 +43,14 @@ discipline, rehearsed at demo scale:
 3. **Milestone C — the guard.** With two verticals gating transitions on signatures,
    decide open question 11 on real material (§6 below). *Built: both poles exist and
    each carries the case it fits; the decision-log entry for OQ11 awaits ratification.*
+4. **Milestone D — the third shape forces the seam open.** A CRM whose central artefact is a
+   priced *avtal* signed by all parties with BankID via Scrive fits the engine's attestation
+   half exactly and its content half not at all — and exposed a freeze-window defect affecting
+   checklists too. Content becomes a discriminated `kind`, and freezing becomes a transition
+   separate from signing (§5.1, §5.3). Note the extraction discipline held in reverse here:
+   the second consumer of the *attestation* half is what justified generalising it, and
+   splitting it into its own engine was rejected because D-19's star topology forbids an
+   engine importing an engine — checklists-on-top-of-signing is not a legal shape.
 
 Each milestone is agent-loop material (runs 003–005): A extends a vertical, B is an
 *extraction* — a benchmark shape no run has tested — and C is a kernel change behind
@@ -57,8 +65,12 @@ protocol_instances   id, template_key, template_version, entity_type, entity_id,
                      status ('open' | 'signed' | 'voided'), created_by, created_at
 protocol_responses   id, instance_id, item_key, value_json, note, responded_by,
                      responded_at            — append-only; latest-per-item wins
-protocol_signatures  id, instance_id, signed_by, method, content_hash,
-                     evidence_ref, signed_at — exactly one per signed instance
+protocol_signatures  id, instance_id, signed_by, signatory_kind, kind, method,
+                     content_hash, evidence_ref, request_id, signed_at
+protocol_signature_requests
+                     id, instance_id, party_label, party_kind, party_ref,
+                     signature_kind, method, status, content_hash, external_ref,
+                     requested_by/at, resolved_at — milestone D (§5)
 ```
 
 Design choices to challenge in review:
@@ -73,31 +85,114 @@ Design choices to challenge in review:
 
 ## 4. Invariants (what the engine *is*)
 
-1. Sign freezes: any write to a signed instance's responses fails at the engine.
-2. `content_hash` = hash over template content + latest responses at sign time; the
-   signature row is verifiable against replayed state.
-3. One signature per instance; counter-signatures (customer at pickup) are additional
-   signature rows on the same frozen content, never new content.
-4. Append-only responses, bound to an open instance.
-5. Every mutation emits: `protocol.instantiated | response-recorded | signed |
-   countersigned | voided` (fat payloads; a consumer never needs a cross-module read).
-6. Every operation checks a permission: `protocol:create | fill | sign | countersign |
-   read | void` — `sign` deliberately separate from `fill` (the FSM reality: the
-   technician fills, sometimes only arbetsledare signs).
+1. Freeze freezes: any write to a frozen instance's content fails at the engine. Freezing
+   happens at in-app signature, or at dispatch for an external flow (§5.1).
+2. `content_hash` = hash over template content + the frozen content, stored on the instance as
+   `frozen_hash` at freeze time; every signature must match it, and it is verifiable against
+   replayed state. One recipe per content kind (§5.3).
+3. Exactly one `primary` signature per instance; counter-signatures (customer at pickup) are
+   additional signature rows on the same frozen content, never new content. A signatory never
+   signs the same instance twice — stated over *signatories*, so it holds for external parties.
+4. Append-only responses, bound to an unfrozen checklist instance.
+5. Every mutation emits (fat payloads; a consumer never needs a cross-module read):
+   `protocol.instantiated | response-recorded | content-bound | signatures-requested |
+   signature-declined | signatures-cancelled | signed | countersigned | voided`.
+6. Every operation checks a permission: `protocol:create | fill | bind | request-signature |
+   record-signature | sign | countersign | read | void` — `sign` deliberately separate from
+   `fill` (the FSM reality: the technician fills, sometimes only arbetsledare signs), and
+   `record-signature` deliberately separate from all of them because it speaks for an external
+   provider rather than for a person.
 
 ## 5. Signature model: provider-agnostic evidence
 
-A signature records `signed_by` + `method` + `content_hash` + optional `evidence_ref`
+A signature records a **signatory** + `method` + `content_hash` + optional `evidence_ref`
 (attachment). Methods:
 
-- **`in-app`** (v0, always available): the authenticated principal taps sign. Integrity
-  comes from the engine (hash, immutability, spine event) — the everyday field case,
-  no third party, works self-hosted/escrow.
-- **`bankid` / `scrive` / …** (connector slot, later): a connector in the integrations
-  hub runs the external flow and calls the same sign operation with upgraded evidence
-  (sealed PDF, transaction id, provider audit log) attached. eIDAS advanced/qualified
-  levels are an evidence-quality upgrade, not a different engine path. The engine never
-  imports a vendor SDK. Demo treatment: stubbed like Fortnox export.
+- **`in-app`** (always available): the authenticated principal taps sign. Integrity comes from
+  the engine (hash, immutability, spine event) — the everyday field case, no third party,
+  works self-hosted/escrow. Freezing and signing coincide, which is sound *because* it is
+  synchronous.
+- **`bankid` / `scrive` / …**: a connector in the integrations hub runs the external flow.
+
+### 5.1 The correction (milestone D)
+
+The original draft of this section claimed the connector case would "arrive later through the
+SAME operation shape with upgraded evidence", and the code carried that claim in
+`signProtocol`'s doc comment. **That was wrong**, and it was wrong in a way that also left a
+hole in the freeze invariant. `signProtocol` takes three things from ambient context that an
+external flow cannot supply:
+
+| | in-app | external provider |
+|---|---|---|
+| who signs | `ctx.principal` | a person with **no account in the system** |
+| when | now | days later, at the provider's timestamp |
+| freeze | at signature | at **dispatch** |
+
+The third is the sharp one and it is not a contract-shaped problem. With freeze welded to
+signing, an instance sitting at a provider stays `open` — and therefore *writable* — for the
+entire days-long window, so the document the signatory saw and the content the hash is
+computed over can diverge with nothing detecting it. **That applies to a checklist signed with
+BankID exactly as much as to a priced contract**, so it is an asynchronous-signing defect, not
+a document-content one.
+
+The missing concept was a noun: the **signature request**.
+
+```
+open ──requestSignatures──> pending_signature ──all parties signed──> signed
+  │                                │
+  │                                └── cancelSignatureRequests ──> open (renegotiate)
+  └──signProtocol (in-app)──────────────────────────────────────> signed
+```
+
+- `pending_signature` is frozen: no fill, no rebind. The drift window closes.
+- The hash is computed **once**, at dispatch, and every returning signature must match it.
+- The signatory becomes data rather than context:
+  `{ kind: 'principal', ref: PrincipalId } | { kind: 'external', ref: DataSubjectId }`.
+  The external form follows `engines/booking`'s `partyRef` — opaque and shreddable. A
+  personnummer must never appear there; it is `direct` PII in a row immutability makes
+  permanent. The provider's party id goes in `evidence_ref`.
+- Multi-party falls out: an instance reaches `signed` only when **every** requested party has
+  signed. A declined request is not "pending" but is not a signature either, so completion is
+  counted over `status = 'signed'`, not over the absence of pending rows.
+- Cancelling **thaws** and clears the frozen hash. Signatures already collected are kept as
+  history but were taken over the old hash and can never satisfy the new one: a party who
+  signed v1 has not signed v2.
+
+`method`/`evidence_ref` were reserved slots with no code path able to write them. They now
+have one.
+
+### 5.2 What is still missing, and where
+
+The engine emits `protocol.signatures-requested` and an executor can dispatch it. The **return
+path does not exist**, and the gap is in the kernel rather than here:
+
+- **no webhook ingress** — the router has no such surface (#96)
+- **no inbound authority seam** — `ScopeHost.getScope` demands a `PrincipalId`, and
+  `ExecutorHandler` has no return path into a scope (#97)
+
+`recordSignature` is shaped to be callable by that ingress and is gated by its own permission
+key, `protocol:record-signature`, held by **no human role** in any demo. eIDAS
+advanced/qualified remains an evidence-quality upgrade — but only once the flow producing it
+exists. The engine never imports a vendor SDK.
+
+### 5.3 Two content kinds (milestone D)
+
+The attestation half was always content-agnostic; only `fill` and the template shape were
+checklist-specific. That seam is now exposed as a discriminated `kind`:
+
+- **`checklist`** — the original shape. Templates predating the discriminant carry no `kind`
+  and parse as checklist; their stored `content_json` is **never rewritten**, because the hash
+  covers that string verbatim and a migration touching it would invalidate every signature
+  ever made. The checklist hash recipe is byte-identical to the one that shipped.
+- **`document`** — content the engine never sees. The vertical owns the rows, computes their
+  hash, and binds `(contentRef, contentHash)`.
+
+The alternative — modelling a contract as a degenerate one-item checklist with the real
+content in the vertical — was rejected: the engine would attest to the sentence "I accept this
+contract" and nothing else, producing a signature that *looks* like evidence and is not.
+`documentContent.hashRecipe` is required so the method for reproducing the hash is written
+where an auditor finds it. The engine proves the signature was made over that hash and that it
+has not moved; it cannot prove the vertical's rows still hash to it, and says so.
 
 ## 6. The guard (open question 11) — both poles, built
 
@@ -211,6 +306,10 @@ gate is now in the manifest diff *and* in the execution path.
 Conditional/branching templates, scheduled/recurring instantiation, PDF rendering,
 photo capture pipeline (attachment contract covers storage), offline sync (binds to the
 master-plan offline question, not solved here), template marketplace.
+
+Milestone D adds two more: the engine does not **render** a document (a `document` instance
+holds a ref and a hash, never bytes), and it does not **reconcile** a vertical's content
+against a bound hash — recomputation is the vertical's obligation, declared in `hashRecipe`.
 
 ## 8. Review questions for the human
 
