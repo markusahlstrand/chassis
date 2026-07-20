@@ -177,6 +177,84 @@ export interface ExecutorDrainReport {
   deadLettered: number;
 }
 
+/**
+ * The web-standard fetch surface, structurally typed.
+ *
+ * Declared rather than imported: the kernel depends on no platform typings, and
+ * `RequestInit`/`Response` come from DOM lib in Node and from workers-types in
+ * Workers. Structural typing means both satisfy this without either being
+ * required — the same reason `crypto` and `TextEncoder` are declared locally.
+ */
+export interface FetchLike {
+  (input: string, init?: ConnectorRequestInit): Promise<ConnectorResponse>;
+}
+export interface ConnectorRequestInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  signal?: unknown;
+}
+export interface ConnectorResponse {
+  readonly ok: boolean;
+  readonly status: number;
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+}
+
+/**
+ * A connection with its credential opened, plus egress bound to it.
+ *
+ * `fetch` is bound to the connection rather than sitting on the context because
+ * health has to land on the right row by construction. An ambient
+ * `ctx.fetch` would need the runtime to guess which connection a call belonged
+ * to, and it would guess wrong the first time a connector talked to two.
+ */
+export interface ConnectorConnection extends OpenConnection {
+  /**
+   * Sanctioned egress: a timeout, and success/failure recorded against THIS
+   * connection.
+   *
+   * The connector is handed its `fetch` rather than importing one — the same
+   * move `ctx.sql` makes for module code, and for the same reason. Egress
+   * policy, timeouts and health become properties of the seam instead of
+   * conventions a connector author has to remember. Module code still cannot
+   * reach any of this: boundary-lint R3 bans `fetch` outright, and a connector
+   * is host code.
+   */
+  fetch(input: string, init?: ConnectorRequestInit): Promise<ConnectorResponse>;
+}
+
+/**
+ * What a connector sees. Strictly more than an executor: an executor effects
+ * something in the DIRECTORY, a connector effects something in the OUTSIDE
+ * WORLD, and only the second needs a per-tenant credential and egress.
+ */
+export interface ConnectorContext {
+  readonly admin: HostAdmin;
+  readonly tenantId: TenantId;
+  readonly scopeId: ScopeId;
+  /** The scope's vertical — half the key a connection is stored under. */
+  readonly vertical: string;
+  /**
+   * The live connection for this provider, opened.
+   *
+   * Resolved as (this event's tenant, this scope's vertical, provider), so a
+   * connector cannot reach a credential another vertical connected even by
+   * accident — the tenant and vertical are ambient, not arguments. Throws when
+   * there is none: a connector that runs without a credential would otherwise
+   * fail later, further from the cause.
+   */
+  connection(provider: string): Promise<ConnectorConnection>;
+}
+
+export type ConnectorHandler = (ctx: ConnectorContext, event: DomainEvent) => void | Promise<void>;
+
+/** Tuning for one connector's egress. */
+export interface ConnectorOptions extends ExecutorRetryPolicy {
+  /** Per-request timeout. Default 30s. */
+  timeoutMs?: number;
+}
+
 /** A delivery that exhausted its attempts. The evidence, not a silent drop. */
 export interface ExecutorDeadLetter {
   eventId: string;
@@ -841,6 +919,23 @@ export interface ScopeHost {
     eventType: string,
     handler: ExecutorHandler,
     retry?: ExecutorRetryPolicy,
+  ): void;
+
+  /**
+   * Register a connector — an executor that also gets a per-tenant credential
+   * and sanctioned egress (#101, design/connections.md §4.1).
+   *
+   * Rides the same hardened dispatch, journal and retry policy as
+   * `registerExecutor`; the difference is only what the handler is handed. Kept
+   * as a second registration rather than widening `ExecutorHandler` because the
+   * two really are different capabilities, and a membership executor should not
+   * be handed the machinery to call the internet.
+   */
+  registerConnector(
+    id: string,
+    eventType: string,
+    handler: ConnectorHandler,
+    options?: ConnectorOptions,
   ): void;
 
   /**

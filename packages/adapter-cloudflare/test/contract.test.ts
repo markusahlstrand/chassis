@@ -2,7 +2,11 @@ import { env } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
 import { ulid, UNSAFE_allowAllChecker, webCryptoSecretBox } from '@substrat-run/kernel';
-import { permissionContractSuite, scopeHostContractSuite } from '@substrat-run/contract-tests';
+import {
+  connectorTestFetch,
+  permissionContractSuite,
+  scopeHostContractSuite,
+} from '@substrat-run/contract-tests';
 import { CloudflareScopeHost } from '../src/host.js';
 
 // The scope-host suite runs against an allow-all checker (it exercises no
@@ -14,6 +18,7 @@ scopeHostContractSuite(
   async () => {
     const host = new CloudflareScopeHost({
       secretBox: webCryptoSecretBox('test-key', new Uint8Array(32).fill(7)),
+      fetch: connectorTestFetch,
       scope: env.SCOPE,
       controlPlane: env.CONTROL_PLANE,
       checker: UNSAFE_allowAllChecker,

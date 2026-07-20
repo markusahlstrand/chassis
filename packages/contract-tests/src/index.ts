@@ -8,3 +8,9 @@ export {
   contractTestInitialModules,
   contractTestModules,
 } from './modules.js';
+export {
+  connectorCalls,
+  connectorTestFetch,
+  resetConnectorCalls,
+  type ConnectorCall,
+} from './connector-fixture.js';

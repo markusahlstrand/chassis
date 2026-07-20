@@ -87,6 +87,10 @@ import {
   backoffAt,
   resolveRetryPolicy,
   unconfiguredSecretBox,
+  type ConnectorContext,
+  type ConnectorHandler,
+  type ConnectorOptions,
+  type FetchLike,
   type SecretBox,
   type GuardPredicate,
   type HostAdmin,
@@ -138,6 +142,15 @@ export interface SqliteScopeHostOptions {
    * keeps working, so a deployment that uses no connectors needs no key.
    */
   secretBox?: SecretBox;
+  /**
+   * Egress for connectors. Defaults to the runtime's `fetch`.
+   *
+   * Injectable so a test or a dev server can stand a provider up in memory —
+   * which is the only way to exercise a connector end to end before real API
+   * credentials exist, and remains the way to test failure paths a real
+   * provider will not produce on demand.
+   */
+  fetch?: FetchLike;
 }
 
 const KERNEL_DDL = `
@@ -191,6 +204,22 @@ const KERNEL_DDL = `
     PRIMARY KEY (event_id, consumer_module)
   );
 `;
+
+/** An executor or a connector — same journal and retry, different argument. */
+type RegisteredEffector =
+  | {
+      kind: 'executor';
+      eventType: string;
+      handler: ExecutorHandler;
+      retry: Required<ExecutorRetryPolicy>;
+    }
+  | {
+      kind: 'connector';
+      eventType: string;
+      handler: ConnectorHandler;
+      retry: Required<ExecutorRetryPolicy>;
+      timeoutMs: number;
+    };
 
 interface ConnectionRow {
   id: string;
@@ -403,10 +432,7 @@ export class SqliteScopeHost implements ScopeHost {
   private readonly operationEntitlement = new Map<string, string>();
   private readonly roles = new Map<string, RoleDefinition>(); // 'tenantId/roleKey'
   /** Executor id → {eventType, handler} (K-22 §4.2). Host code, not module code. */
-  private readonly executors = new Map<
-    string,
-    { eventType: string; handler: ExecutorHandler; retry: Required<ExecutorRetryPolicy> }
-  >();
+  private readonly executors = new Map<string, RegisteredEffector>();
   /**
    * The event currently being effected by an executor, stamped onto any admin rows
    * it writes. Ambient rather than threaded through every HostAdmin signature: it is
@@ -416,9 +442,11 @@ export class SqliteScopeHost implements ScopeHost {
   private causedBy: string | null = null;
   private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
   private readonly secretBox: SecretBox;
+  private readonly fetchImpl: FetchLike;
 
   constructor(options: SqliteScopeHostOptions) {
     this.secretBox = options.secretBox ?? unconfiguredSecretBox;
+    this.fetchImpl = options.fetch ?? ((input, init) => (globalThis as unknown as { fetch: FetchLike }).fetch(input, init));
     this.dir = options.dir;
     mkdirSync(this.dir, { recursive: true });
     this.directory = new Database(join(this.dir, '_directory.sqlite'));
@@ -685,7 +713,93 @@ export class SqliteScopeHost implements ScopeHost {
     retry?: ExecutorRetryPolicy,
   ): void {
     if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
-    this.executors.set(id, { eventType, handler, retry: resolveRetryPolicy(retry) });
+    this.executors.set(id, {
+      kind: 'executor',
+      eventType,
+      handler,
+      retry: resolveRetryPolicy(retry),
+    });
+  }
+
+  registerConnector(
+    id: string,
+    eventType: string,
+    handler: ConnectorHandler,
+    options?: ConnectorOptions,
+  ): void {
+    if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
+    this.executors.set(id, {
+      kind: 'connector',
+      eventType,
+      handler,
+      retry: resolveRetryPolicy(options),
+      timeoutMs: options?.timeoutMs ?? 30_000,
+    });
+  }
+
+  /**
+   * Build the context a connector runs with. Tenant and vertical are AMBIENT —
+   * taken from the event's scope, never from an argument — so a connector cannot
+   * reach a credential another vertical connected even by accident.
+   */
+  private connectorContext(rt: ScopeRuntime, timeoutMs: number): ConnectorContext {
+    const vertical =
+      (
+        this.directory
+          .prepare('SELECT vertical FROM scopes WHERE scope_id = ?')
+          .get(rt.scopeId) as { vertical: string | null } | undefined
+      )?.vertical ?? null;
+    const admin = this.admin;
+    const fetchImpl = this.fetchImpl;
+    return {
+      admin,
+      tenantId: rt.tenantId,
+      scopeId: rt.scopeId,
+      vertical: vertical ?? '',
+      connection: async (provider: string) => {
+        if (!vertical) {
+          throw new Error(
+            `scope ${rt.scopeId} is bound to no vertical, so it has no connection namespace — ` +
+              `provision it with a vertical before using connectors`,
+          );
+        }
+        const open = await admin.openConnection(rt.tenantId, vertical, provider);
+        if (!open) {
+          throw new Error(
+            `no live '${provider}' connection for tenant ${rt.tenantId} / vertical '${vertical}'`,
+          );
+        }
+        return {
+          ...open,
+          fetch: async (input, init) => {
+            try {
+              const res = await fetchImpl(input, {
+                ...init,
+                signal: AbortSignal.timeout(timeoutMs),
+              });
+              // A 5xx is the provider failing; a 4xx is usually us. Both are
+              // worth recording, because "the connection stopped working" is the
+              // question a health view answers.
+              if (!res.ok) {
+                await admin.recordConnectionUse(open.id, {
+                  ok: false,
+                  error: `HTTP ${res.status} from ${provider}`,
+                });
+              } else {
+                await admin.recordConnectionUse(open.id, { ok: true });
+              }
+              return res;
+            } catch (err) {
+              await admin.recordConnectionUse(open.id, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              throw err;
+            }
+          },
+        };
+      },
+    };
   }
 
   registerModule(registration: ModuleRegistration): void {
@@ -1032,7 +1146,11 @@ export class SqliteScopeHost implements ScopeHost {
         report.attempted += 1;
         this.causedBy = event.id;
         try {
-          await executor.handler(this.admin, event);
+          if (executor.kind === 'connector') {
+            await executor.handler(this.connectorContext(rt, executor.timeoutMs), event);
+          } else {
+            await executor.handler(this.admin, event);
+          }
           this.recordExecutorDelivery(rt, row.id, deliveryId, null, executor.retry);
           report.delivered += 1;
         } catch (err) {
