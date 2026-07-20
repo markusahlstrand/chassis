@@ -31,7 +31,10 @@ scopeHostContractSuite('adapter-sqlite', async () => {
 // The permission suite runs against the DEFAULT checker (the tuple engine).
 permissionContractSuite('adapter-sqlite', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'substrat-perm-'));
-  const host = new SqliteScopeHost({ dir });
+  const host = new SqliteScopeHost({
+    dir,
+    secretBox: webCryptoSecretBox('test-key', new Uint8Array(32).fill(7)),
+  });
   return {
     host,
     cleanup: async () => {

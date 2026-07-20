@@ -31,6 +31,7 @@ export interface ScopeHostFixture {
 interface OutboxRow {
   id: string;
   type: string;
+  actor: unknown;
   occurred_at: string;
   tenant_id: string;
   scope_id: string;
@@ -562,6 +563,7 @@ export function scopeHostContractSuite(
         expect(await host.admin.openConnection(t2, 'callout', 'scrive')).toBeUndefined();
       });
     });
+
 
     // -- connectors: credential + egress, bound to the scope's vertical -------
 

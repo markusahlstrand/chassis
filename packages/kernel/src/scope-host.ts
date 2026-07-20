@@ -3,6 +3,7 @@ import type {
   Connection,
   ConnectionFilter,
   ConnectionId,
+  ConnectionGrant,
   ConnectionSecret,
   CreateConnectionInput,
   OpenConnection,
@@ -373,6 +374,18 @@ export interface HostAdmin {
   assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
   grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
+  /**
+   * Grant a permission to a CONNECTION (#97) — how a connector is allowed to
+   * write back into a scope.
+   *
+   * Deliberately the same shape as every other grant: tuples, tombstoned on
+   * revoke (K-21), visible to `listRoles`-style reads and to the permission
+   * diff. A separate "allowed operations" list on the connection was the
+   * alternative and was rejected — two mechanisms for one gate is worse than
+   * either, and only one of them would have shown up in a review.
+   */
+  grantToConnection(actor: PlatformActorId, grant: ConnectionGrant): Promise<void>;
+
   grantToOrg(
     actor: PlatformActorId,
     orgId: OrgId,
@@ -920,6 +933,28 @@ export interface ScopeHost {
     handler: ExecutorHandler,
     retry?: ExecutorRetryPolicy,
   ): void;
+
+  /**
+   * A scope stub whose authority is a CONNECTION rather than a person (#97).
+   *
+   * This is the inbound half of the connector seam: the path by which a
+   * provider's callback, or a poll of a provider's state, writes back into a
+   * scope. `getScope` demands a `PrincipalId` and a provider is not one, which
+   * is why a connector could dispatch a document and then not record that it
+   * had — and why an at-least-once retry would send a second copy.
+   *
+   * **Authority is inherited, not re-declared.** A connection is keyed
+   * (tenant, vertical, provider), so this refuses any scope outside that
+   * tenant, and any scope not running that vertical. What the connection may
+   * then DO is an ordinary permission check against `connection:<id>` grants —
+   * one enforcement path, one place to read, one way to revoke.
+   *
+   * `ctx.principal` on the resulting stub carries the connection id so the type
+   * holds, but it is **not a person**: an operation invoked this way should read
+   * the event actor (`{ connection }`), and a module that attributes domain
+   * data to `ctx.principal` will be recording a connector.
+   */
+  getConnectorScope(connectionId: ConnectionId, scopeId: ScopeId): Promise<ScopeStub>;
 
   /**
    * Register a connector — an executor that also gets a per-tenant credential

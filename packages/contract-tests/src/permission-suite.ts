@@ -69,9 +69,11 @@ export function permissionContractSuite(
       host.registerModule(permMod);
       await host.admin.createTenant(staff, { id: t1, slug: 'perm-tenant', name: 'Perm Tenant' });
       await host.admin.grantEntitlement(staff, t1, 'perm'); // default-deny (§4.3): perm/* needs it
-      await host.provisionScope(staff, { tenantId: t1, scopeId: s1 });
+      // Bound to a vertical: a connection is keyed (tenant, vertical, provider),
+      // so a connector's authority is only expressible against a scope that runs one.
+      await host.provisionScope(staff, { tenantId: t1, scopeId: s1, vertical: 'perm-vertical' });
       await host.admin.activateScope(staff, t1, s1);
-      await host.provisionScope(staff, { tenantId: t1, scopeId: s2 });
+      await host.provisionScope(staff, { tenantId: t1, scopeId: s2, vertical: 'perm-vertical' });
       await host.admin.activateScope(staff, t1, s2);
 
       await host.admin.defineRole(staff, t1, {
@@ -622,6 +624,106 @@ export function permissionContractSuite(
     it('scopes the audit read by tenant', async () => {
       const otherTenant = tenantId.parse(ulid());
       expect(await host.admin.auditLog(staff, { tenantId: otherTenant })).toEqual([]);
+    });
+
+    // -- the inbound authority seam (#97) -------------------------------------
+    //
+    // A provider's callback must write back into a scope, and it is not a
+    // person. A CONNECTION is therefore a subject in this same model — no
+    // second gate, no bypass — and what matters is what it cannot reach.
+
+    describe('a connection as a subject', () => {
+      const connId = ulid();
+
+      beforeAll(async () => {
+        await host.admin.createConnection(staff, {
+          id: connId as never,
+          tenantId: t1,
+          vertical: 'perm-vertical',
+          provider: 'inbound',
+          label: 'inbound authority',
+          secret: { accessToken: 'tok' },
+        });
+      });
+
+      const connProbe = async (permission: PermissionKey) => {
+        const stub = await host.getConnectorScope(connId as never, s1);
+        return stub.invoke<{ allowed: boolean; proof?: unknown[] }>('perm/probe', { permission });
+      };
+
+      it('opens the door but confers nothing — a grant is a separate act', async () => {
+        expect((await connProbe(PERM_USE)).allowed).toBe(false);
+      });
+
+      it('allows exactly what it was granted, and proves it with a connection tuple', async () => {
+        await host.admin.grantToConnection(staff, {
+          connectionId: connId,
+          permission: PERM_USE,
+          node: { tenantId: t1, scopeId: s1 },
+          grantedBy: staff,
+        });
+        const decision = await connProbe(PERM_USE);
+        expect(decision.allowed).toBe(true);
+        // The proof names a CONNECTION, not a principal. That is the difference
+        // between this and minting a principal per connection, and it is the
+        // property every audit view depends on.
+        expect(JSON.stringify(decision.proof)).toContain(`connection:${connId}`);
+
+        // …and nothing else. One grant, one permission.
+        expect((await connProbe(PERM_ADMIN)).allowed).toBe(false);
+      });
+
+      it('inherits no memberships and no roles — it is not a person', async () => {
+        // Roles reach principals through role tuples and orgs through
+        // membership. A connection has neither, so a role that carries a
+        // permission cannot leak into it.
+        await host.admin.defineRole(staff, t1, {
+          key: 'conn-role',
+          permissions: [PERM_READ],
+          source: 'vertical',
+        });
+        expect((await connProbe(PERM_READ)).allowed).toBe(false);
+      });
+
+      it('cannot reach a scope outside its own tenant or vertical', async () => {
+        const otherTenant = tenantId.parse(ulid());
+        await host.admin.createTenant(staff, {
+          id: otherTenant,
+          slug: 'other-perm',
+          name: 'Other',
+        });
+        const otherScope = scopeId.parse(ulid());
+        await host.provisionScope(staff, {
+          tenantId: otherTenant,
+          scopeId: otherScope,
+          vertical: 'perm-vertical',
+        });
+        await host.admin.activateScope(staff, otherTenant, otherScope);
+        // Inherited from the (tenant, vertical, provider) key rather than
+        // re-declared at the door.
+        await expect(host.getConnectorScope(connId as never, otherScope)).rejects.toThrow(
+          /unknown scope for connection/,
+        );
+        await expect(
+          host.admin.grantToConnection(staff, {
+            connectionId: connId,
+            permission: PERM_USE,
+            node: { tenantId: otherTenant, scopeId: otherScope },
+            grantedBy: staff,
+          }),
+        ).rejects.toThrow(/cannot be granted anything in/);
+      });
+
+      it('stops working the moment the connection is revoked', async () => {
+        const [live] = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          provider: 'inbound',
+        });
+        await host.admin.revokeConnection(staff, live!.id);
+        // One revoke closes the credential AND the door. Two operations to
+        // remember is how one of them gets forgotten.
+        await expect(host.getConnectorScope(connId as never, s1)).rejects.toThrow(/revoked/);
+      });
     });
   });
 }

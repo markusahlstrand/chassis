@@ -1,11 +1,12 @@
 import type Database from 'better-sqlite3';
 import {
   objectRef,
+  subjectRef,
   type Decision,
   type EntityRef,
   type Node,
   type PermissionKey,
-  type PrincipalId,
+  type CheckSubject,
   type RelationTuple,
   type RoleDefinition,
 } from '@substrat-run/contracts';
@@ -77,7 +78,7 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
 
   return {
     async check(
-      principal: PrincipalId,
+      subject: CheckSubject,
       permission: PermissionKey,
       node: Node,
       entity?: EntityRef,
@@ -86,11 +87,17 @@ export function createTupleChecker(deps: CheckerDeps): PermissionChecker {
       const deny: Decision = { allowed: false, checked: permission, node };
       const scopeDb = node.scopeId ? deps.scopeDb(node.scopeId) : undefined;
 
-      // Rule 4 — membership: the subject set is the principal plus its orgs.
-      const subjects: { ref: string; via?: RelationTuple }[] = [
-        { ref: `principal:${principal}` },
-      ];
-      for (const m of tenantTuples(node.tenantId, `principal:${principal}`, 'member')) {
+      // Rule 4 — membership: the subject set is the caller plus its orgs.
+      //
+      // A CONNECTION has no memberships and never will: it is not a person and
+      // does not belong to an org, so the membership expansion is skipped
+      // rather than returning nothing. Its authority is exactly the grants
+      // written against `connection:<id>` — narrow by construction (#97).
+      const selfRef = subjectRef(subject);
+      const subjects: { ref: string; via?: RelationTuple }[] = [{ ref: selfRef }];
+      for (const m of subject.kind === 'principal'
+        ? tenantTuples(node.tenantId, selfRef, 'member')
+        : []) {
         if (m.relation === 'member' && live(m, now)) {
           subjects.push({ ref: m.object, via: t(m.subject, m.relation, m.object) });
         }

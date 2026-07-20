@@ -14,7 +14,9 @@ import {
   verticalChannel,
   verticalVersion,
   connection,
+  connectionGrant,
   connectionSecret,
+  subjectRef,
   createConnectionInput,
   moduleManifest,
   org as orgSchema,
@@ -27,6 +29,7 @@ import {
   type AdminAction,
   type Connection,
   type ConnectionFilter,
+  type ConnectionGrant,
   type ConnectionId,
   type ConnectionSecret,
   type CreateConnectionInput,
@@ -367,6 +370,7 @@ interface ScopeStubRpc {
     principal: PrincipalId,
     tenantId: TenantId,
     scopeId: ScopeId,
+    connectionId?: string,
   ): Promise<unknown>;
   writeTuple(
     subject: string,
@@ -744,10 +748,52 @@ export class CloudflareScopeHost implements ScopeHost {
     // evaluated durably in the ControlPlaneDO. A throw propagates here.
     await this.cp.validateScopeAccess(tenantId, scopeId);
 
-    const stub = this.scopeStub(scopeId);
     await this.migrateAndRecord(scopeId);
+    return this.buildStub(tenantId, scopeId, principal);
+  }
+
+  /**
+   * A scope stub whose authority is a CONNECTION (#97).
+   *
+   * Three gates, all inherited from what the connection already is rather than
+   * declared again: it must be live, the scope must be in its tenant, and the
+   * scope must run its vertical. A leaked provider token therefore reaches
+   * exactly the scopes that connection was for.
+   *
+   * What it may then DO is an ordinary permission check against
+   * `connection:<id>` grants — one enforcement path, one way to revoke.
+   */
+  async getConnectorScope(connectionId: ConnectionId, scopeId: ScopeId): Promise<ScopeStub> {
+    const conn = await this.cp.readConnection(connectionId);
+    if (!conn) throw new Error(`connection not found: ${connectionId}`);
+    if (conn.revoked_at) throw new Error(`connection ${connectionId} is revoked`);
+    const scope = await this.cp.getScopeRecord(conn.tenant_id, scopeId);
+    if (!scope) throw new Error(`unknown scope for connection: ${scopeId}`);
+    if (scope.vertical !== conn.vertical) {
+      throw new Error(
+        `connection ${connectionId} is for vertical '${conn.vertical}' and scope ${scopeId} ` +
+          `runs '${scope.vertical ?? 'none'}'`,
+      );
+    }
+    await this.cp.validateScopeAccess(conn.tenant_id as TenantId, scopeId);
+    await this.migrateAndRecord(scopeId);
+    return this.buildStub(conn.tenant_id as TenantId, scopeId, undefined, connectionId);
+  }
+
+  /** The stub body, shared by the principal and connection doors. */
+  private buildStub(
+    tenantId: TenantId,
+    scopeId: ScopeId,
+    principal?: PrincipalId,
+    connectionId?: ConnectionId,
+  ): ScopeStub {
+    const stub = this.scopeStub(scopeId);
     const cp = this.cp;
     const operationEntitlement = this.operationEntitlement;
+    // The DO needs SOME principal-shaped value for `ctx.principal`; for a
+    // connection it is the connection id, and the honest attribution rides on
+    // the event actor instead.
+    const asPrincipalId = (principal ?? (connectionId as unknown as PrincipalId)) as PrincipalId;
 
     return {
       tenantId,
@@ -766,9 +812,10 @@ export class CloudflareScopeHost implements ScopeHost {
         const result = (await stub.invoke(
           operation,
           input,
-          principal,
+          asPrincipalId,
           tenantId,
           scopeId,
+          connectionId,
         )) as O;
         await this.drainExecutors(tenantId, scopeId);
         return result;
@@ -983,6 +1030,55 @@ export class CloudflareScopeHost implements ScopeHost {
           grant,
         );
       },
+      grantToConnection: async (actor: PlatformActorId, raw: ConnectionGrant) => {
+        const grant = connectionGrant.parse(raw);
+        const conn = await this.cp.readConnection(grant.connectionId);
+        if (!conn) throw new Error(`connection not found: ${grant.connectionId}`);
+        if (conn.revoked_at) {
+          throw new Error(`connection ${grant.connectionId} is revoked — grant nothing to it`);
+        }
+        // A grant may not reach outside what the connection already is: it is
+        // keyed (tenant, vertical, provider), and letting it hold a permission
+        // elsewhere would make that key decorative.
+        if (conn.tenant_id !== grant.node.tenantId) {
+          throw new Error(
+            `connection ${grant.connectionId} belongs to tenant ${conn.tenant_id} and cannot ` +
+              `be granted anything in ${grant.node.tenantId}`,
+          );
+        }
+        if (grant.node.scopeId) {
+          const scope = await this.cp.getScopeRecord(grant.node.tenantId, grant.node.scopeId);
+          if (!scope) {
+            throw new Error(`unknown scope ${grant.node.scopeId} in tenant ${grant.node.tenantId}`);
+          }
+          if (scope.vertical !== conn.vertical) {
+            throw new Error(
+              `connection ${grant.connectionId} is for vertical '${conn.vertical}' and scope ` +
+                `${grant.node.scopeId} runs '${scope.vertical ?? 'none'}'`,
+            );
+          }
+        }
+        await writeGrant(
+          subjectRef({ kind: 'connection', id: grant.connectionId }),
+          grant.permission,
+          grant.node,
+          undefined,
+          grant.expiresAt,
+        );
+        await this.recordAdmin(
+          actor,
+          'grantToConnection',
+          { tenantId: grant.node.tenantId, scopeId: grant.node.scopeId, vertical: conn.vertical },
+          null,
+          {
+            connectionId: grant.connectionId,
+            provider: conn.provider,
+            permission: grant.permission,
+            node: grant.node,
+          },
+        );
+      },
+
       grantToOrg: async (actor, orgId, permission, node, entity) => {
         // The org must exist in the node's tenant. A grant to a phantom org looks
         // applied, resolves for nobody, and still shows up in the permission diff.

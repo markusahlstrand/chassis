@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { instant, moduleId, permissionKey, principalId, scopeId, tenantId } from './ids.js';
+import {
+  instant,
+  moduleId,
+  permissionKey,
+  platformActorId,
+  principalId,
+  scopeId,
+  tenantId,
+} from './ids.js';
 import { entityRef } from './events.js';
 
 // ============================================================================
@@ -49,6 +57,44 @@ export type RoleAssignment = z.infer<typeof roleAssignment>;
 // `entity` narrows the grant to one entity and its declared descendants —
 // how portal customers see only their own facilities/orders inside a shared
 // scope (design doc §4.1, K-12). Always audited.
+/**
+ * Who is being checked (#97).
+ *
+ * The model already had more than one kind of subject — a principal, and the
+ * orgs it belongs to via membership. This makes the ENTRY subject polymorphic
+ * too, so a connection can hold a grant without pretending to be a person.
+ *
+ * The alternative was to mint a principal per connection and let it flow
+ * through unchanged, which is cheaper and wrong: every audit view would then
+ * show a `principal:` subject for something that is not one, which is exactly
+ * the confusion `PlatformActorId`'s separate brand exists to prevent.
+ */
+export const checkSubject = z.union([
+  z.object({ kind: z.literal('principal'), id: principalId }),
+  z.object({ kind: z.literal('connection'), id: z.string().min(1) }),
+]);
+export type CheckSubject = z.infer<typeof checkSubject>;
+
+/** The tuple-store ref for a subject: `principal:01J…` / `connection:01J…`. */
+export const subjectRef = (subject: CheckSubject): string => `${subject.kind}:${subject.id}`;
+
+/**
+ * A capability granted to a CONNECTION rather than a principal (#97).
+ *
+ * Narrow by construction: a connection is keyed (tenant, vertical, provider),
+ * so granting it `protocol:record-signature` reaches only that tenant's scopes
+ * running that vertical. The blast radius of a leaked provider token is one
+ * permission on one vertical's data, and it is readable in a diff.
+ */
+export const connectionGrant = z.object({
+  connectionId: z.string().min(1),
+  permission: permissionKey,
+  node,
+  expiresAt: instant.optional(),
+  grantedBy: platformActorId,
+});
+export type ConnectionGrant = z.infer<typeof connectionGrant>;
+
 export const capabilityGrant = z.object({
   principalId,
   permission: permissionKey,
