@@ -15,6 +15,7 @@ Substrat is a hosted substrate for vertical business software: a multi-tenant ke
 | `packages/contract-tests` | Suites every adapter must pass | AGPL + commercial |
 | `packages/control-plane-api` | HTTP surface over `HostAdmin` — the audited control-plane transport | AGPL + commercial |
 | `engines/*` | Domain engines (workorder, invoicing) | AGPL + commercial |
+| `connectors/*` | Third-party capability connectors (D-18 bucket 3) — host code, never module code | AGPL + commercial; unpublished while incomplete |
 | `demos/*` | Demo verticals (Callout = `demos/callout`) | Apache-2.0, not published to npm |
 | `apps/router` | The environment-wide router — hostname → (tenant, scope, surface), then dispatch | private |
 | `apps/console` | Control-plane admin console (tenants, fleet, admin log, permissions) | private |

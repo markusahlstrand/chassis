@@ -1,0 +1,166 @@
+import type { FetchLike } from '@substrat-run/kernel';
+
+/**
+ * Scrive, in memory.
+ *
+ * ## What this is for
+ *
+ * A connector cannot be exercised end to end without a provider, and a provider
+ * account is not always available. This implements the documented endpoints so
+ * the seam — credential resolution, egress, health, retry, the document
+ * lifecycle — can be tested today.
+ *
+ * ## What it proves, and what it does not
+ *
+ * It proves OUR shape works. It cannot prove our reading of Scrive's API is
+ * right, because it *is* our reading of Scrive's API: same author, same
+ * misunderstandings, in both halves. A green suite here means "ready to check
+ * against a testbed account", never "verified".
+ *
+ * The specific things a mock like this will always get wrong until someone runs
+ * the real thing: auth handshakes, exact response shapes, error bodies, rate
+ * limits, and every asynchronous timing behaviour that matters.
+ *
+ * It stays useful afterwards: a real provider will not return 503 on demand, or
+ * let you fast-forward two days to a signature.
+ */
+
+interface MockDocument {
+  id: string;
+  status: 'preparation' | 'pending' | 'closed' | 'canceled' | 'timedout' | 'rejected';
+  title: string;
+  callbackUrl: string | null;
+  file: { name: string; bytes: number } | null;
+  parties: { id: string; name: string; signTime: string | null; auth: string }[];
+}
+
+export interface ScriveMockOptions {
+  /** Reject every call with this HTTP status — the failure path on demand. */
+  failWith?: number;
+}
+
+// URL is web-standard everywhere this runs; declared locally so the connector
+// pulls in no platform typings, exactly as the kernel does.
+declare const URL: new (input: string) => { pathname: string };
+
+export class ScriveMock {
+  readonly documents = new Map<string, MockDocument>();
+  private seq = 0;
+  failWith: number | undefined;
+
+  constructor(options: ScriveMockOptions = {}) {
+    this.failWith = options.failWith;
+  }
+
+  /** Simulate a party completing BankID. The provider-side event we cannot cause for real. */
+  sign(documentId: string, partyIndex: number, at: string): void {
+    const doc = this.mustGet(documentId);
+    const party = doc.parties[partyIndex];
+    if (!party) throw new Error(`mock: no party ${partyIndex} on ${documentId}`);
+    party.signTime = at;
+    // Scrive closes a document only when EVERY party has signed — the same rule
+    // engine-protocol applies to its own request set, arrived at independently.
+    if (doc.parties.every((p) => p.signTime)) doc.status = 'closed';
+  }
+
+  decline(documentId: string): void {
+    this.mustGet(documentId).status = 'rejected';
+  }
+
+  private mustGet(id: string): MockDocument {
+    const doc = this.documents.get(id);
+    if (!doc) throw new Error(`mock: unknown document ${id}`);
+    return doc;
+  }
+
+  private wire(doc: MockDocument) {
+    return {
+      id: doc.id,
+      status: doc.status,
+      title: doc.title,
+      parties: doc.parties.map((p) => ({
+        id: p.id,
+        sign_time: p.signTime,
+        fields: [{ type: 'name', value: p.name }],
+      })),
+    };
+  }
+
+  /** The `fetch` to hand a host. */
+  get fetch(): FetchLike {
+    return (url, init) => {
+      const respond = (status: number, body: unknown) =>
+        Promise.resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          text: () => Promise.resolve(JSON.stringify(body)),
+          json: () => Promise.resolve(body),
+        });
+
+      if (this.failWith) return respond(this.failWith, { error: 'mock failure' });
+      if (!init?.headers?.Authorization?.startsWith('Bearer ')) {
+        // Fail the way a real API does when the credential is missing, so the
+        // connector's error path is exercised rather than assumed.
+        return respond(401, { error: 'missing bearer token' });
+      }
+
+      const path = new URL(url).pathname;
+
+      if (path === '/api/v2/documents/new') {
+        this.seq += 1;
+        const doc: MockDocument = {
+          id: `doc-${this.seq}`,
+          status: 'preparation',
+          title: '',
+          callbackUrl: null,
+          file: null,
+          parties: [],
+        };
+        this.documents.set(doc.id, doc);
+        return respond(200, this.wire(doc));
+      }
+
+      const m = /^\/api\/v2\/documents\/([^/]+)\/(setfile|update|start|get)$/.exec(path);
+      if (!m) return respond(404, { error: `mock: no route for ${path}` });
+      const [, id, action] = m;
+      const doc = this.documents.get(id!);
+      if (!doc) return respond(404, { error: `mock: unknown document ${id}` });
+
+      if (action === 'setfile') {
+        doc.file = { name: init?.headers?.['x-filename'] ?? 'document.pdf', bytes: (init?.body ?? '').length };
+        return respond(200, this.wire(doc));
+      }
+      if (action === 'update') {
+        const patch = JSON.parse(init?.body ?? '{}') as {
+          document?: {
+            title?: string;
+            api_callback_url?: string;
+            parties?: { authentication_method_to_sign: string; fields: { type: string; value: unknown }[] }[];
+          };
+        };
+        if (patch.document?.title) doc.title = patch.document.title;
+        if (patch.document?.api_callback_url) doc.callbackUrl = patch.document.api_callback_url;
+        if (patch.document?.parties) {
+          doc.parties = patch.document.parties.map((p, i) => ({
+            id: `party-${i}`,
+            name: String(p.fields.find((f) => f.type === 'name')?.value ?? ''),
+            signTime: null,
+            auth: p.authentication_method_to_sign,
+          }));
+        }
+        return respond(200, this.wire(doc));
+      }
+      if (action === 'start') {
+        if (!doc.file) {
+          // The constraint that forced the whole PDF question: Scrive signs a
+          // file, and refuses to start without one.
+          return respond(409, { error: 'mock: cannot start a document with no file' });
+        }
+        if (doc.parties.length === 0) return respond(409, { error: 'mock: no parties' });
+        doc.status = 'pending';
+        return respond(200, this.wire(doc));
+      }
+      return respond(200, this.wire(doc));
+    };
+  }
+}

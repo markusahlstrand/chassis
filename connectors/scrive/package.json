@@ -1,0 +1,27 @@
+{
+  "name": "@substrat-run/connector-scrive",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Substrat connector: Scrive eSign (BankID). NOT PUBLISHED — the inbound half is blocked on kernel gaps (#97), so this cannot yet complete a signature.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@substrat-run/adapter-sqlite": "workspace:^",
+    "@substrat-run/engine-protocol": "workspace:^",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

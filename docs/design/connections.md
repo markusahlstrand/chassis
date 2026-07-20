@@ -404,6 +404,76 @@ contract that fails to render is recoverable; one that renders wrongly and gets 
 
 ---
 
+## 6.2 The inbound seam, specified against a real caller (#97)
+
+`connectors/scrive` is built and its outbound half works end to end. Building it turned "we
+need an authority seam" into four concrete requirements, which is the point of having built it
+first.
+
+### 6.2.1 What the connector actually needs
+
+| # | Need | Why it is not optional |
+|---|---|---|
+| 1 | Write `external_ref` onto a signature request | Delivery is at-least-once. Without it a retry creates a **second Scrive document** — duplicate legal paperwork to real signatories |
+| 2 | Write a signature (`recordSignature`) | The whole point of the flow |
+| 3 | Read pending requests for a scope | Polling needs to know what to poll for |
+| 4 | Somewhere for connector state | Even "this event → that document id" has no home outside the scope |
+
+(1) is the sharp one and it was a surprise: the correctness problem is not the *missing*
+signature, it is the *duplicated dispatch*. Any design that solves (2) and not (1) leaves the
+system sending contracts twice.
+
+### 6.2.2 Why the existing actors do not fit
+
+- `PrincipalId` — a provider callback is not a person, and minting one per connection would
+  make a connector indistinguishable from a user in every audit view. That is exactly the
+  confusion `PlatformActorId`'s separate brand was introduced to prevent.
+- `PlatformActorId` — staff. A tenant's Scrive callback is not Substrat staff acting, and
+  routing it that way would put provider traffic in the control-plane audit log.
+- The **system actor** (`{ system: ModuleId }`) exists only in the event envelope, and the
+  adapters back it with a synthetic principal minted per host instance — a random,
+  non-reproducible id. Anything durable recorded against it is unattributable after a restart.
+
+### 6.2.3 The shape proposed
+
+A connector already has an identity the directory knows: **the connection**. So rather than
+invent an actor, let the connection *be* one.
+
+```ts
+/** A scope stub whose authority is a connection, not a person. */
+getConnectorScope(connectionId: ConnectionId, scopeId: ScopeId): Promise<ScopeStub>;
+```
+
+- **Authority is narrow by construction.** A connection is already keyed
+  (tenant, vertical, provider), so the stub can only reach scopes of that tenant running that
+  vertical. The isolation §3.1.1 argues for is inherited rather than re-implemented.
+- **`ctx.principal` stays a `PrincipalId`.** Widening it would touch every operation and every
+  permission check. Instead the *actor* on emitted events becomes
+  `{ connection: ConnectionId }` — a third member of the `actor` union that already holds
+  `{ system: ModuleId }`, so the spine can say "this was a connector" without lying about a
+  person.
+- **What it may invoke is declared, not implicit.** A connection carries a small set of
+  operation names it may call. `protocol/record-signature` is on Scrive's; nothing else is. So
+  the blast radius of a compromised provider token is one operation on one vertical's scopes,
+  and it is readable in the permission diff rather than inferred from code.
+
+Requirement (4) then falls out: connector state is a table in the directory keyed by
+connection, written through `HostAdmin`, never touching a scope.
+
+### 6.2.4 Open questions this raises
+
+1. Does a connection-scoped stub bypass `ctx.check`, or does it resolve tuples like any other
+   caller? Bypassing is simpler and makes the declared operation list the only gate;
+   resolving keeps one enforcement path but needs a principal-shaped subject to resolve
+   against.
+2. Is the declared operation list on the connection (runtime, console-managed) or on the
+   connector's registration (code, review-gated)? The permission-diff discipline argues for
+   code; per-tenant reality argues for runtime. Probably both, intersected.
+3. Does `protocol:record-signature` stay a permission key at all, or become "an operation only
+   a connection may call"? Two mechanisms for one gate is worse than either.
+
+---
+
 ## 7. Non-goals (v0)
 
 Webhook ingress (poll first, §5). A general connector marketplace or per-tenant connector
