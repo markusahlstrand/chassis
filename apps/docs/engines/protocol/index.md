@@ -18,23 +18,27 @@ engine never knows the vertical's vocabulary. (The HR vertical even signs onboar
 |---|---|
 | **Package** | `@substrat-run/engine-protocol` |
 | **Entitlement key** | `protocol` |
-| **Owns** | version-pinned templates, append-only responses, sign→immutable, a verifiable content hash |
-| **Emits** | 5 events, `protocol.instantiated` → `protocol.voided` ([events](./events)) |
+| **Owns** | version-pinned templates, append-only responses, freeze→immutable, a verifiable content hash, signature requests |
+| **Emits** | 9 events, `protocol.instantiated` → `protocol.voided` ([events](./events)) |
 | **Consumes** | nothing |
-| **Permissions** | 6 (`protocol:create` · `fill` · `sign` · `countersign` · `read` · `void`) |
+| **Permissions** | 9 (`protocol:create` · `fill` · `bind` · `request-signature` · `record-signature` · `sign` · `countersign` · `read` · `void`) |
 | **Contributes** | the `protocol/all-signed` guard predicate — the only config-shaped surface in any engine |
 | **Status** | product seed (0.x) — the extraction proof |
 
 ## What it owns
 
-1. **Sign freezes.** Once signed, any write to an instance's responses fails.
-2. **Verifiable content hash.** SHA-256 over template content + latest responses at sign
-   time — replayable against stored rows by anyone.
+1. **Freeze freezes.** Content is writable only while an instance is `open` — whether it
+   froze at an in-app signature or at dispatch to an external signing provider.
+2. **Verifiable content hash.** SHA-256 over template content plus the frozen content —
+   replayable against stored rows by anyone. One recipe per content kind.
 3. **Counter-signature on frozen content.** A second signature whose hash must equal the
    primary's, so it can never silently attach to changed content.
 4. **Append-only responses.** An edit is a new row; the history *is* audit material.
 5. **Version-pinned templates.** An instance pins `(key, version)` at instantiation forever.
 6. **Void, not delete.** A superseded protocol is voided with a reason, never removed.
+7. **A signature is over a *frozen* hash, by a named signatory, at a stated time.** The
+   signatory may be a principal or an **external person with no account**, which is what makes
+   a BankID/Scrive flow expressible without pretending it is a synchronous in-app tap.
 
 Details: [Domain model & invariants](./model).
 
@@ -43,8 +47,13 @@ Details: [Domain model & invariants](./model).
 - **Template content** — sections, items, vocabulary, branschprotokoll packs are the
   vertical's. The engine validates fills against the pinned template shape; it authors no
   templates.
-- **External signature providers** — BankID/Scrive-class flows are connectors that call the
-  same sign operation with upgraded evidence; the engine imports no vendor SDK.
+- **Talk to external signature providers** — the engine emits a request and a connector
+  dispatches it; it imports no vendor SDK and makes no network call. Note the *inbound* half
+  (webhook ingress, and an authority seam letting a non-principal callback invoke an
+  operation) is **not built** — see [#96](https://github.com/substrat-run/substrat/issues/96)
+  and [#97](https://github.com/substrat-run/substrat/issues/97).
+- **Render or reconcile a document** — a `document` instance holds a ref and a hash, never
+  bytes, and recomputing that hash from your own rows is your obligation, not the engine's.
 - **Branching/conditional templates, scheduled instantiation, PDF rendering, a photo
   pipeline, offline sync, a template marketplace** — explicit v0 non-goals.
 
@@ -56,6 +65,8 @@ Details: [Domain model & invariants](./model).
 | "Prove this wasn't altered after signing" is a real question | Nobody will audit it |
 | The person who fills is not always the person who signs | One actor does everything |
 | A second party (customer at pickup) confirms the same content | There's no counterparty |
+| Parties sign **asynchronously**, via a provider, possibly without accounts | Everyone signs in-app, in session |
+| The signed thing is a **document you own** (an avtal), not a checklist | It is neither |
 | The checklist's *content* is yours and changes over time | You want the engine to ship the checklists — it won't |
 
 The clarifying question: **is the signature load-bearing?** If the value is in the answers,

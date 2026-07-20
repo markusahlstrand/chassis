@@ -1,24 +1,29 @@
 # @substrat-run/engine-protocol
 
 Protocol engine for [Substrat](https://github.com/substrat-run/substrat) —
-checklists/protocols (self-inspection, condition reports, inspection records) with the
-**sign → immutable** invariant: versioned templates, append-only responses, a
-verifiable content hash, and counter-signatures on frozen content.
+checklists/protocols (self-inspection, condition reports, inspection records) **and signed
+documents** (avtal, reports) with the **freeze → immutable** invariant: versioned templates,
+append-only responses, a verifiable content hash, and counter-signatures on frozen content.
 
 The engine owns only the invariants. Template *content* — which protocols exist and
 what they contain — is 100% vertical-owned, and an instance binds to any `EntityRef`
-(a work order today, anything tomorrow).
+(a work order today, anything tomorrow). Content comes in two kinds: a `checklist` of
+sections and items, or an opaque `document` whose bytes live in the vertical and whose hash
+is all the engine holds.
 
 ## What it owns
 
-1. **Sign freezes** — any write to a signed instance's responses fails.
-2. **Content hash** — SHA-256 over template content + latest responses at sign time,
-   verifiable against replayed state.
+1. **Freeze freezes** — any write to a frozen instance's content fails. Freezing happens at
+   an in-app signature, or at dispatch when a document goes out for external signature.
+2. **Content hash** — SHA-256 over template content plus the frozen content, verifiable
+   against replayed state. One recipe per content kind.
 3. **Counter-sign** — a second signature on the *same* frozen content; the hash is
    recomputed and must match.
 4. **Append-only responses** — an edit is a new row; history is audit material.
 5. **Version-pinned templates** — an instance pins `(key, version)` at instantiation forever.
 6. **Void, not delete** — a protocol is superseded, never mutated or removed.
+7. **Signatures name a signatory** — a principal, or an **external person with no account**
+   (BankID via Scrive), recorded at the provider's timestamp with an evidence reference.
 
 ## Install
 

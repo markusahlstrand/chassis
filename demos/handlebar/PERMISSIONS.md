@@ -5,7 +5,7 @@
 
 # Permission snapshot — @substrat-run/demo-handlebar
 
-16 keys · 4 modules · 2 roles
+19 keys · 4 modules · 2 roles
 
 ## 1. Registry — every key a registered manifest declares
 
@@ -15,11 +15,14 @@
 | `customer:manage` | Manage customers and the workshop price list | `@substrat-run/demo-handlebar` |
 | `invoicing:export` | Export an invoice basis (makes it immutable) | `@substrat-run/engine-invoicing` |
 | `invoicing:read` | Read invoice bases | `@substrat-run/engine-invoicing` |
+| `protocol:bind` | Bind vertical-owned document content (ref + hash) to an open document protocol | `@substrat-run/engine-protocol` |
 | `protocol:countersign` | Counter-sign an already-signed protocol — a second signature on the same frozen content (customer at pickup) | `@substrat-run/engine-protocol` |
 | `protocol:create` | Define protocol templates and start protocol instances on entities | `@substrat-run/engine-protocol` |
-| `protocol:fill` | Record responses on an open protocol (append-only) | `@substrat-run/engine-protocol` |
-| `protocol:read` | Read protocol templates, instances, responses and signatures | `@substrat-run/engine-protocol` |
-| `protocol:sign` | Sign a protocol — freezes it forever (separate from fill: the technician fills, the arbetsledare signs) | `@substrat-run/engine-protocol` |
+| `protocol:fill` | Record responses on an open checklist protocol (append-only) | `@substrat-run/engine-protocol` |
+| `protocol:read` | Read protocol templates, instances, responses, signature requests and signatures | `@substrat-run/engine-protocol` |
+| `protocol:record-signature` | Record a signature reported by an external signing provider — held by connector ingress, never by a human role | `@substrat-run/engine-protocol` |
+| `protocol:request-signature` | Freeze a protocol and request signatures from named parties (external signing flows); also cancels a pending request set | `@substrat-run/engine-protocol` |
+| `protocol:sign` | Sign a protocol in-app — freezes it forever (separate from fill: the technician fills, the arbetsledare signs) | `@substrat-run/engine-protocol` |
 | `protocol:void` | Void (supersede) a protocol — never deletes | `@substrat-run/engine-protocol` |
 | `workorder:assign` | Assign a technician | `@substrat-run/engine-workorder` |
 | `workorder:close` | Close a completed work order | `@substrat-run/engine-workorder` |
@@ -45,10 +48,13 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 | `customer:manage` | `workshop-admin` |
 | `invoicing:export` | `workshop-admin` |
 | `invoicing:read` | `workshop-admin` |
+| `protocol:bind` | — no role — |
 | `protocol:countersign` | — no role — |
 | `protocol:create` | `workshop-admin` |
 | `protocol:fill` | `mechanic`, `workshop-admin` |
 | `protocol:read` | `mechanic`, `workshop-admin` |
+| `protocol:record-signature` | — no role — |
+| `protocol:request-signature` | — no role — |
 | `protocol:sign` | `workshop-admin` |
 | `protocol:void` | `workshop-admin` |
 | `workorder:assign` | `workshop-admin` |

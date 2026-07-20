@@ -181,6 +181,15 @@ export interface EmittedEvent {
   type: string;
   schemaVersion: number;
   entity: { entityType: string; entityId: string };
+  /**
+   * The GDPR classification and the subject it keys on (§5.3). Exposed because
+   * `subjectId` is what crypto-shredding erases by, and it is NOT always the
+   * acting principal: `engines/booking` names a participant with no account,
+   * and `engines/protocol` names an external BankID signatory the same way. A
+   * test that cannot see this cannot tell those apart from self-attribution.
+   */
+  piiClass: string;
+  subjectId: string | null;
   payload: unknown;
 }
 
@@ -278,7 +287,8 @@ export async function engineHarness(opts: EngineHarnessOptions): Promise<EngineH
       try {
         return db
           .prepare(
-            `SELECT id, type, schema_version, entity_type, entity_id, payload
+            `SELECT id, type, schema_version, entity_type, entity_id,
+                    pii_class, subject_id, payload
                FROM _substrat_outbox WHERE type = ? ORDER BY id`,
           )
           .all(type)
@@ -289,6 +299,8 @@ export async function engineHarness(opts: EngineHarnessOptions): Promise<EngineH
               schema_version: number;
               entity_type: string;
               entity_id: string;
+              pii_class: string;
+              subject_id: string | null;
               payload: string | null;
             };
             return {
@@ -296,6 +308,8 @@ export async function engineHarness(opts: EngineHarnessOptions): Promise<EngineH
               type: row.type,
               schemaVersion: row.schema_version,
               entity: { entityType: row.entity_type, entityId: row.entity_id },
+              piiClass: row.pii_class,
+              subjectId: row.subject_id,
               payload: row.payload ? (JSON.parse(row.payload) as unknown) : null,
             };
           });

@@ -5,7 +5,7 @@
 
 # Permission snapshot — @substrat-run/demo-meridian
 
-18 keys · 2 modules · 3 roles
+21 keys · 2 modules · 3 roles
 
 ## 1. Registry — every key a registered manifest declares
 
@@ -21,11 +21,14 @@
 | `expense:submit` | Submit an expense (employees, narrowed to their own record) | `@substrat-run/demo-meridian` |
 | `payroll:export` | Generate the variable-pay export and mark expenses exported (payroll operator) | `@substrat-run/demo-meridian` |
 | `project:manage` | Manage the projects time books against (HR admin) | `@substrat-run/demo-meridian` |
+| `protocol:bind` | Bind vertical-owned document content (ref + hash) to an open document protocol | `@substrat-run/engine-protocol` |
 | `protocol:countersign` | Counter-sign an already-signed protocol — a second signature on the same frozen content (customer at pickup) | `@substrat-run/engine-protocol` |
 | `protocol:create` | Define protocol templates and start protocol instances on entities | `@substrat-run/engine-protocol` |
-| `protocol:fill` | Record responses on an open protocol (append-only) | `@substrat-run/engine-protocol` |
-| `protocol:read` | Read protocol templates, instances, responses and signatures | `@substrat-run/engine-protocol` |
-| `protocol:sign` | Sign a protocol — freezes it forever (separate from fill: the technician fills, the arbetsledare signs) | `@substrat-run/engine-protocol` |
+| `protocol:fill` | Record responses on an open checklist protocol (append-only) | `@substrat-run/engine-protocol` |
+| `protocol:read` | Read protocol templates, instances, responses, signature requests and signatures | `@substrat-run/engine-protocol` |
+| `protocol:record-signature` | Record a signature reported by an external signing provider — held by connector ingress, never by a human role | `@substrat-run/engine-protocol` |
+| `protocol:request-signature` | Freeze a protocol and request signatures from named parties (external signing flows); also cancels a pending request set | `@substrat-run/engine-protocol` |
+| `protocol:sign` | Sign a protocol in-app — freezes it forever (separate from fill: the technician fills, the arbetsledare signs) | `@substrat-run/engine-protocol` |
 | `protocol:void` | Void (supersede) a protocol — never deletes | `@substrat-run/engine-protocol` |
 | `time:read` | Read time entries and utilization | `@substrat-run/demo-meridian` |
 | `time:report` | Log worked hours to a project (employees, narrowed to their own record) | `@substrat-run/demo-meridian` |
@@ -54,10 +57,13 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 | `expense:submit` | — no role — |
 | `payroll:export` | `hr-admin`, `payroll` |
 | `project:manage` | `hr-admin` |
+| `protocol:bind` | — no role — |
 | `protocol:countersign` | — no role — |
 | `protocol:create` | `hr-admin` |
 | `protocol:fill` | `hr-admin` |
 | `protocol:read` | `hr-admin`, `manager` |
+| `protocol:record-signature` | — no role — |
+| `protocol:request-signature` | — no role — |
 | `protocol:sign` | `hr-admin` |
 | `protocol:void` | `hr-admin` |
 | `time:read` | `hr-admin`, `manager` |
