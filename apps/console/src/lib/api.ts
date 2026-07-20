@@ -122,6 +122,8 @@ export function createApi(actor: string | null, baseUrl = '/api') {
 
     // One method per audited transition, mirroring the API and HostAdmin. The
     // console renders only legal transitions; the graph is enforced below.
+    // provisioning → active: the vertical has confirmed the scope exists (K-31).
+    activateScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/activate`),
     suspendScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/suspend`),
     unsuspendScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/unsuspend`),
     archiveScope: (t: TenantId, s: ScopeId) => post<Scope>(`/tenants/${t}/scopes/${s}/archive`),

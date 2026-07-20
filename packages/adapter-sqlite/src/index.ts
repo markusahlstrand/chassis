@@ -703,7 +703,9 @@ export class SqliteScopeHost implements ScopeHost {
           `INSERT INTO scopes
              (scope_id, tenant_id, parent_scope_id, slug, kind, name, vertical,
               storage_shape, jurisdiction, status, created_at)
-           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+           -- 'provisioning', not 'active' (K-31): the directory row exists before the
+           -- vertical has created the scope DO, and only activateScope says it has.
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'provisioning', ?)`,
         )
         .run(
           input.scopeId,
@@ -757,12 +759,26 @@ export class SqliteScopeHost implements ScopeHost {
     if (tenantRow.status !== 'active') {
       throw new Error(`tenant not active (status: ${tenantRow.status}): ${tenantId}`);
     }
-    if (row.status !== 'active') {
+    // `provisioning` is handled BELOW rather than here, because a scope that never
+    // finished setting up should still retry its migrations when touched — that lazy
+    // retry, and the attempt counter a sweep backs off from, are the only self-healing
+    // there is until #49 exists. `suspended` and `archived` are different: they are
+    // deliberate states, and running migrations for them would be work on behalf of a
+    // request that is going to be refused anyway.
+    if (row.status !== 'active' && row.status !== 'provisioning') {
       throw new Error(`scope not active (status: ${row.status}): ${scopeId}`);
     }
 
     const rt = this.runtime(tenantId, scopeId);
     await this.applyPendingMigrations(rt);
+
+    if (row.status !== 'active') {
+      // Migrations passed and it is still `provisioning`, so nothing has confirmed
+      // the scope exists on the vertical's side (K-31). Refused, but only after the
+      // retry above has had its chance — and if THAT is what failed, it threw with
+      // the migration's own message, which is the one an operator needs.
+      throw new Error(`scope not active (status: ${row.status}): ${scopeId}`);
+    }
     const ctx = this.operationContext(rt, principal);
     const operations = this.operations;
 
@@ -1856,6 +1872,18 @@ export class SqliteScopeHost implements ScopeHost {
         this.recordAccess(actor, 'getScopeRecord', { tenantId, scopeId }, null, found ? 1 : 0);
         if (!found) return undefined;
         return mapScope(r);
+      },
+      activateScope: async (actor, tenantId, scopeId) => {
+        // Idempotent on `active`, unaudited because nothing changed. Provisioning is
+        // a two-phase creation that the reconciliation sweep re-runs (K-31), so a
+        // retry of an already-finished instance must converge rather than throw.
+        // Every OTHER state still refuses: reviving a suspended scope through here
+        // would route around unsuspend and its audit entry.
+        const current = this.directory
+          .prepare('SELECT status FROM scopes WHERE scope_id = ? AND tenant_id = ?')
+          .get(scopeId, tenantId) as { status: string } | undefined;
+        if (current?.status === 'active') return;
+        await transitionScope(actor, 'activateScope', tenantId, scopeId, ['provisioning'], 'active');
       },
       suspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'suspendScope', tenantId, scopeId, ['active'], 'suspended'),

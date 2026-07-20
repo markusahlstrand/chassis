@@ -111,7 +111,9 @@ export function scopeHostContractSuite(
         await host.admin.grantEntitlement(staff, t1, key);
       }
       await host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t1, s1);
       await host.provisionScope(staff, { tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t2, s2);
     });
 
     afterAll(async () => {
@@ -486,6 +488,60 @@ export function scopeHostContractSuite(
       );
     });
 
+    // -- the provisioning state (K-31) ---------------------------------------
+
+    it('provisions a scope as `provisioning`, not `active`', async () => {
+      // The directory row exists before the vertical has created the scope DO. Born
+      // active, it would promise something nothing has built yet.
+      const t = tenantId.parse(ulid());
+      const sc = scopeId.parse(ulid());
+      await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+      await host.provisionScope(staff, { tenantId: t, scopeId: sc, jurisdiction: 'eu' });
+
+      expect((await host.admin.getScopeRecord(staff, t, sc))?.status).toBe('provisioning');
+    });
+
+    it('refuses to open a scope that has not been activated', async () => {
+      // The property the state exists for: a row nothing has confirmed is inert
+      // rather than misleading.
+      const t = tenantId.parse(ulid());
+      const sc = scopeId.parse(ulid());
+      await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+      await host.provisionScope(staff, { tenantId: t, scopeId: sc, jurisdiction: 'eu' });
+
+      await expect(host.getScope(alice, t, sc)).rejects.toThrow(/not active/);
+
+      await host.admin.activateScope(staff, t, sc);
+      await expect(host.getScope(alice, t, sc)).resolves.toBeDefined();
+    });
+
+    it('is idempotent on an active scope, and refuses every other state', async () => {
+      // Idempotent because provisioning is two-phase and the sweep re-runs it (K-31):
+      // a retry of a finished instance must converge. Still a transition graph
+      // though — reviving a suspended scope here would route around unsuspend.
+      const t = tenantId.parse(ulid());
+      const sc = scopeId.parse(ulid());
+      await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+      await host.provisionScope(staff, { tenantId: t, scopeId: sc, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t, sc);
+
+      await expect(host.admin.activateScope(staff, t, sc)).resolves.toBeUndefined();
+
+      await host.admin.suspendScope(staff, t, sc);
+      await expect(host.admin.activateScope(staff, t, sc)).rejects.toThrow();
+    });
+
+    it('audits the activation', async () => {
+      const t = tenantId.parse(ulid());
+      const sc = scopeId.parse(ulid());
+      await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+      await host.provisionScope(staff, { tenantId: t, scopeId: sc, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t, sc);
+
+      const entries = await host.admin.auditLog(staff, { scopeId: sc });
+      expect(entries.map((e) => e.action)).toContain('activateScope');
+    });
+
     // -- the hostname map (K-26) ---------------------------------------------
     // §4.2 provisions a scope; this is what finally gives it a URL. The router
     // resolves against these rows before dispatching to a vertical's worker.
@@ -756,6 +812,7 @@ export function scopeHostContractSuite(
 
     it('suspends a tenant: getScope fails closed for its scopes; reactivation restores (§4.1)', async () => {
       await host.provisionScope(staff, { tenantId: t3, scopeId: s3, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t3, s3);
       await expect(host.getScope(alice, t3, s3)).resolves.toBeDefined();
 
       await host.admin.setTenantStatus(staff, t3, 'suspended');
@@ -791,6 +848,7 @@ export function scopeHostContractSuite(
       // …while a sibling scope under the same tenant is untouched.
       const sibling = scopeId.parse(ulid());
       await host.provisionScope(staff, { tenantId: t3, scopeId: sibling, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t3, sibling);
       await expect(host.getScope(alice, t3, sibling)).resolves.toBeDefined();
       // Unsuspend restores.
       await host.admin.unsuspendScope(staff, t3, s3);
@@ -834,6 +892,7 @@ export function scopeHostContractSuite(
       host.registerModule(billedMod);
       await host.admin.createTenant(staff, { id: t4, slug: 'billed-co', name: 'Billed Co' });
       await host.provisionScope(staff, { tenantId: t4, scopeId: s4, jurisdiction: 'eu' });
+      await host.admin.activateScope(staff, t4, s4);
       const stub = await host.getScope(alice, t4, s4);
 
       // Default-deny: the flag is not held, so the operation does not resolve.
@@ -888,6 +947,7 @@ export function scopeHostContractSuite(
       await host.admin.createTenant(staff, { id: t5, slug: 'directory-co', name: 'Directory Co' });
       const bare = scopeId.parse(ulid());
       await host.provisionScope(staff, { tenantId: t5, scopeId: bare });
+      await host.admin.activateScope(staff, t5, bare);
 
       const rec = await host.admin.getScopeRecord(staff, t5, bare);
       // A ULID lowercases into a valid slug, so the placeholder is unique by
@@ -916,6 +976,7 @@ export function scopeHostContractSuite(
         vertical: 'housing',
         jurisdiction: 'eu',
       });
+      await host.admin.activateScope(staff, t5, named);
       expect(await host.admin.getScopeRecord(staff, t5, named)).toMatchObject({
         slug: 'brf-vasastan',
         kind: 'brf',

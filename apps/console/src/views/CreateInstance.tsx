@@ -42,6 +42,13 @@ export interface CreateInstanceProps {
 
 type StepState = 'todo' | 'doing' | 'done' | 'failed';
 
+/** Derived from the step list, so adding a step cannot leave the map behind. */
+const freshSteps = (): Record<InstanceStep, StepState> =>
+  Object.fromEntries(INSTANCE_STEPS.map((s) => [s.key, 'todo'])) as Record<
+    InstanceStep,
+    StepState
+  >;
+
 
 export function CreateInstance({ api, open, onCancel, onDone, onFailed }: CreateInstanceProps) {
   const [verticalSlug, setVerticalSlug] = useState('fsm');
@@ -49,13 +56,7 @@ export function CreateInstance({ api, open, onCancel, onDone, onFailed }: Create
   const [name, setName] = useState('');
   const [hostname, setHostname] = useState('');
   const [busy, setBusy] = useState(false);
-  const [state, setState] = useState<Record<InstanceStep, StepState>>({
-    tenant: 'todo',
-    instance: 'todo',
-    scope: 'todo',
-    hostname: 'todo',
-    activate: 'todo',
-  });
+  const [state, setState] = useState<Record<InstanceStep, StepState>>(freshSteps);
 
   const mark = (key: InstanceStep, s: StepState) => setState((prev) => ({ ...prev, [key]: s }));
 
@@ -91,13 +92,7 @@ export function CreateInstance({ api, open, onCancel, onDone, onFailed }: Create
     setSlug('');
     setName('');
     setHostname('');
-    setState({
-      tenant: 'todo',
-      instance: 'todo',
-      scope: 'todo',
-      hostname: 'todo',
-      activate: 'todo',
-    });
+    setState(freshSteps());
   }
 
   return (

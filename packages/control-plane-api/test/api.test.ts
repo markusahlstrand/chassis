@@ -158,8 +158,14 @@ describe('control-plane API', () => {
       kind: 'brf',
       vertical: 'housing',
       jurisdiction: 'eu',
-      status: 'active',
+      // Not `active`: the directory row exists before the vertical has built the
+      // scope, and `activateScope` is the confirmation that it has (K-31).
+      status: 'provisioning',
     });
+
+    expect((await json(`/tenants/${t1}/scopes/${s1}/activate`, 'POST')).status).toBe(200);
+    const activated = await (await req(`/tenants/${t1}/scopes/${s1}`)).json();
+    expect(activated.status).toBe('active');
   });
 
   it('refuses to provision under an unknown tenant with 409', async () => {
@@ -174,6 +180,7 @@ describe('control-plane API', () => {
     await json('/tenants', 'POST', { id: t2, slug: 'other-co', name: 'Other Co' });
     const s2 = scopeId.parse(ulid());
     await json('/scopes', 'POST', { tenantId: t2, scopeId: s2, slug: 'other-scope' });
+    await json(`/tenants/${t2}/scopes/${s2}/activate`, 'POST');
 
     const all = await (await req('/scopes')).json();
     expect(all).toHaveLength(2);

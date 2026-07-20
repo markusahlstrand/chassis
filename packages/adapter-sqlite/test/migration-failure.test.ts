@@ -78,6 +78,7 @@ describe('migration failure is recorded in the directory', () => {
     try {
       await healthy.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
       await healthy.provisionScope(staff, { tenantId: t, scopeId: ok, jurisdiction: 'eu' });
+      await healthy.admin.activateScope(staff, t, ok);
       await healthy.getScope(alice, t, ok);
       const record = await healthy.admin.getScopeRecord(staff, t, ok);
       expect(record?.migrationFailure).toBeNull();

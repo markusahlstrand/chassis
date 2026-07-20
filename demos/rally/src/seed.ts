@@ -335,6 +335,11 @@ export async function provisionRally(
     scopeId: input.scopeId,
     jurisdiction: 'eu',
   });
+  // Provisioning writes the row as `provisioning`; nothing may use the scope until
+  // it is active (K-31). Here the platform and the vertical are the same process, so
+  // the confirmation is immediate — hosted, it arrives from the vertical over a
+  // separate call, which is the gap the state exists to make observable.
+  await host.admin.activateScope(staff, input.tenantId, input.scopeId);
   for (const role of ROLES) await host.admin.defineRole(staff, input.tenantId, role);
   await host.admin.assignRole(staff, {
     principalId: input.owner,
@@ -395,6 +400,7 @@ export async function seedRally(host: SqliteScopeHost, dir: string): Promise<Ral
   // A second venue in the SAME club. Provisioning creates one scope because that
   // is what an instance needs; more venues are the club's to add.
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.s1b, jurisdiction: 'eu' });
+  await host.admin.activateScope(staff, world.t1, world.s1b);
 
   // ---------------------------------------------------------------------------
   // DEMO ONLY, below. A second club and an admin nobody hired, so the scenario

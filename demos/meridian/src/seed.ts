@@ -199,6 +199,11 @@ export async function provisionMeridian(
     scopeId: input.scopeId,
     jurisdiction: 'eu',
   });
+  // Provisioning writes the row as `provisioning`; nothing may use the scope until
+  // it is active (K-31). Here the platform and the vertical are the same process, so
+  // the confirmation is immediate — hosted, it arrives from the vertical over a
+  // separate call, which is the gap the state exists to make observable.
+  await host.admin.activateScope(staff, input.tenantId, input.scopeId);
   for (const role of ROLES) await host.admin.defineRole(staff, input.tenantId, role);
   await host.admin.assignRole(staff, {
     principalId: input.owner,
@@ -244,6 +249,7 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
   // creates one scope because that is what an instance needs; more are the
   // customer's to add.
   await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.sEs, kind: 'entity', name: 'Spain', jurisdiction: 'eu' });
+  await host.admin.activateScope(staff, world.t1, world.sEs);
 
   // ---------------------------------------------------------------------------
   // DEMO ONLY, below. A second company and an admin nobody hired, so the scenario

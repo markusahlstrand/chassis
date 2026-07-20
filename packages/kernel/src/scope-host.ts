@@ -440,6 +440,19 @@ export interface HostAdmin {
   // fail closed for that scope. `provisionScope` is the entry transition and
   // lives on ScopeHost (it is async — it applies migrations).
 
+  /**
+   * provisioning → active. The vertical's confirmation that a scope exists (K-31).
+   *
+   * `provisionScope` writes the directory row as `provisioning`, and nothing may use
+   * it until this runs — `getScope` fails closed on any non-active scope, so a row
+   * whose vertical never provisioned is inert rather than misleading.
+   *
+   * Deliberately a separate call rather than a flag on `provisionScope`: the two
+   * happen against DIFFERENT systems, and the gap between them is a real state that
+   * something has to be able to observe and retry.
+   */
+  activateScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): Promise<void>;
+
   /** active → suspended. Reversible containment (incident, dispute). */
   suspendScope(actor: PlatformActorId, tenantId: TenantId, scopeId: ScopeId): Promise<void>;
   /** suspended → active. */

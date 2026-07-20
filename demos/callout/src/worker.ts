@@ -242,6 +242,9 @@ app.post('/api/seed', async (c) => {
     await host.admin.grantEntitlement(STAFF, T, key);
   }
   await host.provisionScope(STAFF, { tenantId: T, scopeId: S, jurisdiction: 'eu' });
+  // The demo world is provisioned and confirmed in one place — here the platform and
+  // the vertical are the same process (K-31).
+  await host.admin.activateScope(STAFF, T, S);
   await host.admin.defineRole(STAFF, T, {
     key: 'office-admin',
     permissions: [
@@ -311,6 +314,10 @@ app.post('/api/seed', async (c) => {
       vertical: 'fsm',
       jurisdiction: 'eu',
     });
+    // Push registration: the scope already exists HERE, so registering and confirming
+    // are the same moment — but they stay two calls, so the shared directory is never
+    // the thing deciding a scope is ready (K-31).
+    await cp.activateScope(T, S);
   }
   return c.json({ seeded: true, tenant: T, scope: S, principal: ANNA, logins, connected: !!cp });
 });

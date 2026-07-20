@@ -112,6 +112,18 @@ export class ControlPlaneClient {
     return this.call('/scopes', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  /**
+   * Confirm the scope exists here, moving the directory row provisioning → active.
+   *
+   * In this (push) direction the vertical has already built the scope locally, so
+   * registering and confirming are the same moment — but they stay two calls so
+   * `provisionScope` means one thing everywhere, and so the directory is never the
+   * one deciding a scope is ready (K-31).
+   */
+  activateScope(tenantId: TenantId, scopeId: ScopeId): Promise<Scope> {
+    return this.call(`/tenants/${tenantId}/scopes/${scopeId}/activate`, { method: 'POST' });
+  }
+
   // -- reads used for gating -------------------------------------------------
 
   getTenant(tenantId: TenantId): Promise<Tenant | undefined> {
