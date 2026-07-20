@@ -5,6 +5,7 @@ import type { TableColumn } from '../components';
 import { ulid } from '@substrat-run/kernel';
 import { tenantTone } from '../lib/fleet';
 import type { Api } from '../lib/api';
+import { CreateInstance } from './CreateInstance';
 
 export interface TenantsProps {
   api: Api;
@@ -18,6 +19,7 @@ export interface TenantsProps {
 
 export function Tenants({ api, tenants, scopes, entitlements, onOpen, onChanged, onToast }: TenantsProps) {
   const [creating, setCreating] = useState(false);
+  const [instancing, setInstancing] = useState(false);
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState<string>();
@@ -80,9 +82,16 @@ export function Tenants({ api, tenants, scopes, entitlements, onOpen, onChanged,
             The root entity — suspending a tenant fails every scope under it closed.
           </p>
         </div>
-        <Button icon={<SubIcon d={SubIcons.plus} />} onClick={() => setCreating(true)}>
-          Create tenant
-        </Button>
+        <span style={{ display: 'inline-flex', gap: 8 }}>
+          {/* The bare tenant stays available — it is the primitive. This is the
+              product action: a tenant on its own does nothing a customer can use. */}
+          <Button variant="secondary" onClick={() => setCreating(true)}>
+            Create tenant
+          </Button>
+          <Button icon={<SubIcon d={SubIcons.plus} />} onClick={() => setInstancing(true)}>
+            New instance
+          </Button>
+        </span>
       </div>
 
       <Card padding={0}>
@@ -113,6 +122,23 @@ export function Tenants({ api, tenants, scopes, entitlements, onOpen, onChanged,
           <Input label="Name" placeholder="Acme Fastigheter" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
       </Dialog>
+
+      <CreateInstance
+        api={api}
+        open={instancing}
+        onCancel={() => setInstancing(false)}
+        onDone={(summary) => {
+          setInstancing(false);
+          onChanged();
+          onToast('Instance created', summary);
+        }}
+        onFailed={(message) => {
+          // Not dismissed on failure: the step list shows how far it got, and that
+          // is the only place the operator can see whether the vertical provisioned
+          // before the directory row did.
+          onToast('Instance creation failed', message, 'danger');
+        }}
+      />
     </div>
   );
 }
