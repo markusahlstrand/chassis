@@ -31,6 +31,7 @@ import {
   UNSAFE_devPlatformActorAuth,
   type PlatformActorAuth,
 } from '@substrat-run/control-plane-api';
+import { VerticalClient } from '@substrat-run/control-plane-api';
 import { buildStaffAuth, staffSessionReader } from './staff-auth.js';
 import { d1StaffRoster } from './staff-roster.js';
 
@@ -51,10 +52,47 @@ interface Env {
   SERVICE_TOKEN?: string;
   /** Local dev / test only: trust the `x-platform-actor` header. NEVER on a real deploy. */
   ALLOW_DEV_ACTOR?: string;
+  /**
+   * Shared secret presented to a vertical when provisioning an instance (K-31).
+   * Must match that vertical's own `PLATFORM_SECRET`. Unset means instance creation
+   * is unavailable, and the route says so rather than failing obscurely.
+   */
+  PLATFORM_SECRET?: string;
+  /**
+   * Service bindings to vertical deployments, `VERTICAL_<SLUG>` with dashes as
+   * underscores — the same convention and the same static-map shape the router
+   * carries, with the same Workers-for-Platforms swap later.
+   */
+  [binding: string]: unknown;
 }
 
 // The actor a connected vertical acts as when it registers (a service, not staff).
 const SERVICE_ACTOR = platformActorId.parse('01JZ00000000000000000000SV');
+
+/**
+ * The verticals this control plane can provision into (K-31).
+ *
+ * Discovered from the bindings rather than listed in code, so adding a vertical is a
+ * wrangler change and not a code change. Empty without `PLATFORM_SECRET`: a vertical
+ * refuses an unauthenticated provisioning call anyway, and an empty map makes the
+ * route answer "no deployment bound" instead of failing at the far end.
+ */
+function verticalsFor(env: Env): Record<string, VerticalClient> {
+  const secret = env.PLATFORM_SECRET;
+  if (!secret) return {};
+  const out: Record<string, VerticalClient> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('VERTICAL_')) continue;
+    const binding = value as { fetch?: typeof fetch };
+    if (typeof binding?.fetch !== 'function') continue;
+    const slug = key.slice('VERTICAL_'.length).toLowerCase().replace(/_/g, '-');
+    out[slug] = new VerticalClient({
+      fetch: binding.fetch.bind(binding),
+      platformSecret: secret,
+    });
+  }
+  return out;
+}
 
 /** The coordinator is stateless — rebuilt per request; durable state is in the DOs. */
 function hostFor(env: Env): CloudflareScopeHost {
@@ -98,7 +136,14 @@ export default {
     }
 
     // The audited control-plane API under /api (the console's baseUrl).
-    app.route('/api', createControlPlaneApi({ host: hostFor(env), authenticate: authFor(env, origin) }));
+    app.route(
+      '/api',
+      createControlPlaneApi({
+        host: hostFor(env),
+        authenticate: authFor(env, origin),
+        verticals: verticalsFor(env),
+      }),
+    );
 
     // The console SPA for everything else; the assets binding does the SPA fallback.
     if (env.ASSETS) {

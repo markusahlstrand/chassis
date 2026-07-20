@@ -149,6 +149,22 @@ export function createApi(actor: string | null, baseUrl = '/api') {
         body: JSON.stringify({ status, note }),
       }),
 
+    /**
+     * Create one instance of a vertical (K-31). The control plane calls the
+     * vertical, because only it can create a usable scope DO.
+     *
+     * Call this BEFORE `provisionScope`: the directory row should only exist once
+     * the vertical is ready, so a failure leaves an invisible orphan rather than a
+     * directory row promising a scope that is not there.
+     */
+    provisionInstance: (
+      verticalSlug: string,
+      input: { tenantId: TenantId; scopeId: ScopeId; owner: string; slug: string; name: string },
+    ) => post<{ tenantId: TenantId; scopeId: ScopeId; owner: string }>(
+      `/verticals/${encodeURIComponent(verticalSlug)}/instances`,
+      input,
+    ),
+
     adminLog: (q: AuditLogQuery = {}) => call<AdminLogPage>(`/admin-log${query({ ...q })}`),
   };
 }
