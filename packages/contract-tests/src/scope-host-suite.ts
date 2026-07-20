@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
+  connectionId,
   moduleManifest,
   orgId,
   platformActorId,
@@ -378,6 +379,154 @@ export function scopeHostContractSuite(
       expect(report.deadLettered).toBe(0);
       const after = await host.executorDeadLetters(t1, s1);
       expect(after).toHaveLength(before.length);
+    });
+
+    // -- the integrations hub: connections (#101) -----------------------------
+    //
+    // The store exists so a vertical's connector can reach a tenant's provider
+    // without any module ever holding a credential. So the properties that
+    // matter are about what CANNOT be reached: not from a metadata read, not
+    // from the audit log, not from another vertical, and not after a revoke.
+
+    describe('connections', () => {
+      const SECRET = { accessToken: 'tok-live-do-not-log', refreshToken: 'ref-abc' };
+
+      it('round-trips a sealed credential for the vertical that owns it', async () => {
+        const id = connectionId.parse(ulid());
+        await host.admin.createConnection(staff, {
+          id,
+          tenantId: t1,
+          vertical: 'callout',
+          provider: 'scrive',
+          label: 'Nordljus Scrive',
+          scopes: ['doc:create', 'doc:send'],
+          secret: SECRET,
+        });
+        const open = await host.admin.openConnection(t1, 'callout', 'scrive');
+        expect(open?.secret).toEqual(SECRET);
+        expect(open?.id).toBe(id);
+      });
+
+      it('never returns the credential from a metadata read', async () => {
+        const rows = await host.admin.listConnections(staff, { tenantId: t1 });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.provider).toBe('scrive');
+        expect(rows[0]!.scopes).toEqual(['doc:create', 'doc:send']);
+        // The strong form: the token does not appear ANYWHERE in the response.
+        expect(JSON.stringify(rows)).not.toContain('tok-live-do-not-log');
+      });
+
+      it('never writes the credential into the append-only audit log', async () => {
+        // This log can never be edited, so a secret written here would be
+        // permanent. The redaction has to be structural, not remembered.
+        const log = await host.admin.auditLog(staff, { tenantId: t1 });
+        const created = log.filter((e) => e.action === 'createConnection');
+        expect(created).toHaveLength(1);
+        expect(JSON.stringify(log)).not.toContain('tok-live-do-not-log');
+        expect(JSON.stringify(log)).not.toContain('ref-abc');
+      });
+
+      it('scopes a connection to its vertical — another vertical cannot open it', async () => {
+        // D-30's blast-radius boundary, made real: verticals are built by
+        // different companies (D-33), so one vendor's host code must not reach a
+        // credential another vendor connected for the same tenant.
+        expect(await host.admin.openConnection(t1, 'handlebar', 'scrive')).toBeUndefined();
+        // …and the same tenant may connect the SAME provider for another vertical.
+        await host.admin.createConnection(staff, {
+          id: connectionId.parse(ulid()),
+          tenantId: t1,
+          vertical: 'handlebar',
+          provider: 'scrive',
+          label: 'Nordljus Scrive (bike shop)',
+          secret: { accessToken: 'tok-other-vertical' },
+        });
+        const open = await host.admin.openConnection(t1, 'handlebar', 'scrive');
+        expect(open?.secret).toEqual({ accessToken: 'tok-other-vertical' });
+      });
+
+      it('allows one live connection per (tenant, vertical, provider)', async () => {
+        await expect(
+          host.admin.createConnection(staff, {
+            id: connectionId.parse(ulid()),
+            tenantId: t1,
+            vertical: 'callout',
+            provider: 'scrive',
+            label: 'a second one',
+            secret: { accessToken: 'nope' },
+          }),
+        ).rejects.toThrow(/already has a live/);
+      });
+
+      it('rotates the credential without touching the connection identity', async () => {
+        const [row] = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          vertical: 'callout',
+        });
+        await host.admin.updateConnectionSecret(staff, row!.id, { accessToken: 'tok-refreshed' });
+        const open = await host.admin.openConnection(t1, 'callout', 'scrive');
+        expect(open?.id).toBe(row!.id); // same connection
+        expect(open?.secret).toEqual({ accessToken: 'tok-refreshed' });
+        const log = await host.admin.auditLog(staff, { tenantId: t1 });
+        expect(log.some((e) => e.action === 'updateConnectionSecret')).toBe(true);
+        expect(JSON.stringify(log)).not.toContain('tok-refreshed');
+      });
+
+      it('records health, and a success clears a prior error', async () => {
+        const [row] = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          vertical: 'callout',
+        });
+        await host.admin.recordConnectionUse(row!.id, { ok: false, error: 'HTTP 503 from provider' });
+        let [after] = await host.admin.listConnections(staff, { tenantId: t1, vertical: 'callout' });
+        expect(after!.status).toBe('error');
+        expect(after!.lastError).toContain('503');
+
+        await host.admin.recordConnectionUse(row!.id, { ok: true });
+        [after] = await host.admin.listConnections(staff, { tenantId: t1, vertical: 'callout' });
+        expect(after!.status).toBe('active');
+        expect(after!.lastError).toBeNull();
+        expect(after!.lastOkAt).not.toBeNull();
+      });
+
+      it('revoking destroys the credential but keeps the record as evidence', async () => {
+        const [row] = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          vertical: 'callout',
+        });
+        await host.admin.revokeConnection(staff, row!.id);
+
+        // The credential is gone — not merely flagged.
+        expect(await host.admin.openConnection(t1, 'callout', 'scrive')).toBeUndefined();
+        // The row survives (K-21's tombstone rule): a grant that once existed is
+        // evidence of why an access was allowed.
+        expect(await host.admin.listConnections(staff, { tenantId: t1, vertical: 'callout' })).toEqual([]);
+        const withRevoked = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          vertical: 'callout',
+          includeRevoked: true,
+        });
+        expect(withRevoked).toHaveLength(1);
+        expect(withRevoked[0]!.status).toBe('revoked');
+        expect(withRevoked[0]!.revokedAt).not.toBeNull();
+      });
+
+      it('lets a revoked connection be replaced — the uniqueness is over LIVE rows', async () => {
+        await host.admin.createConnection(staff, {
+          id: connectionId.parse(ulid()),
+          tenantId: t1,
+          vertical: 'callout',
+          provider: 'scrive',
+          label: 'reconnected',
+          secret: { accessToken: 'tok-reconnected' },
+        });
+        const open = await host.admin.openConnection(t1, 'callout', 'scrive');
+        expect(open?.secret).toEqual({ accessToken: 'tok-reconnected' });
+      });
+
+      it('isolates tenants: t2 sees nothing of t1', async () => {
+        expect(await host.admin.listConnections(staff, { tenantId: t2 })).toEqual([]);
+        expect(await host.admin.openConnection(t2, 'callout', 'scrive')).toBeUndefined();
+      });
     });
 
     // -- vertical + version registry (#31) -----------------------------------

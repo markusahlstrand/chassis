@@ -42,6 +42,25 @@ interface TenantRow {
 }
 
 /** The raw role row; `permissions` is a JSON blob in a TEXT column. */
+/** A connection row as the DO stores it (#101). Never carries the credential. */
+export interface ConnectionDoRow {
+  id: string;
+  tenant_id: string;
+  vertical: string;
+  provider: string;
+  label: string;
+  status: string;
+  external_account_ref: string | null;
+  scopes: string;
+  expires_at: string | null;
+  last_ok_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  created_by: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
 export interface RoleRow {
   tenant_id: string;
   role_key: string;
@@ -283,6 +302,32 @@ const DIRECTORY_DDL = `
     topology   TEXT NOT NULL,
     tenant_id  TEXT,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS _substrat_connections (
+    id                   TEXT PRIMARY KEY,
+    tenant_id            TEXT NOT NULL,
+    vertical             TEXT NOT NULL,
+    provider             TEXT NOT NULL,
+    label                TEXT NOT NULL,
+    status               TEXT NOT NULL,
+    external_account_ref TEXT,
+    scopes               TEXT NOT NULL,
+    expires_at           TEXT,
+    last_ok_at           TEXT,
+    last_error           TEXT,
+    last_error_at        TEXT,
+    created_by           TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    revoked_at           TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS _substrat_connections_live
+    ON _substrat_connections (tenant_id, vertical, provider)
+    WHERE revoked_at IS NULL;
+  CREATE TABLE IF NOT EXISTS _substrat_connection_secrets (
+    connection_id TEXT PRIMARY KEY,
+    key_id        TEXT NOT NULL,
+    ciphertext    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _substrat_identities (
     provider     TEXT NOT NULL,
@@ -1150,6 +1195,184 @@ export class ControlPlaneDO extends DurableObject {
    * Read before write: `INSERT OR IGNORE` alone cannot tell those two apart, and
    * silently ignoring a genuine collision resolves one person as another.
    */
+  // -- the integrations hub (#101) -------------------------------------------
+  //
+  // The DO owns the rows; the coordinator owns the SecretBox, so ciphertext
+  // arrives already sealed and leaves still sealed. This DO has never seen a
+  // plaintext credential and cannot.
+
+  insertConnection(row: {
+    id: string;
+    tenantId: string;
+    vertical: string;
+    provider: string;
+    label: string;
+    externalAccountRef: string | null;
+    scopes: string;
+    expiresAt: string | null;
+    createdBy: string;
+    createdAt: string;
+    keyId: string;
+    ciphertext: string;
+  }): void {
+    const live = this.sql
+      .exec(
+        `SELECT id FROM _substrat_connections
+         WHERE tenant_id = ? AND vertical = ? AND provider = ? AND revoked_at IS NULL`,
+        row.tenantId,
+        row.vertical,
+        row.provider,
+      )
+      .toArray()[0] as unknown as { id: string } | undefined;
+    if (live) {
+      throw new Error(
+        `tenant ${row.tenantId} already has a live '${row.provider}' connection ` +
+          `for vertical '${row.vertical}' — revoke it before connecting another`,
+      );
+    }
+    this.sql.exec(
+      `INSERT INTO _substrat_connections
+         (id, tenant_id, vertical, provider, label, status, external_account_ref,
+          scopes, expires_at, last_ok_at, last_error, last_error_at,
+          created_by, created_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+      row.id,
+      row.tenantId,
+      row.vertical,
+      row.provider,
+      row.label,
+      row.externalAccountRef,
+      row.scopes,
+      row.expiresAt,
+      row.createdBy,
+      row.createdAt,
+    );
+    this.sql.exec(
+      `INSERT INTO _substrat_connection_secrets (connection_id, key_id, ciphertext, updated_at)
+       VALUES (?, ?, ?, ?)`,
+      row.id,
+      row.keyId,
+      row.ciphertext,
+      row.createdAt,
+    );
+  }
+
+  listConnections(filter: {
+    tenantId?: string;
+    vertical?: string;
+    provider?: string;
+    includeRevoked?: boolean;
+  }): ConnectionDoRow[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.tenantId) (where.push('tenant_id = ?'), params.push(filter.tenantId));
+    if (filter.vertical) (where.push('vertical = ?'), params.push(filter.vertical));
+    if (filter.provider) (where.push('provider = ?'), params.push(filter.provider));
+    if (!filter.includeRevoked) where.push('revoked_at IS NULL');
+    return this.sql
+      .exec(
+        `SELECT * FROM _substrat_connections
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY tenant_id, vertical, provider`,
+        ...params,
+      )
+      .toArray() as unknown as ConnectionDoRow[];
+  }
+
+  readConnection(id: string): ConnectionDoRow | undefined {
+    return this.sql.exec('SELECT * FROM _substrat_connections WHERE id = ?', id).toArray()[0] as
+      | unknown
+      | undefined as ConnectionDoRow | undefined;
+  }
+
+  /** The live connection for a triple, plus its sealed blob — the connector read. */
+  readLiveConnection(
+    tenantId: string,
+    vertical: string,
+    provider: string,
+  ): (ConnectionDoRow & { key_id: string; ciphertext: string }) | undefined {
+    return this.sql
+      .exec(
+        `SELECT c.*, s.key_id, s.ciphertext
+         FROM _substrat_connections c
+         JOIN _substrat_connection_secrets s ON s.connection_id = c.id
+         WHERE c.tenant_id = ? AND c.vertical = ? AND c.provider = ? AND c.revoked_at IS NULL`,
+        tenantId,
+        vertical,
+        provider,
+      )
+      .toArray()[0] as unknown as
+      | (ConnectionDoRow & { key_id: string; ciphertext: string })
+      | undefined;
+  }
+
+  updateConnectionSecret(
+    id: string,
+    keyId: string,
+    ciphertext: string,
+    expiresAt: string | null,
+    at: string,
+  ): void {
+    this.sql.exec(
+      `UPDATE _substrat_connection_secrets
+       SET key_id = ?, ciphertext = ?, updated_at = ? WHERE connection_id = ?`,
+      keyId,
+      ciphertext,
+      at,
+      id,
+    );
+    this.sql.exec(
+      `UPDATE _substrat_connections
+       SET status = 'active', expires_at = ?, last_error = NULL, last_error_at = NULL
+       WHERE id = ?`,
+      expiresAt,
+      id,
+    );
+  }
+
+  /**
+   * Tombstone the connection and DELETE the sealed blob.
+   *
+   * The row is evidence that a grant existed (K-21); the usable credential would
+   * only be a liability. Returns false when already revoked, so the caller can
+   * skip an audit row for a no-op.
+   */
+  revokeConnection(id: string, at: string): boolean {
+    const row = this.readConnection(id);
+    if (!row) throw new Error(`connection not found: ${id}`);
+    if (row.revoked_at) return false;
+    this.sql.exec(
+      `UPDATE _substrat_connections SET status = 'revoked', revoked_at = ? WHERE id = ?`,
+      at,
+      id,
+    );
+    this.sql.exec('DELETE FROM _substrat_connection_secrets WHERE connection_id = ?', id);
+    return true;
+  }
+
+  recordConnectionUse(id: string, error: string | null, at: string): void {
+    if (error === null) {
+      this.sql.exec(
+        `UPDATE _substrat_connections
+         SET last_ok_at = ?, last_error = NULL, last_error_at = NULL,
+             status = CASE WHEN status = 'error' THEN 'active' ELSE status END
+         WHERE id = ?`,
+        at,
+        id,
+      );
+      return;
+    }
+    this.sql.exec(
+      `UPDATE _substrat_connections
+       SET last_error = ?, last_error_at = ?,
+           status = CASE WHEN status = 'revoked' THEN status ELSE 'error' END
+       WHERE id = ?`,
+      error.slice(0, 2000),
+      at,
+      id,
+    );
+  }
+
   linkIdentity(
     provider: string,
     externalId: string,

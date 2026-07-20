@@ -123,15 +123,42 @@ to look.
 One tenant's authorization to act against one external provider.
 
 ```
-connection        id, tenant_id, provider ('scrive'|'fortnox'|…), label, status,
-                  external_account_ref, scopes, created_by, created_at,
-                  expires_at, last_ok_at, last_error, last_error_at
-connection_secret connection_id, key_id, sealed  — never in the same read path
+connection        id, tenant_id, VERTICAL, provider ('scrive'|'fortnox'|…), label,
+                  status, external_account_ref, scopes, created_by, created_at,
+                  expires_at, last_ok_at, last_error, last_error_at, revoked_at
+                  UNIQUE (tenant_id, vertical, provider) WHERE revoked_at IS NULL
+connection_secret connection_id, key_id, ciphertext — never in the same read path
 ```
 
 Split deliberately: **metadata is readable, secret material is not.** Listing connections for
 a console, checking health, and resolving "does this tenant have Scrive?" must not touch
 ciphertext.
+
+### 3.1.1 Keyed on (tenant, vertical, provider) — not on tenant alone
+
+An earlier draft keyed on `tenant_id` alone, which would have made one connection visible to
+**every vertical deployment serving that tenant**. That is wrong on three counts:
+
+- **D-30 makes a vertical a blast-radius boundary.** One deployment per vertical exists so a
+  problem in one does not reach another; a shared credential punches straight through it.
+- **D-33 makes vertical builders third parties.** Verticals are built and hosted by different
+  companies. Tenant-wide credentials would let vendor A's host code act against a provider
+  that vendor B connected. Module code still cannot read a credential — but the connector is
+  host code in that vertical's own deployment, so the boundary would be doing no work.
+- **It is not how the provider issues credentials anyway.** Scrive is OAuth2 with registered
+  clients: two vendors acting for one tenant each register their own client and hold their own
+  tokens. A single shared row is a shape we would be inventing, not one that exists.
+
+`vertical` is already first-class — `scopes.vertical` is a real column, `RouteTarget` carries
+`verticalSlug`, and the admin log has a `vertical` target — so a connector resolves it from the
+scope the event came from. No new plumbing.
+
+**Cross-vertical sharing is therefore an explicit grant, if a real case ever appears.**
+Additive, auditable, revocable, and fails closed meanwhile. Building the sharing machinery now
+would be designing ahead of the second consumer, which is exactly what D-27 forbids.
+
+The honest cost: a tenant running two Substrat verticals connects Scrive twice. Given they
+would hold two OAuth clients regardless, that is the true shape rather than a tax.
 
 ### 3.2 It lives in the directory, not the scope
 

@@ -45,6 +45,11 @@ export const adminAction = z.enum([
   'grantEntitlement', // §4.3 — the SKU flag turned on for a tenant
   'revokeEntitlement', // §4.3
   'linkIdentity', // D-16 — bind an external identity to a principal
+  // #101 — the integrations hub. The credential itself is NEVER in before/after:
+  // this log is append-only, so a secret written here could never be removed.
+  'createConnection',
+  'updateConnectionSecret', // OAuth refresh — logged as an event, never with the token
+  'revokeConnection',
 ]);
 export type AdminAction = z.infer<typeof adminAction>;
 

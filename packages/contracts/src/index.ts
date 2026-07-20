@@ -22,6 +22,7 @@ export * from './ids.js';
 export * from './registry.js';
 export * from './routing.js';
 export * from './tenancy.js';
+export * from './connections.js';
 export * from './control-plane.js';
 export * from './permission.js';
 export * from './events.js';

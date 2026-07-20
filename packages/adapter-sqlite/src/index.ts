@@ -11,6 +11,9 @@ import {
   identityLink,
   identityPool,
   instant,
+  connection,
+  connectionSecret,
+  createConnectionInput,
   moduleManifest,
   createOrgInput,
   promotionAcknowledgement,
@@ -33,6 +36,11 @@ import {
   tenantRole,
   type AdminAction,
   type AccessLogEntry,
+  type Connection,
+  type ConnectionFilter,
+  type ConnectionId,
+  type ConnectionSecret,
+  type CreateConnectionInput,
   type AdminLogEntry,
   type CapabilityGrant,
   type CreateTenantInput,
@@ -78,6 +86,8 @@ import {
   type ExecutorRetryPolicy,
   backoffAt,
   resolveRetryPolicy,
+  unconfiguredSecretBox,
+  type SecretBox,
   type GuardPredicate,
   type HostAdmin,
   type ModuleRegistration,
@@ -122,6 +132,12 @@ export interface SqliteScopeHostOptions {
   dir: string;
   /** Defaults to the built-in tuple checker (deny-by-default on empty tuples). */
   checker?: PermissionChecker;
+  /**
+   * Seals per-tenant credentials at rest (#101). Omitted, the host refuses to
+   * store one at all rather than storing it in the clear — every other surface
+   * keeps working, so a deployment that uses no connectors needs no key.
+   */
+  secretBox?: SecretBox;
 }
 
 const KERNEL_DDL = `
@@ -175,6 +191,44 @@ const KERNEL_DDL = `
     PRIMARY KEY (event_id, consumer_module)
   );
 `;
+
+interface ConnectionRow {
+  id: string;
+  tenant_id: string;
+  vertical: string;
+  provider: string;
+  label: string;
+  status: string;
+  external_account_ref: string | null;
+  scopes: string;
+  expires_at: string | null;
+  last_ok_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  created_by: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+/** Row → contract shape. Never reads the secrets table — that is the point of the split. */
+const toConnection = (r: ConnectionRow): Connection =>
+  connection.parse({
+    id: r.id,
+    tenantId: r.tenant_id,
+    vertical: r.vertical,
+    provider: r.provider,
+    label: r.label,
+    status: r.status,
+    externalAccountRef: r.external_account_ref,
+    scopes: JSON.parse(r.scopes) as string[],
+    expiresAt: r.expires_at,
+    lastOkAt: r.last_ok_at,
+    lastError: r.last_error,
+    lastErrorAt: r.last_error_at,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    revokedAt: r.revoked_at,
+  });
 
 interface TenantRow {
   tenant_id: string;
@@ -361,8 +415,10 @@ export class SqliteScopeHost implements ScopeHost {
    */
   private causedBy: string | null = null;
   private readonly systemPrincipal: PrincipalId = principalId.parse(ulid());
+  private readonly secretBox: SecretBox;
 
   constructor(options: SqliteScopeHostOptions) {
+    this.secretBox = options.secretBox ?? unconfiguredSecretBox;
     this.dir = options.dir;
     mkdirSync(this.dir, { recursive: true });
     this.directory = new Database(join(this.dir, '_directory.sqlite'));
@@ -511,6 +567,41 @@ export class SqliteScopeHost implements ScopeHost {
         topology   TEXT NOT NULL,
         tenant_id  TEXT,
         created_at TEXT NOT NULL
+      );
+      -- The integrations hub (#101). Keyed on (tenant, vertical, provider): a
+      -- vertical is a blast-radius boundary (D-30) and verticals are built by
+      -- different companies (D-33), so one vendor's host code must not reach a
+      -- credential another vendor connected.
+      CREATE TABLE IF NOT EXISTS _substrat_connections (
+        id                   TEXT PRIMARY KEY,
+        tenant_id            TEXT NOT NULL,
+        vertical             TEXT NOT NULL,
+        provider             TEXT NOT NULL,
+        label                TEXT NOT NULL,
+        status               TEXT NOT NULL,
+        external_account_ref TEXT,
+        scopes               TEXT NOT NULL,
+        expires_at           TEXT,
+        last_ok_at           TEXT,
+        last_error           TEXT,
+        last_error_at        TEXT,
+        created_by           TEXT NOT NULL,
+        created_at           TEXT NOT NULL,
+        revoked_at           TEXT
+      );
+      -- One LIVE connection per (tenant, vertical, provider). Revoked rows are
+      -- kept as evidence (K-21's tombstone rule) and must not block a successor,
+      -- which is why the index is partial rather than a table constraint.
+      CREATE UNIQUE INDEX IF NOT EXISTS _substrat_connections_live
+        ON _substrat_connections (tenant_id, vertical, provider)
+        WHERE revoked_at IS NULL;
+      -- Sealed credentials, in their own table so that reading a connection's
+      -- METADATA never touches ciphertext. Nothing above SecretBox sees plaintext.
+      CREATE TABLE IF NOT EXISTS _substrat_connection_secrets (
+        connection_id TEXT PRIMARY KEY,
+        key_id        TEXT NOT NULL,
+        ciphertext    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS _substrat_identities (
         provider     TEXT NOT NULL,
@@ -1150,6 +1241,15 @@ export class SqliteScopeHost implements ScopeHost {
         resultCount,
         new Date().toISOString(),
       );
+  }
+
+  /** Load a connection or fail loudly — update/revoke must not silently no-op. */
+  private connectionRow(id: string): ConnectionRow {
+    const row = this.directory
+      .prepare('SELECT * FROM _substrat_connections WHERE id = ?')
+      .get(id) as ConnectionRow | undefined;
+    if (!row) throw new Error(`connection not found: ${id}`);
+    return row;
   }
 
   private recordAdmin(
@@ -2109,6 +2209,191 @@ export class SqliteScopeHost implements ScopeHost {
         this.recordAccess(actor, 'listIdentityTenants', {}, { provider }, tenants.length);
         return tenants;
       },
+      // -- the integrations hub (#101) ---------------------------------------
+
+      createConnection: async (actor: PlatformActorId, raw: CreateConnectionInput) => {
+        const input = createConnectionInput.parse(raw);
+        const sealed = await this.secretBox.seal(JSON.stringify(input.secret));
+        const now = new Date().toISOString();
+        try {
+          this.directory
+            .prepare(
+              `INSERT INTO _substrat_connections
+                 (id, tenant_id, vertical, provider, label, status, external_account_ref,
+                  scopes, expires_at, last_ok_at, last_error, last_error_at,
+                  created_by, created_at, revoked_at)
+               VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+            )
+            .run(
+              input.id,
+              input.tenantId,
+              input.vertical,
+              input.provider,
+              input.label,
+              input.externalAccountRef ?? null,
+              JSON.stringify(input.scopes),
+              input.expiresAt ?? null,
+              actor,
+              now,
+            );
+        } catch (err) {
+          if (/UNIQUE constraint failed/i.test((err as Error).message)) {
+            throw new Error(
+              `tenant ${input.tenantId} already has a live '${input.provider}' connection ` +
+                `for vertical '${input.vertical}' — revoke it before connecting another`,
+            );
+          }
+          throw err;
+        }
+        this.directory
+          .prepare(
+            `INSERT INTO _substrat_connection_secrets (connection_id, key_id, ciphertext, updated_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(input.id, sealed.keyId, sealed.ciphertext, now);
+        // METADATA ONLY. `_substrat_admin_log` is append-only, so a credential
+        // written here could never be removed — the redaction is the point, and
+        // it is structural rather than a rule someone has to remember.
+        this.recordAdmin(
+          actor,
+          'createConnection',
+          { tenantId: input.tenantId, vertical: input.vertical },
+          null,
+          {
+            id: input.id,
+            provider: input.provider,
+            label: input.label,
+            scopes: input.scopes,
+            externalAccountRef: input.externalAccountRef ?? null,
+          },
+        );
+      },
+
+      listConnections: async (actor: PlatformActorId, filter?: ConnectionFilter) => {
+        const f = filter ?? {};
+        const where: string[] = [];
+        const params: SqlValue[] = [];
+        if (f.tenantId) (where.push('tenant_id = ?'), params.push(f.tenantId));
+        if (f.vertical) (where.push('vertical = ?'), params.push(f.vertical));
+        if (f.provider) (where.push('provider = ?'), params.push(f.provider));
+        if (!f.includeRevoked) where.push('revoked_at IS NULL');
+        const rows = this.directory
+          .prepare(
+            `SELECT * FROM _substrat_connections
+             ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY tenant_id, vertical, provider`,
+          )
+          .all(...params) as ConnectionRow[];
+        this.recordAccess(actor, 'listConnections', {}, f, rows.length);
+        return rows.map(toConnection);
+      },
+
+      updateConnectionSecret: async (
+        actor: PlatformActorId,
+        id: ConnectionId,
+        secret: ConnectionSecret,
+        expiresAt?: string,
+      ) => {
+        const row = this.connectionRow(id);
+        const sealed = await this.secretBox.seal(JSON.stringify(connectionSecret.parse(secret)));
+        const now = new Date().toISOString();
+        this.directory
+          .prepare(
+            `UPDATE _substrat_connection_secrets
+             SET key_id = ?, ciphertext = ?, updated_at = ? WHERE connection_id = ?`,
+          )
+          .run(sealed.keyId, sealed.ciphertext, now, id);
+        // A refresh revives a connection that had lapsed or errored.
+        this.directory
+          .prepare(
+            `UPDATE _substrat_connections
+             SET status = 'active', expires_at = ?, last_error = NULL, last_error_at = NULL
+             WHERE id = ?`,
+          )
+          .run(expiresAt ?? row.expires_at, id);
+        // The event, never the token. "Rotated at T" is the auditable fact.
+        this.recordAdmin(
+          actor,
+          'updateConnectionSecret',
+          { tenantId: row.tenant_id as TenantId, vertical: row.vertical },
+          null,
+          { id, provider: row.provider, rotatedAt: now, expiresAt: expiresAt ?? row.expires_at },
+        );
+      },
+
+      revokeConnection: async (actor: PlatformActorId, id: ConnectionId) => {
+        const row = this.connectionRow(id);
+        if (row.revoked_at) return; // idempotent, and a no-op is not audited
+        const now = new Date().toISOString();
+        this.directory
+          .prepare(`UPDATE _substrat_connections SET status = 'revoked', revoked_at = ? WHERE id = ?`)
+          .run(now, id);
+        // The sealed blob goes NOW. A tombstoned connection is evidence that a
+        // grant existed (K-21); keeping the usable credential would make it a
+        // liability instead. The row says what happened; the secret does not.
+        this.directory
+          .prepare('DELETE FROM _substrat_connection_secrets WHERE connection_id = ?')
+          .run(id);
+        this.recordAdmin(
+          actor,
+          'revokeConnection',
+          { tenantId: row.tenant_id as TenantId, vertical: row.vertical },
+          { status: row.status },
+          { id, provider: row.provider, status: 'revoked', revokedAt: now },
+        );
+      },
+
+      openConnection: async (tenantId: TenantId, vertical: string, provider: string) => {
+        const row = this.directory
+          .prepare(
+            `SELECT * FROM _substrat_connections
+             WHERE tenant_id = ? AND vertical = ? AND provider = ? AND revoked_at IS NULL`,
+          )
+          .get(tenantId, vertical, provider) as ConnectionRow | undefined;
+        if (!row) return undefined;
+        const sealed = this.directory
+          .prepare('SELECT key_id, ciphertext FROM _substrat_connection_secrets WHERE connection_id = ?')
+          .get(row.id) as { key_id: string; ciphertext: string } | undefined;
+        if (!sealed) return undefined; // revoked mid-flight, or never sealed
+        const secret = connectionSecret.parse(
+          JSON.parse(await this.secretBox.open({ keyId: sealed.key_id, ciphertext: sealed.ciphertext })),
+        );
+        return {
+          id: row.id as ConnectionId,
+          tenantId: row.tenant_id,
+          vertical: row.vertical,
+          provider: row.provider,
+          secret,
+          expiresAt: row.expires_at,
+        };
+      },
+
+      recordConnectionUse: async (
+        id: ConnectionId,
+        outcome: { ok: true } | { ok: false; error: string },
+      ) => {
+        const now = new Date().toISOString();
+        if (outcome.ok) {
+          this.directory
+            .prepare(
+              `UPDATE _substrat_connections
+               SET last_ok_at = ?, last_error = NULL, last_error_at = NULL,
+                   status = CASE WHEN status = 'error' THEN 'active' ELSE status END
+               WHERE id = ?`,
+            )
+            .run(now, id);
+          return;
+        }
+        this.directory
+          .prepare(
+            `UPDATE _substrat_connections
+             SET last_error = ?, last_error_at = ?,
+                 status = CASE WHEN status = 'revoked' THEN status ELSE 'error' END
+             WHERE id = ?`,
+          )
+          .run(outcome.error.slice(0, 2000), now, id);
+      },
+
       linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
         requirePoolServes(parsed.provider, parsed.tenantId);
