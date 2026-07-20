@@ -76,6 +76,10 @@ import {
   backoffAt,
   resolveRetryPolicy,
   unconfiguredSecretBox,
+  type ConnectorContext,
+  type ConnectorHandler,
+  type ConnectorOptions,
+  type FetchLike,
   type SecretBox,
   type HostAdmin,
   type ModuleRegistration,
@@ -127,6 +131,22 @@ import type {
  * parsing stays here too, so only clean data crosses to the DO and the DO throws
  * only plain Errors whose messages survive the RPC hop.
  */
+
+/** An executor or a connector — same journal and retry, different argument. */
+type RegisteredEffector =
+  | {
+      kind: 'executor';
+      eventType: string;
+      handler: ExecutorHandler;
+      retry: Required<ExecutorRetryPolicy>;
+    }
+  | {
+      kind: 'connector';
+      eventType: string;
+      handler: ConnectorHandler;
+      retry: Required<ExecutorRetryPolicy>;
+      timeoutMs: number;
+    };
 
 /** DO row → contract shape. Never reads the secrets table — that is the split. */
 const toConnection = (r: ConnectionDoRow): Connection =>
@@ -372,6 +392,11 @@ export interface CloudflareScopeHostOptions {
    * the clear.
    */
   secretBox?: SecretBox;
+  /**
+   * Egress for connectors. Defaults to the runtime's `fetch`. Injectable so a
+   * provider can be stood up in memory for tests and dev.
+   */
+  fetch?: FetchLike;
 }
 
 export class CloudflareScopeHost implements ScopeHost {
@@ -387,10 +412,8 @@ export class CloudflareScopeHost implements ScopeHost {
   private readonly predicateNames = new Map<string, string>(); // name → module
   /** Executor id → {eventType, handler} (K-22 §4.2). Coordinator-side, not in the DO. */
   private readonly secretBox: SecretBox;
-  private readonly executors = new Map<
-    string,
-    { eventType: string; handler: ExecutorHandler; retry: Required<ExecutorRetryPolicy> }
-  >();
+  private readonly fetchImpl: FetchLike;
+  private readonly executors = new Map<string, RegisteredEffector>();
   /**
    * The event currently being effected, stamped onto admin rows the executor writes.
    * Ambient rather than threaded through every HostAdmin signature: set and cleared
@@ -414,6 +437,7 @@ export class CloudflareScopeHost implements ScopeHost {
    */
   constructor(options: CloudflareScopeHostOptions) {
     this.secretBox = options.secretBox ?? unconfiguredSecretBox;
+    this.fetchImpl = options.fetch ?? ((input, init) => (globalThis as unknown as { fetch: FetchLike }).fetch(input, init));
     this.scopeNs = options.scope;
     this.cp = options.controlPlane.get(
       options.controlPlane.idFromName('control-plane'),
@@ -430,7 +454,86 @@ export class CloudflareScopeHost implements ScopeHost {
     retry?: ExecutorRetryPolicy,
   ): void {
     if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
-    this.executors.set(id, { eventType, handler, retry: resolveRetryPolicy(retry) });
+    this.executors.set(id, {
+      kind: 'executor',
+      eventType,
+      handler,
+      retry: resolveRetryPolicy(retry),
+    });
+  }
+
+  registerConnector(
+    id: string,
+    eventType: string,
+    handler: ConnectorHandler,
+    options?: ConnectorOptions,
+  ): void {
+    if (this.executors.has(id)) throw new Error(`executor '${id}' is already registered`);
+    this.executors.set(id, {
+      kind: 'connector',
+      eventType,
+      handler,
+      retry: resolveRetryPolicy(options),
+      timeoutMs: options?.timeoutMs ?? 30_000,
+    });
+  }
+
+  /**
+   * Build the context a connector runs with. Tenant and vertical are AMBIENT —
+   * taken from the event's scope, never from an argument — so a connector cannot
+   * reach a credential another vertical connected even by accident.
+   */
+  private async connectorContext(
+    tenantId: TenantId,
+    scopeId: ScopeId,
+    timeoutMs: number,
+  ): Promise<ConnectorContext> {
+    const scope = await this.cp.getScopeRecord(tenantId, scopeId);
+    const vertical = scope?.vertical ?? null;
+    const admin = this.admin;
+    const fetchImpl = this.fetchImpl;
+    return {
+      admin,
+      tenantId,
+      scopeId,
+      vertical: vertical ?? '',
+      connection: async (provider: string) => {
+        if (!vertical) {
+          throw new Error(
+            `scope ${scopeId} is bound to no vertical, so it has no connection namespace — ` +
+              `provision it with a vertical before using connectors`,
+          );
+        }
+        const open = await admin.openConnection(tenantId, vertical, provider);
+        if (!open) {
+          throw new Error(
+            `no live '${provider}' connection for tenant ${tenantId} / vertical '${vertical}'`,
+          );
+        }
+        return {
+          ...open,
+          fetch: async (input, init) => {
+            try {
+              const res = await fetchImpl(input, {
+                ...init,
+                signal: AbortSignal.timeout(timeoutMs),
+              });
+              await admin.recordConnectionUse(
+                open.id,
+                res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status} from ${provider}` },
+              );
+              return res;
+            } catch (err) {
+              await admin.recordConnectionUse(open.id, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              throw err;
+            }
+          },
+        };
+      },
+    };
   }
 
   /**
@@ -447,7 +550,10 @@ export class CloudflareScopeHost implements ScopeHost {
    * delivery cannot wedge the ones behind it. At-least-once still requires
    * idempotent handlers.
    */
-  private async drainExecutors(scopeId: ScopeId): Promise<ExecutorDrainReport> {
+  private async drainExecutors(
+    tenantId: TenantId,
+    scopeId: ScopeId,
+  ): Promise<ExecutorDrainReport> {
     const report: ExecutorDrainReport = {
       attempted: 0,
       delivered: 0,
@@ -463,7 +569,14 @@ export class CloudflareScopeHost implements ScopeHost {
         report.attempted += 1;
         this.causedBy = event.id;
         try {
-          await executor.handler(this.admin, event);
+          if (executor.kind === 'connector') {
+            await executor.handler(
+              await this.connectorContext(tenantId, scopeId, executor.timeoutMs),
+              event,
+            );
+          } else {
+            await executor.handler(this.admin, event);
+          }
           await stub.recordExecutorAttempt(event.id, deliveryId, null, null);
           report.delivered += 1;
         } catch (err) {
@@ -494,7 +607,7 @@ export class CloudflareScopeHost implements ScopeHost {
     // does not get its effects driven either.
     await this.cp.validateScopeAccess(tenantId, scopeId);
     await this.migrateAndRecord(scopeId);
-    return this.drainExecutors(scopeId);
+    return this.drainExecutors(tenantId, scopeId);
   }
 
   async executorDeadLetters(tenantId: TenantId, scopeId: ScopeId): Promise<ExecutorDeadLetter[]> {
@@ -657,7 +770,7 @@ export class CloudflareScopeHost implements ScopeHost {
           tenantId,
           scopeId,
         )) as O;
-        await this.drainExecutors(scopeId);
+        await this.drainExecutors(tenantId, scopeId);
         return result;
       },
     };

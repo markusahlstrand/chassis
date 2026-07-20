@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { connectorCalls, connectorTestFetch, resetConnectorCalls } from './connector-fixture.js';
 import {
   connectionId,
   moduleManifest,
@@ -118,6 +119,23 @@ export function scopeHostContractSuite(
         },
         { maxAttempts: 5, baseDelayMs: 60_000 },
       );
+      // The connector under test. maxAttempts 1 so a failure is terminal at once
+      // and the dead-letter is observable without waiting.
+      host.registerConnector(
+        'outbound-caller',
+        'outbound.requested',
+        async (ctx, event) => {
+          const p = event.payload as { tag: string };
+          const conn = await ctx.connection('provider');
+          const res = await conn.fetch('https://provider.test/v1/things', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${conn.secret.accessToken}` },
+            body: JSON.stringify({ tag: p.tag }),
+          });
+          if (!res.ok) throw new Error(`provider said ${res.status}`);
+        },
+        { maxAttempts: 1 },
+      );
       host.registerExecutor(
         'doomed-effector',
         'effect.doomed',
@@ -135,9 +153,25 @@ export function scopeHostContractSuite(
       for (const key of ['testmod', 'flow', 'guarded', 'victim', 'late', 'connector']) {
         await host.admin.grantEntitlement(staff, t1, key);
       }
-      await host.provisionScope(staff, { tenantId: t1, scopeId: s1, jurisdiction: 'eu' });
+      // t2 holds the connector SKU but connects nothing — "entitled but not
+      // configured" is the state the no-connection test needs, and it is the
+      // state every tenant is in the moment before an admin connects a provider.
+      await host.admin.grantEntitlement(staff, t2, 'connector');
+      // Bound to a vertical: a connection is keyed on (tenant, VERTICAL, provider),
+      // so a scope with no vertical has no connection namespace at all.
+      await host.provisionScope(staff, {
+        tenantId: t1,
+        scopeId: s1,
+        jurisdiction: 'eu',
+        vertical: 'connector-vertical',
+      });
       await host.admin.activateScope(staff, t1, s1);
-      await host.provisionScope(staff, { tenantId: t2, scopeId: s2, jurisdiction: 'eu' });
+      await host.provisionScope(staff, {
+        tenantId: t2,
+        scopeId: s2,
+        jurisdiction: 'eu',
+        vertical: 'connector-vertical',
+      });
       await host.admin.activateScope(staff, t2, s2);
     });
 
@@ -526,6 +560,64 @@ export function scopeHostContractSuite(
       it('isolates tenants: t2 sees nothing of t1', async () => {
         expect(await host.admin.listConnections(staff, { tenantId: t2 })).toEqual([]);
         expect(await host.admin.openConnection(t2, 'callout', 'scrive')).toBeUndefined();
+      });
+    });
+
+    // -- connectors: credential + egress, bound to the scope's vertical -------
+
+    describe('connectors', () => {
+      beforeAll(async () => {
+        resetConnectorCalls();
+        // t1 connects the provider for the vertical its scope runs. t2 connects
+        // nothing — that absence is a test.
+        await host.admin.createConnection(staff, {
+          id: connectionId.parse(ulid()),
+          tenantId: t1,
+          vertical: 'connector-vertical',
+          provider: 'provider',
+          label: 'provider for the connector suite',
+          secret: { accessToken: 'tok-for-connector-vertical' },
+        });
+      });
+
+      it('hands a connector the tenant credential and records health on egress', async () => {
+        // The whole point of the seam: a connector reaches a provider without
+        // any module ever holding a credential, and without importing a fetch.
+        expect(connectorCalls).toEqual([]);
+        const stub = await host.getScope(alice, t1, s1);
+        await stub.invoke('connector/request-outbound', { tag: 'first' });
+
+        expect(connectorCalls).toHaveLength(1);
+        expect(connectorCalls[0]!.url).toBe('https://provider.test/v1/things');
+        // The credential arrived, and it came from the vertical this scope runs.
+        expect(connectorCalls[0]!.auth).toBe('Bearer tok-for-connector-vertical');
+
+        // Egress recorded health against the connection it used.
+        const [conn] = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          provider: 'provider',
+        });
+        expect(conn!.lastOkAt).not.toBeNull();
+      });
+
+      it('records a failure on the connection when the provider errors', async () => {
+        const stub = await host.getScope(alice, t1, s1);
+        await stub.invoke('connector/request-outbound', { tag: 'fail-me' });
+        const [conn] = await host.admin.listConnections(staff, {
+          tenantId: t1,
+          provider: 'provider',
+        });
+        expect(conn!.status).toBe('error');
+        expect(conn!.lastError).toContain('503');
+      });
+
+      it('fails the delivery when the tenant has no connection for that provider', async () => {
+        // t2 never connected anything. The connector must not silently no-op:
+        // it retries and eventually dead-letters, which is visible.
+        const stub2 = await host.getScope(alice, t2, s2);
+        await stub2.invoke('connector/request-outbound', { tag: 'no-conn' });
+        const dead = await host.executorDeadLetters(t2, s2);
+        expect(dead.some((d) => /no live 'provider' connection/.test(d.error))).toBe(true);
       });
     });
 

@@ -450,6 +450,7 @@ export const connectorModManifest = moduleManifest.parse({
       // retry/dead-letter contract is exercised rather than described.
       { type: 'effect.requested', schemaVersion: 1 },
       { type: 'effect.doomed', schemaVersion: 1 },
+      { type: 'outbound.requested', schemaVersion: 1 },
     ],
     consumes: [],
   },
@@ -519,6 +520,16 @@ export const connectorMod: ModuleRegistration = {
     'connector/request-doomed': ((ctx: OperationContext, input: { tag: string }) => {
       ctx.emit({
         type: 'effect.doomed',
+        schemaVersion: 1,
+        entity: { entityType: 'effect', entityId: input.tag },
+        piiClass: 'none',
+        payload: { tag: input.tag },
+      });
+    }) as unknown as OperationHandler<never, unknown>,
+    /** Asks a CONNECTOR (not an executor) to call an external provider. */
+    'connector/request-outbound': ((ctx: OperationContext, input: { tag: string }) => {
+      ctx.emit({
+        type: 'outbound.requested',
         schemaVersion: 1,
         entity: { entityType: 'effect', entityId: input.tag },
         piiClass: 'none',
