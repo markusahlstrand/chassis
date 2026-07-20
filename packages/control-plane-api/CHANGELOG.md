@@ -1,5 +1,28 @@
 # @substrat-run/control-plane-api
 
+## 0.7.0
+
+### Minor Changes
+
+- 017bb83: The hostname map is on the audited HTTP surface: `GET /hostnames`,
+  `POST /hostnames`, `PATCH /hostnames/:hostname/status`.
+
+  `resolveHostname` is deliberately **not** here. It is the router's per-request machine
+  path, unaudited by design (K-24), and the router reads the directory directly. Putting
+  it on the staff surface would either flood the admin log or quietly add an unaudited
+  route to a surface whose whole claim is that it is audited.
+
+  `ControlPlaneClient` is unchanged: that is the _vertical's_ client, and a vertical
+  assigning itself a domain is not a thing we want to be possible.
+
+### Patch Changes
+
+- Updated dependencies [c54637b]
+- Updated dependencies [8c48c93]
+- Updated dependencies [33fb5dd]
+  - @substrat-run/contracts@0.7.0
+  - @substrat-run/kernel@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

@@ -1,9 +1,9 @@
 {
   "name": "@substrat-run/demo-meridian",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "license": "Apache-2.0",
-  "description": "HR demo vertical (Meridian) \u2014 see spec/concept.md",
+  "description": "HR demo vertical (Meridian) — see spec/concept.md",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

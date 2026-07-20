@@ -1,5 +1,80 @@
 # @substrat-run/adapter-cloudflare
 
+## 0.7.0
+
+### Minor Changes
+
+- c54637b: The hostname map: `hostname → (tenant, scope, vertical, surface, region)`.
+
+  A provisioned scope had no URL, so "validate it works in production" had nowhere to
+  point. `contracts/routing.ts` adds `hostnameBinding` and `routeTarget`, and `HostAdmin`
+  adds `bindHostname` / `setHostnameStatus` / `listHostnames` / `resolveHostname`.
+
+  `surface` is the correction: one hostname per scope was already wrong, because a single
+  scope fronts a storefront and a back office, or a player app and a manager console.
+
+  `region` sits on the binding rather than in a router deployed per jurisdiction, because
+  Cloudflare's Regional Services is configured per hostname — residency is one more
+  column, not a second topology.
+
+  Bindings have a lifecycle (`pending` → `verifying` → `active`, or `failed` with a note),
+  since a custom domain is DNS validation and certificate issuance rather than a string
+  somebody sets. Only `active` resolves. `resolveHostname` takes no actor and is not
+  logged — the machine-path carve-out `resolveIdentity` already has — and does not
+  re-check suspension, which `getScope` owns.
+
+  Additive on every published surface: new schemas, new `HostAdmin` methods, new tables.
+  Nothing existing changed shape.
+
+- 33fb5dd: Verticals can serve more than one tenant: the router's side of K-26, plus K-27.
+
+  `@substrat-run/kernel` exports **`readRoutedNode`**, which reads the `(tenant, scope,
+surface)` a router asserted in `x-substrat-*` headers and decides whether to trust it.
+  Three outcomes, kept distinct: `null` when no router fronted the request (a standalone
+  deploy substitutes its own node), a throw when the assertion is present but unsigned,
+  incomplete or malformed, and the node when it is good. Collapsing the middle case into
+  `null` would let a forged assertion fall through to whatever the caller does for
+  "unrouted".
+
+  Trust comes from a shared secret, compared in constant time. K-26's real boundary is
+  that vertical workers have no public route — but that is a deployment fact and
+  `workers.dev` is on by default, so the secret is what makes the boundary hold in code
+  when the configuration slips.
+
+  `@substrat-run/adapter-cloudflare` adds a **`/routing` subpath export** with
+  `createRouteResolver`: hostname → route target over the control-plane DO, and nothing
+  else. The package root re-exports the scope-DO class, which a router must not carry —
+  it resolves a name and forwards, and should not be able to open a scope at all.
+
+  `@substrat-run/contracts` now **normalizes hostnames to lower case** in the schema.
+  DNS is case-insensitive, so storing `ACME.example.com` and `acme.example.com` as two
+  rows would let two scopes each hold "the same" hostname and let a request resolve to
+  whichever casing it arrived in.
+
+  Additive: new exports and a new subpath. Nothing existing changed shape.
+
+### Patch Changes
+
+- ad89a9d: Fix: the router built one Durable Object stub and reused it across requests.
+
+  A DO stub is an I/O object owned by the request that created it, so reusing one
+  throws `Cannot perform I/O on behalf of a different request`. The first request after
+  each cold start succeeded and every request after it returned 1101 — which is why
+  nothing caught it before production: every test sent a single request.
+
+  `createRouteResolver` now creates the stub inside the returned closure, per call, and
+  the router no longer memoises the resolver. Only the namespace binding may be held
+  across requests; nothing derived from one may be.
+
+  `CloudflareScopeHost` has the same shape and is safe only because every worker
+  rebuilds it per request. That requirement is now stated on the constructor.
+
+- Updated dependencies [c54637b]
+- Updated dependencies [8c48c93]
+- Updated dependencies [33fb5dd]
+  - @substrat-run/contracts@0.7.0
+  - @substrat-run/kernel@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes
@@ -89,7 +164,7 @@
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-            z.object({ facility: entityRef, unitPrice: money })
+              z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is
