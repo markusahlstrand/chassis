@@ -554,6 +554,36 @@ describe('engine-booking', () => {
     expect(listed!.effectiveState).toBe('expired'); // but it reads honestly
   });
 
+  it('computes effectiveState from the INJECTED clock, never wall time', async () => {
+    // The dates are deliberately long past. Under wall clock this hold is expired by
+    // years, so if anything reads `new Date()` instead of the clock it was handed,
+    // this fails — and keeps failing, rather than waiting for real time to drift past
+    // a constant. That is how the bug got in: a default of `new Date().toISOString()`
+    // on the mapper meant every caller that forgot to pass `now` silently used wall
+    // time, which stayed invisible until a date passed and then looked like flakiness.
+    const PAST = '2020-01-01T00:00:00.000Z';
+    const PAST_EXPIRY = '2020-01-01T00:10:00.000Z';
+
+    const r = await court();
+    const [held] = await h.run((ctx) => [
+      holdReservation(ctx, {
+        resourceId: r.id,
+        startsAt: '2020-01-01T09:00:00.000Z',
+        endsAt: '2020-01-01T10:00:00.000Z',
+        expiresAt: PAST_EXPIRY,
+        now: PAST,
+      }),
+    ]);
+    expect(held!.effectiveState).toBe('held');
+
+    // And the same row read at a later injected instant is expired — so the clock is
+    // genuinely being used, not merely ignored in a way that happens to pass.
+    const [listed] = await h.run((ctx) =>
+      listReservations(ctx, { resourceId: r.id, now: PAST_EXPIRY }),
+    );
+    expect(listed!.effectiveState).toBe('expired');
+  });
+
   it('a live hold reads as held', async () => {
     const r = await court();
     await hold(r.id);

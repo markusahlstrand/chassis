@@ -331,10 +331,19 @@ export function effectiveStateOf(
   return state === 'held' && expiresAt !== null && expiresAt <= now ? 'expired' : state;
 }
 
-const toReservation = (
-  r: ReservationRow,
-  now: string = new Date().toISOString(),
-): Reservation => ({
+/**
+ * `now` is REQUIRED, deliberately.
+ *
+ * It defaulted to `new Date().toISOString()`, so `effectiveState` was computed against
+ * wall clock even when the operation had been handed an explicit `now` — the injected
+ * clock existed and was silently ignored by every caller that forgot to pass it. That
+ * is invisible until real time crosses a boundary the test data assumed, and then it
+ * looks like flakiness rather than a bug: this engine's suite began failing hours after
+ * it was last green, with nothing changed.
+ *
+ * Required, the compiler finds every caller. A default here cannot.
+ */
+const toReservation = (r: ReservationRow, now: string): Reservation => ({
   id: r.id,
   resourceId: r.resource_id,
   startsAt: r.starts_at,
@@ -550,7 +559,7 @@ export function holdReservation(
       fillTarget: input.fillTarget ?? null,
     },
   });
-  return toReservation(getRow(ctx, id));
+  return toReservation(getRow(ctx, id), now);
 }
 
 /**
@@ -592,7 +601,7 @@ export function confirmReservation(
       participantCount: activeParticipants(ctx, row.id).length,
     },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
 }
 
 /**
@@ -624,7 +633,7 @@ export function expireReservation(
       participantCount: activeParticipants(ctx, row.id).length,
     },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), now);
 }
 
 /**
@@ -679,7 +688,7 @@ export function joinReservation(
   const reservation =
     filled && row.state === 'held'
       ? confirmReservation(ctx, { reservationId: row.id, now })
-      : toReservation(getRow(ctx, row.id));
+      : toReservation(getRow(ctx, row.id), now);
 
   return { participant, reservation };
 }
@@ -757,12 +766,12 @@ export function leaveReservation(
       fillTarget: row.fill_target,
     },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), now);
 }
 
 export function cancelReservation(
   ctx: OperationContext,
-  input: { reservationId: string; reason?: string },
+  input: { reservationId: string; reason?: string; now?: string },
 ): Reservation {
   const row = getRow(ctx, input.reservationId);
   requireState(row, 'held', 'confirmed');
@@ -781,7 +790,7 @@ export function cancelReservation(
       participantCount: activeParticipants(ctx, row.id).length,
     },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
 }
 
 /**
@@ -849,12 +858,12 @@ export function moveReservation(
       participantCount: activeParticipants(ctx, row.id).length,
     },
   });
-  return toReservation(getRow(ctx, row.id), now);
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
 }
 
 export function startReservation(
   ctx: OperationContext,
-  input: { reservationId: string },
+  input: { reservationId: string; now?: string },
 ): Reservation {
   const row = getRow(ctx, input.reservationId);
   requireState(row, 'confirmed');
@@ -866,7 +875,7 @@ export function startReservation(
     piiClass: 'none',
     payload: { reservationId: row.id, resourceId: row.resource_id },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
 }
 
 /**
@@ -877,7 +886,7 @@ export function startReservation(
  */
 export function completeReservation(
   ctx: OperationContext,
-  input: { reservationId: string },
+  input: { reservationId: string; now?: string },
 ): Reservation {
   const row = getRow(ctx, input.reservationId);
   requireState(row, 'confirmed', 'in_service');
@@ -897,10 +906,13 @@ export function completeReservation(
       participantCount: activeParticipants(ctx, row.id).length,
     },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
 }
 
-export function markNoShow(ctx: OperationContext, input: { reservationId: string }): Reservation {
+export function markNoShow(
+  ctx: OperationContext,
+  input: { reservationId: string; now?: string },
+): Reservation {
   const row = getRow(ctx, input.reservationId);
   requireState(row, 'confirmed', 'in_service');
   ctx.sql.exec(`UPDATE booking_reservations SET state = 'no_show' WHERE id = ?`, [row.id]);
@@ -917,7 +929,7 @@ export function markNoShow(ctx: OperationContext, input: { reservationId: string
       participantCount: activeParticipants(ctx, row.id).length,
     },
   });
-  return toReservation(getRow(ctx, row.id));
+  return toReservation(getRow(ctx, row.id), nowOr(input.now));
 }
 
 export function getReservation(
