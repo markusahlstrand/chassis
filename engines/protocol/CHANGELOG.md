@@ -1,5 +1,67 @@
 # @substrat-run/engine-protocol
 
+## 0.4.0
+
+### Minor Changes
+
+- 3336a17: **engine-protocol: signed documents and asynchronous, non-principal signatures.**
+
+  The engine covered checklists signed in-app by the authenticated principal, now. It now
+  covers documents the engine never sees, signed asynchronously by parties who may have no
+  account at all — which is what a BankID/Scrive flow actually is.
+
+  **Freezing is now a transition separate from signing.** This closes a real defect rather than
+  adding a feature: freezing used to be a side effect of `signProtocol`, which was sound only
+  because signing is synchronous. Anything asynchronous left the instance `open` — and
+  therefore writable — for the entire time it sat at a provider, so the document a signatory
+  saw could drift from the content that was hashed, with nothing detecting it. That affected
+  checklists signed with BankID exactly as much as contracts.
+
+  New state machine:
+
+  ```
+  open ──requestSignatures──> pending_signature ──all parties signed──> signed
+    │                                │
+    │                                └── cancelSignatureRequests ──> open (renegotiate)
+    └──signProtocol (in-app)──────────────────────────────────────> signed
+  ```
+
+  - **`protocol_signature_requests`** — the missing noun. One row per party a document was sent
+    to. Makes multi-party expressible: an instance reaches `signed` only when _every_ requested
+    party has signed, and a declined request is not completion.
+  - **Signatories are data, not context** — `{ kind: 'principal', ref: PrincipalId } | { kind:
+'external', ref: DataSubjectId }`. The external form follows `engines/booking`'s `partyRef`:
+    opaque and shreddable, so crypto-shredding can key erasure on someone with no principal.
+    `method` and `evidence_ref` were reserved columns no code path could write; they now have one.
+  - **Two content kinds** — `checklist` (unchanged) and `document`, whose content lives in the
+    vertical and reaches the engine only as `(contentRef, contentHash)`. Modelling a contract as
+    a degenerate one-item checklist was rejected: the engine would attest to the sentence "I
+    accept this contract" and nothing else.
+
+  Backward compatibility: the checklist hash recipe is byte-identical, and no stored
+  `content_json` is rewritten (the hash covers that string verbatim), so **every signature made
+  before this change still verifies**. Templates predating the `kind` discriminant parse as
+  checklists. Migration `0002-signature-requests` rebuilds the three data tables and backfills
+  `frozen_hash` from each instance's earliest signature; the upgrade path is covered by a test
+  that starts a scope on `0001`, writes 0001-era rows, and brings the real migration list to it.
+
+  New permission keys: `protocol:bind`, `protocol:request-signature`,
+  `protocol:record-signature`. All three are held by **no role** in any demo — the third
+  deliberately so, since it speaks for an external provider rather than for a person.
+
+  Not built, and now tracked: webhook ingress (#96) and an inbound authority seam that would let
+  a provider callback invoke a scope operation (#97). Both gaps are in the kernel, not the
+  engine. `recordSignature` is shaped to be callable by that ingress when it lands.
+
+  `@substrat-run/engine-test-kit`: `EmittedEvent` now exposes `piiClass` and `subjectId`, so a
+  test can assert that an event names a data subject who is not the acting principal.
+
+### Patch Changes
+
+- Updated dependencies [27872cc]
+  - @substrat-run/kernel@0.9.0
+  - @substrat-run/contracts@0.9.0
+
 ## 0.3.6
 
 ### Patch Changes
@@ -65,7 +127,7 @@ immutable)` instead of naming the Swedish _fakturaunderlag_, and the protocol
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-                  z.object({ facility: entityRef, unitPrice: money })
+                    z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is

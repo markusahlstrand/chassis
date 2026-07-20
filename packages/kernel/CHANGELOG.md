@@ -1,5 +1,33 @@
 # @substrat-run/kernel
 
+## 0.9.0
+
+### Minor Changes
+
+- 27872cc: Scopes are provisioned as `provisioning` and activated on confirmation (K-31).
+
+  `provisionScope` wrote the directory row as `active`, so the row claimed a usable
+  scope before anything had built one — and only the vertical can build one, because the
+  DO class bundles the modules and lives in the vertical's deployment. The `provisioning`
+  state existed in the enum for exactly this and was unused.
+
+  `HostAdmin.activateScope` moves `provisioning → active`, through the same transition
+  graph the other lifecycle moves use, so it is audited and cannot revive a suspended
+  scope. `getScope` refuses anything not active, so an unconfirmed row is inert rather
+  than misleading.
+
+  `ControlPlaneClient.activateScope` is the push-mode equivalent, and the control-plane
+  API gains `POST /tenants/:t/scopes/:s/activate`.
+
+  Migrations are still attempted for a `provisioning` scope before it is refused, so the
+  lazy retry and its attempt counter survive — they are the only self-healing there is
+  until the reconciliation sweep exists. A scope held back by a failed migration now
+  reports the migration error rather than a bare "not active".
+
+### Patch Changes
+
+- @substrat-run/contracts@0.9.0
+
 ## 0.8.0
 
 ### Patch Changes
@@ -164,7 +192,7 @@ surface)` a router asserted in `x-substrat-*` headers and decides whether to tru
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-                z.object({ facility: entityRef, unitPrice: money })
+                  z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is
