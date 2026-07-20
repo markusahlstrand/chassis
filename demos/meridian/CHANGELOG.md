@@ -1,5 +1,16 @@
 # @substrat-run/demo-hr
 
+## 0.0.5
+
+### Patch Changes
+
+- Updated dependencies [3336a17]
+- Updated dependencies [27872cc]
+  - @substrat-run/engine-protocol@0.4.0
+  - @substrat-run/kernel@0.9.0
+  - @substrat-run/adapter-sqlite@0.9.0
+  - @substrat-run/contracts@0.9.0
+
 ## 0.0.4
 
 ### Patch Changes
