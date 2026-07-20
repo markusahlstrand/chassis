@@ -363,9 +363,44 @@ capability anywhere in the repo, [master-plan.md §6](../master-plan.md) puts ge
 build list against a documents engine that does not exist, and
 [engine-protocol.md §7](engine-protocol.md) lists PDF rendering as an explicit non-goal.
 
-Scrive has `setfile` separate from `new`, and supports template documents, so this may be far
-smaller than "the documents engine" — plausibly a single-purpose renderer for one avtal, or a
-Scrive-side template. **Worth an hour of investigation before it is planned as a project.**
+### 6.1 The PDF question, answered
+
+Investigated. Three findings:
+
+1. **Scrive has no HTML/text → PDF endpoint.** It takes an uploaded file, or a template that
+   already exists in Scrive.
+2. **The template path is real**: `POST /api/v2/documents/newfromtemplate/{template_id}`
+   uploads nothing. But per-document values must be threaded as **signatory fields**, so an
+   avtal's salary and start date get modelled as attributes of a person rather than of the
+   document — and the template itself then lives in Scrive's UI, outside version control and
+   outside the protocol engine's immutable-template guarantee.
+3. **Generating it ourselves is far smaller than "the documents engine".** PDF is a text
+   format; a single page of text needs no library and no font embedding, because Helvetica is
+   one of the base-14 fonts every reader ships. A working prototype — valid PDF 1.4, correct
+   Swedish text — is **34 lines and 1.1 KB of output**, using only Web-standard APIs, so it
+   runs unchanged in Workers.
+
+**Recommendation: generate it, in the connector, for v0.** The decisive argument is not size,
+it is consistency: the bytes we send to Scrive are derived from the same rows the content hash
+covers, so the artifact and the attestation cannot drift. With a Scrive-side template they are
+two independent renderings of the same intent, and nothing checks that they agree.
+
+Keep the documents engine (master plan §6) for when a customer wants branded, laid-out output.
+A Scrive-side template remains available per-customer without any code change.
+
+::: danger The sharp edge, found by rendering rather than parsing
+The first prototype produced a PDF that `file(1)` accepted, that parsed cleanly, and whose
+em-dash rendered as **`€24`** and ellipsis as **`€46`**. Anything outside the character map
+fell through and was silently mangled.
+
+PDF text encoding is WinAnsi (CP1252), which differs from Latin-1 exactly in `0x80`–`0x9F`,
+which is exactly where typographic punctuation lives. So the failure mode is silent
+substitution in a legal document — and it is invisible to every check short of looking at the
+rendered page.
+
+The mitigation is to **throw on any character that cannot be encoded**, never approximate. A
+contract that fails to render is recoverable; one that renders wrongly and gets signed is not.
+:::
 
 ---
 
