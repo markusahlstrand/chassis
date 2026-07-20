@@ -193,4 +193,84 @@ describe('router', () => {
     expect(body).not.toContain(T);
     expect(body).not.toContain('acme');
   });
+
+  // -- transient dispatch failures (K-28's second finding) -------------------
+
+  /** A vertical that fails the first N attempts the way a cold colo does. */
+  function flakyVertical(failures: number, message = 'Worker not found.') {
+    let attempts = 0;
+    return {
+      binding: {
+        fetch: async () => {
+          attempts += 1;
+          if (attempts <= failures) throw new Error(message);
+          return new Response('ok');
+        },
+      } as unknown as Fetcher,
+      attempts: () => attempts,
+    };
+  }
+
+  const envWith = (binding: Fetcher) =>
+    ({
+      CONTROL_PLANE: directory({ 'acme.example.com': row() }),
+      VERTICAL_FSM: binding,
+    }) as unknown as Env;
+
+  it('retries once when the vertical is briefly not found', async () => {
+    // The window we measured was ~15s and self-healing. Failing the tenant outright,
+    // which is Cloudflare's documented advice for this error, would turn a
+    // propagation gap into a hard error for whoever landed in a cold colo.
+    const fsm = flakyVertical(1);
+    const res = await worker.fetch(get('https://acme.example.com/'), envWith(fsm.binding));
+    expect(res.status).toBe(200);
+    expect(fsm.attempts()).toBe(2);
+  });
+
+  it('gives up after one retry rather than hanging on a script that is really gone', async () => {
+    // Same error, permanent cause: a deleted vertical or a bad channel pointer. A
+    // misconfiguration must fail fast, not retry forever.
+    const fsm = flakyVertical(99);
+    const res = await worker.fetch(get('https://acme.example.com/'), envWith(fsm.binding));
+    expect(res.status).toBe(502);
+    expect(fsm.attempts()).toBe(2);
+  });
+
+  it('does NOT retry a request with a body', async () => {
+    // If the first attempt reached the vertical, replaying it could run the same
+    // mutation twice. A double-charged customer is worse than a 502.
+    const fsm = flakyVertical(1);
+    const post = new Request('https://acme.example.com/api/orders', {
+      method: 'POST',
+      body: JSON.stringify({ total: '100.00' }),
+    });
+    await expect(worker.fetch(post, envWith(fsm.binding))).rejects.toThrow(/Worker not found/);
+    expect(fsm.attempts()).toBe(1);
+  });
+
+  it('does not retry an unrelated error', async () => {
+    // Only the propagation signature is retryable. Retrying real bugs hides them
+    // and doubles their blast radius.
+    const fsm = flakyVertical(1, 'TypeError: undefined is not a function');
+    await expect(worker.fetch(get('https://acme.example.com/'), envWith(fsm.binding))).rejects.toThrow(
+      /TypeError/,
+    );
+    expect(fsm.attempts()).toBe(1);
+  });
+
+  it('re-asserts the node on the retry, rather than reusing a consumed request', async () => {
+    let seen: Request | undefined;
+    let attempts = 0;
+    const binding = {
+      fetch: async (req: Request) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('Worker not found.');
+        seen = req;
+        return new Response('ok');
+      },
+    } as unknown as Fetcher;
+    await worker.fetch(get('https://acme.example.com/'), envWith(binding));
+    expect(seen?.headers.get('x-substrat-tenant')).toBe(T);
+    expect(seen?.headers.get('x-substrat-scope')).toBe(S);
+  });
 });
