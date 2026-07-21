@@ -39,4 +39,24 @@ to a principal — how a provisioned instance's owner becomes usable. Verified e
 `workerd`: provision → sign-up → unlinked session 401 → link → the session resolves to the owner
 `via: better-auth` → an authenticated `hr/*` invoke succeeds on DO SQLite.
 
-**Incomplete:** Stage 3 (portal/router wiring) and Stage 4 (SPA assets) remain.
+**Stage 3 — connected mode (portal + router wiring).** The worker now reaches the SHARED control
+plane over HTTP (`ControlPlaneClient` via `CONTROL_PLANE_URL` + a `CONTROL_PLANE_SVC` service
+binding), and gates every request on `assertScopeActive(tenant, scope)` — so a suspend in the
+portal's console fails Meridian's next request closed across the deployment boundary. Guarded by
+`STANDALONE`, so `wrangler dev` and a single-tenant box stay self-contained (no gating on a plane
+that isn't running — verified: provision + invoke still 200 in standalone). The `/internal/provision`
+handshake (Stage 1) is what the portal's create-instance flow calls. Adds the
+`@substrat-run/control-plane-api` dep.
+
+The router/control-plane `VERTICAL_MERIDIAN` service bindings are deliberately **not** added here:
+per those configs' own comments, a vertical is bound only once its worker exists, "rather than
+dangling a binding to a service that does not exist." They are deploy steps, in order:
+
+1. Create the D1 + apply auth migration, `wrangler secret put` PLATFORM_SECRET / ROUTER_SECRET /
+   SERVICE_TOKEN (matching the control plane's + router's), then `pnpm cf:deploy` this worker.
+2. Add `VERTICAL_MERIDIAN → substrat-meridian` to `apps/control-plane/wrangler.jsonc` (+ its
+   matching `PLATFORM_SECRET`) and `apps/router/wrangler.jsonc` (+ `ROUTER_SECRET`), and redeploy
+   both. The console's create-instance flow then provisions Meridian instances, and the router
+   fronts them by bound hostname.
+
+**Incomplete:** Stage 4 (SPA assets) remains.

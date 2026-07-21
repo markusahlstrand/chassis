@@ -35,8 +35,21 @@
 	// The poll-path timer (#96): one platform sweep per tick drains due deliveries
 	// (outbound Scrive dispatch + executor retries) and reconciles live connections.
 	// This is what the node runtime got from setInterval.
-	"triggers": { "crons": ["*/2 * * * *"] }
-	// No `vars`: ALLOW_DEV_HEADER / STANDALONE are set by `pnpm cf:dev` for local use
-	// only, so a real `wrangler deploy` stays fail-closed. Scrive creds + the
-	// CONNECTION_SECRET_KEY are `wrangler secret put`, never checked in.
+	"triggers": { "crons": ["*/2 * * * *"] },
+
+	// Connected mode (first-flow.md slice 4): reach the SHARED control plane so the
+	// portal provisions into this vertical and a suspend there gates requests here.
+	// The service binding is how worker-to-worker calls reach it (a same-zone
+	// workers.dev fetch is blocked, Cloudflare 1042). Omit both for a self-contained
+	// / `wrangler dev` box. Also needs `wrangler secret put SERVICE_TOKEN` (matching
+	// the control plane's) and `PLATFORM_SECRET` / `ROUTER_SECRET` (matching theirs).
+	"vars": {
+		"CONTROL_PLANE_URL": "https://substrat-control-plane.ahlstrand.workers.dev/api"
+	},
+	"services": [
+		{ "binding": "CONTROL_PLANE_SVC", "service": "substrat-control-plane" }
+	]
+	// ALLOW_DEV_HEADER / STANDALONE are set by `pnpm cf:dev` for local use only, so a
+	// real `wrangler deploy` stays fail-closed. Scrive creds + CONNECTION_SECRET_KEY
+	// are `wrangler secret put`, never checked in.
 }

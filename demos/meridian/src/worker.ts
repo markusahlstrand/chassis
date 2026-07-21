@@ -33,6 +33,7 @@ import {
   sweepScriveReconciliations,
   SCRIVE_TESTBED,
 } from '@substrat-run/connector-scrive';
+import { ControlPlaneClient, ControlPlaneError } from '@substrat-run/control-plane-api';
 import { MODULES, provisionMeridian, type ScriveCredential } from './provision.js';
 import { buildAuth } from './auth.js';
 import {
@@ -79,6 +80,34 @@ interface Env {
   SCRIVE_BASE_URL?: string;
   /** base64-encoded 32 bytes — seals connection credentials at rest (SecretBox). */
   CONNECTION_SECRET_KEY?: string;
+  /**
+   * Connected mode (first-flow.md slice 4): when set, this vertical gates every
+   * request on the SHARED control plane's lifecycle, so a suspend in the portal's
+   * console fails the next request closed across the deployment boundary.
+   * `SERVICE_TOKEN` authenticates the vertical to the control plane as a service.
+   * Unset → self-contained (the embedded control plane is the only authority),
+   * which is what `wrangler dev` and a single-tenant box use.
+   */
+  CONTROL_PLANE_URL?: string;
+  SERVICE_TOKEN?: string;
+  /** Service binding to the control-plane worker — worker-to-worker calls MUST use this. */
+  CONTROL_PLANE_SVC?: Fetcher;
+}
+
+/** A client for the shared control plane, or undefined when self-contained. */
+function cpClientFor(env: Env): ControlPlaneClient | undefined {
+  // Self-contained when standalone (wrangler dev / single-tenant box) or when no
+  // control-plane URL is set — so local dev never gates on a plane that isn't
+  // running, even though the deployed `vars.CONTROL_PLANE_URL` is present.
+  if (env.STANDALONE === 'true' || !env.CONTROL_PLANE_URL) return undefined;
+  const svc = env.CONTROL_PLANE_SVC;
+  return new ControlPlaneClient({
+    baseUrl: env.CONTROL_PLANE_URL,
+    actor: STAFF, // sent, but the control plane authenticates via the service token
+    serviceToken: env.SERVICE_TOKEN,
+    // Route through the service binding when deployed; plain fetch locally.
+    fetch: svc ? svc.fetch.bind(svc) : undefined,
+  });
 }
 
 /** base64 → bytes, web-standard (`atob` exists in workerd). */
@@ -235,6 +264,16 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
   const node = nodeFor(c.req.raw, c.env);
   const result = await resolvePrincipal(adaptersFor(c.env, c.req.raw, node), c.req.raw.headers);
   if (!result) throw new HTTPException(401, { message: 'unauthorized' });
+  // Connected mode: gate on the shared control plane's lifecycle. A suspend in the
+  // portal fails this request closed, across the deployment boundary.
+  const cp = cpClientFor(c.env);
+  if (cp) {
+    try {
+      await cp.assertScopeActive(node.tenantId, node.scopeId);
+    } catch (e) {
+      throw new HTTPException(403, { message: e instanceof ControlPlaneError ? e.message : String(e) });
+    }
+  }
   return hostFor(c.env).getScope(result.principal, node.tenantId, node.scopeId);
 }
 
