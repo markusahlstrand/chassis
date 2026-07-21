@@ -13,7 +13,7 @@ import {
 import { ulid, webCryptoSecretBox, type ScopeStub } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { PROTOCOL_PERM as PERM, protocolModule } from '@substrat-run/engine-protocol';
-import { ScriveMock, registerScriveConnector, type DispatchedDocument } from '../src/index.js';
+import { ScriveMock, registerScriveConnector, type ScriveDispatchState } from '../src/index.js';
 
 /**
  * The outbound half, end to end: a vertical freezes a document and asks for
@@ -29,7 +29,7 @@ describe('scrive connector — outbound dispatch', () => {
   let dir: string;
   let host: SqliteScopeHost;
   let scrive: ScriveMock;
-  let dispatched: DispatchedDocument[];
+  let connId: ReturnType<typeof connectionId.parse>;
   let staff = platformActorId.parse(ulid());
   let t = tenantId.parse(ulid());
   let s = scopeId.parse(ulid());
@@ -40,7 +40,7 @@ describe('scrive connector — outbound dispatch', () => {
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'substrat-scrive-'));
     scrive = new ScriveMock();
-    dispatched = [];
+
     staff = platformActorId.parse(ulid());
     t = tenantId.parse(ulid());
     s = scopeId.parse(ulid());
@@ -69,11 +69,6 @@ describe('scrive connector — outbound dispatch', () => {
     registerScriveConnector(host, {
       baseUrl: 'https://api-testbed.scrive.test',
       callbackUrl: (instanceId) => `https://vertical.test/hooks/scrive/${instanceId}-secret`,
-      // THE #97 SEAM, supplied by the test because the kernel cannot supply it.
-      // Nothing in a real deployment can write this back into the scope yet.
-      onDispatched: async (report) => {
-        dispatched.push(report);
-      },
       // Retry immediately, so a test can watch a failure recover rather than
       // asserting that a timer it cannot advance would eventually fire.
       retry: { baseDelayMs: 0 },
@@ -104,8 +99,9 @@ describe('scrive connector — outbound dispatch', () => {
       roleKey: 'hr',
       node: { tenantId: t, scopeId: s },
     });
+    connId = connectionId.parse(ulid());
     await host.admin.createConnection(staff, {
-      id: connectionId.parse(ulid()),
+      id: connId,
       tenantId: t,
       vertical: 'meridian',
       provider: 'scrive',
@@ -129,6 +125,12 @@ describe('scrive connector — outbound dispatch', () => {
     await host.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  /** The connector's dispatch ledger row for an instance, if any. */
+  const dispatchState = (instanceId: string) =>
+    host.admin.getConnectorState(connId, `scrive:dispatch:${instanceId}`) as Promise<
+      ScriveDispatchState | undefined
+    >;
 
   /** Instantiate → bind → request signatures for two parties of different kinds. */
   const issue = async () => {
@@ -177,10 +179,52 @@ describe('scrive connector — outbound dispatch', () => {
     // A capability URL, because Scrive's callbacks carry no signature to verify.
     expect(doc!.callbackUrl).toContain(sent.instance.id);
 
-    // And the id came back to the seam that will one day persist it.
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]!.externalRef).toBe(doc!.id);
-    expect(dispatched[0]!.requestIds).toEqual(sent.requests.map((r) => r.id));
+    // The dispatch is recorded in the connector's directory ledger — the id, so
+    // a redelivery can find it and skip, and the request ids the poll driver
+    // will later need to record signatures against.
+    const state = await dispatchState(sent.instance.id);
+    expect(state!.documentId).toBe(doc!.id);
+    expect(state!.requestIds).toEqual(sent.requests.map((r) => r.id));
+    expect(state!.scopeId).toBe(s);
+  });
+
+  it('skips a dispatch already recorded — the idempotency guard', async () => {
+    // At-least-once delivery means the handler can run twice for one event; the
+    // second run must NOT create a second contract. The guard is a directory
+    // ledger read, so seeding it is exactly "this was already dispatched".
+    const inst = await stub.invoke<{ id: string }>('protocol/instantiate', {
+      templateKey: 'anstallningsavtal',
+      entityType: EMPLOYEE.entityType,
+      entityId: EMPLOYEE.entityId,
+    });
+    await stub.invoke('protocol/bind-document', {
+      instanceId: inst.id,
+      contentRef: { entityType: 'employment-terms', entityId: '01JTERMS000000000000000009' },
+      contentHash: 'ef'.repeat(32),
+    });
+    await host.admin.putConnectorState(connId, `scrive:dispatch:${inst.id}`, {
+      documentId: 'already-sent',
+      instanceId: inst.id,
+      requestIds: [],
+      scopeId: s,
+      tenantId: t,
+      dispatchedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    await stub.invoke('protocol/request-signatures', {
+      instanceId: inst.id,
+      method: 'scrive',
+      parties: [
+        { label: 'Arbetsgivare', kind: 'principal', signatureKind: 'primary' },
+        { label: 'Anställd', kind: 'external' },
+      ],
+    });
+
+    // The connector found the ledger row and did nothing — no second document.
+    expect(scrive.documents.size).toBe(0);
+    // And the ledger is untouched (it did not overwrite with a new dispatch).
+    const state = await dispatchState(inst.id);
+    expect(state!.documentId).toBe('already-sent');
   });
 
   it('does not answer for a provider that is not Scrive', async () => {
@@ -202,7 +246,6 @@ describe('scrive connector — outbound dispatch', () => {
       parties: [{ label: 'Anställd', kind: 'external' }],
     });
     expect(scrive.documents.size).toBe(0);
-    expect(dispatched).toEqual([]);
   });
 
   it('records provider failure on the connection and retries rather than losing the request', async () => {
@@ -211,14 +254,16 @@ describe('scrive connector — outbound dispatch', () => {
 
     // The operation succeeded — the freeze is committed and the request rows
     // exist. Only the delivery failed, and that is not the caller's problem.
+    const [listed] = await stub.invoke<{ instance: { id: string } }[]>('protocol/list-for-entity', {
+      entityType: EMPLOYEE.entityType,
+      entityId: EMPLOYEE.entityId,
+    });
+    const instanceId = listed!.instance.id;
     const detail = await stub.invoke<{ instance: { status: string } }>('protocol/get', {
-      instanceId: (await stub.invoke<{ instance: { id: string } }[]>('protocol/list-for-entity', {
-        entityType: EMPLOYEE.entityType,
-        entityId: EMPLOYEE.entityId,
-      }))[0]!.instance.id,
+      instanceId,
     });
     expect(detail.instance.status).toBe('pending_signature');
-    expect(dispatched).toEqual([]);
+    expect(await dispatchState(instanceId)).toBeUndefined(); // nothing recorded
 
     // Health landed on the connection…
     const [conn] = await host.admin.listConnections(staff, { tenantId: t });
@@ -235,7 +280,6 @@ describe('scrive connector — outbound dispatch', () => {
     const report = await host.drainDue(t, s);
     expect(report.delivered).toBe(1);
     expect(scrive.documents.size).toBe(1);
-    expect(dispatched).toHaveLength(1);
 
     // Health recovered with it.
     const [healed] = await host.admin.listConnections(staff, { tenantId: t });
@@ -251,7 +295,12 @@ describe('scrive connector — outbound dispatch', () => {
     // Nothing was sent, and nothing was recorded as sent — the two together are
     // what distinguish a refused dispatch from a silent no-op.
     expect(scrive.documents.size).toBe(0);
-    expect(dispatched).toEqual([]);
+    const [summ0] = await stub.invoke<{ instance: { id: string } }[]>('protocol/list-for-entity', {
+      entityType: EMPLOYEE.entityType,
+      entityId: EMPLOYEE.entityId,
+    });
+    expect(await dispatchState(summ0!.instance.id)).toBeUndefined();
+    void summ0;
 
     // The freeze still committed: the operation is not the delivery.
     const [summary] = await stub.invoke<{ instance: { status: string } }[]>(

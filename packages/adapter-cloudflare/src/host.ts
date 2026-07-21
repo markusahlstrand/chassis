@@ -291,6 +291,8 @@ interface ControlPlaneStub {
   ): Promise<void>;
   revokeConnection(id: string, at: string): Promise<boolean>;
   recordConnectionUse(id: string, error: string | null, at: string): Promise<void>;
+  putConnectorState(id: string, key: string, value: string, at: string): Promise<void>;
+  getConnectorState(id: string, key: string): Promise<string | undefined>;
   linkIdentity(
     provider: string,
     externalId: string,
@@ -1572,6 +1574,17 @@ export class CloudflareScopeHost implements ScopeHost {
           outcome.ok ? null : outcome.error,
           new Date().toISOString(),
         );
+      },
+
+      putConnectorState: async (id: ConnectionId, key: string, value: unknown) => {
+        // JSON on the coordinator; the DO stores an opaque string, the same
+        // division that keeps the SecretBox off the DO.
+        await this.cp.putConnectorState(id, key, JSON.stringify(value ?? null), new Date().toISOString());
+      },
+
+      getConnectorState: async (id: ConnectionId, key: string) => {
+        const raw = await this.cp.getConnectorState(id, key);
+        return raw === undefined ? undefined : (JSON.parse(raw) as unknown);
       },
 
       linkIdentity: async (actor, input: IdentityLink) => {

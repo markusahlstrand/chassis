@@ -10,23 +10,26 @@ with `se_bankid` → start.
 
 It is `private` and unpublished on purpose. Four things are missing, none of them here:
 
-1. **Writing back into the scope** ([#97](https://github.com/substrat-run/substrat/issues/97)).
-   The provider's document id belongs on `protocol_signature_requests.external_ref`, and a
-   recorded signature belongs on the instance — both in the *scope* database. Host code cannot
-   write there: `ScopeHost.getScope` demands a `PrincipalId` and a connector is not one.
+1. ~~**Dispatch is not idempotent.**~~ **Done.** A redelivery once created a *second* Scrive
+   document — duplicate legal paperwork to real signatories. The connector now records each
+   dispatch in a directory-side ledger (`ctx.admin.putConnectorState`, keyed by the connection)
+   and skips if a prior dispatch is found. Directory-side because a connector runs *inside* the
+   scope's dispatch and re-entering the scope actor deadlocks (verified). A narrow residual
+   remains — if the ledger write itself fails after the provider `start` succeeds, the retry
+   still duplicates — closable with provider-side dedup via the `substrat_instance` tag the
+   connector already sets, once a list-by-tag query lands.
 
-   The consequence is not cosmetic. Delivery is at-least-once, so **a retried dispatch creates a
-   second Scrive document** — duplicate legal paperwork sent to real signatories — because
-   nothing recorded that the first one exists. That is why `onDispatched` is a *required*
-   option: a deployment that cannot persist the id cannot use this connector.
+2. ~~**Connector state has no home.**~~ **Done** — the ledger above is that home.
 
-2. **Connector state has no home.** Even the mapping "this event → that Scrive document" has
-   nowhere to live outside the scope.
+3. **Recording the signature back** ([#97](https://github.com/substrat-run/substrat/issues/97)).
+   When a party signs, the signature belongs on the protocol instance in the *scope*. This is
+   the poll driver's job, not the dispatch handler's: it runs as a top-level operation through
+   `getConnectorScope` (the connection acting as itself), where re-entering the scope is safe.
 
-3. **Nothing schedules a poll.** There is no cron trigger, queue or Durable Object alarm in any
+4. **Nothing schedules a poll.** There is no cron trigger, queue or Durable Object alarm in any
    wrangler config. `drainDue` exists; nothing calls it on a timer.
 
-4. **No document store.** `attachmentTargets` is declared in the manifest contract and
+5. **No document store.** `attachmentTargets` is declared in the manifest contract and
    implemented nowhere, so there is no place for rendered bytes.
 
 ## What it therefore sends

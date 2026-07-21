@@ -174,11 +174,17 @@ export class ScriveApi {
   /** Parties, callback URL and title, in one `document=` form field. */
   async update(
     documentId: string,
-    patch: { title?: string; parties?: ScriveParty[]; callbackUrl?: string },
+    patch: {
+      title?: string;
+      parties?: ScriveParty[];
+      callbackUrl?: string;
+      tags?: { name: string; value: string }[];
+    },
   ): Promise<ScriveDocRef> {
     const document = {
       ...(patch.title ? { title: patch.title } : {}),
       ...(patch.callbackUrl ? { api_callback_url: patch.callbackUrl } : {}),
+      ...(patch.tags ? { tags: patch.tags } : {}),
       ...(patch.parties
         ? {
             parties: patch.parties.map((p) => ({
