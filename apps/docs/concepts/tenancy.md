@@ -32,7 +32,7 @@ type Scope = {
   name: string;
   status: 'provisioning' | 'active' | 'suspended' | 'archiving' | 'archived';
   storageShape: 'A' | 'B';
-  jurisdiction: 'eu' | null;
+  jurisdiction: 'eu' | 'us' | 'global';  // fixed at provisioning; 'global' is unconstrained
   schemaVersion: string; // last applied migration journal entry
   // Non-null when the scope's last migration attempt FAILED. The scope fails
   // closed and serves nothing; this is what stops it rendering as healthy.
@@ -83,8 +83,9 @@ host.admin.createTenant(actor, { id: tenantId, slug, name });
 await host.provisionScope(actor, {
   tenantId,
   scopeId,
-  storageShape: 'A',    // optional
-  jurisdiction: 'eu',   // optional; immutable once set
+  storageShape: 'A',        // optional
+  jurisdiction: 'global',   // optional (defaults to 'global'); immutable once set.
+                            // 'eu'/'us' are gated until Regional Services is in place.
 });
 ```
 

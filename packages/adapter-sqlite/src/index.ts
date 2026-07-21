@@ -1591,7 +1591,11 @@ export class SqliteScopeHost implements ScopeHost {
         name: r.name,
         status: r.status,
         storageShape: r.storage_shape,
-        jurisdiction: r.jurisdiction,
+        // A row written before `global` existed as a name stored NULL for
+        // "unconstrained"; that is exactly `global` now (K-32). Coerce on read so
+        // a legacy row parses instead of throwing against the non-nullable enum —
+        // the same "held shut at parse" the slug default above relies on.
+        jurisdiction: r.jurisdiction ?? 'global',
         vertical: r.vertical,
         schemaVersion: r.schema_version,
         verticalVersionId: r.vertical_version_id,

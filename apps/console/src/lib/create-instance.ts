@@ -40,6 +40,12 @@ export interface CreateInstanceInput {
   verticalSlug: string;
   slug: string;
   name: string;
+  /**
+   * Fixed at provisioning and never editable after (K-7). Defaults to `global`,
+   * the only value the control plane accepts until `eu`/`us` enforcement exists
+   * (K-32).
+   */
+  jurisdiction?: 'eu' | 'us' | 'global';
   /** Optional. Without one the instance exists and is unreachable. */
   hostname?: string;
   /** Ids are caller-minted so every call is idempotent on retry (§4.1). */
@@ -93,7 +99,14 @@ export async function createInstance(
 
   await step('tenant', () => api.createTenant({ id: tenantId, slug, name }));
   await step('scope', () =>
-    api.provisionScope({ tenantId, scopeId, slug, name, vertical: verticalSlug }),
+    api.provisionScope({
+      tenantId,
+      scopeId,
+      slug,
+      name,
+      vertical: verticalSlug,
+      jurisdiction: input.jurisdiction ?? 'global',
+    }),
   );
   await step('instance', () =>
     api.provisionInstance(verticalSlug, { tenantId, scopeId, owner, slug, name }),

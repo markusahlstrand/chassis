@@ -148,7 +148,7 @@ describe('control-plane API', () => {
       kind: 'brf',
       name: 'Brf Vasastan',
       vertical: 'housing',
-      jurisdiction: 'eu',
+      jurisdiction: 'global',
     });
     expect(res.status).toBe(201);
     expect(await res.json()).toMatchObject({
@@ -157,7 +157,7 @@ describe('control-plane API', () => {
       slug: 'brf-vasastan',
       kind: 'brf',
       vertical: 'housing',
-      jurisdiction: 'eu',
+      jurisdiction: 'global',
       // Not `active`: the directory row exists before the vertical has built the
       // scope, and `activateScope` is the confirmation that it has (K-31).
       status: 'provisioning',
@@ -166,6 +166,19 @@ describe('control-plane API', () => {
     expect((await json(`/tenants/${t1}/scopes/${s1}/activate`, 'POST')).status).toBe(200);
     const activated = await (await req(`/tenants/${t1}/scopes/${s1}`)).json();
     expect(activated.status).toBe('active');
+  });
+
+  it('gates eu/us jurisdiction at the boundary until enforcement exists (K-32)', async () => {
+    // `eu` is a storable value but not a provisionable one: accepting it would
+    // record a residency claim with no mechanism. Refused with 400, not written.
+    const res = await json('/scopes', 'POST', {
+      tenantId: t1,
+      scopeId: s1,
+      slug: 'brf-eu',
+      name: 'Brf EU',
+      jurisdiction: 'eu',
+    });
+    expect(res.status).toBe(400);
   });
 
   it('refuses to provision under an unknown tenant with 409', async () => {

@@ -43,7 +43,8 @@ export interface ClientProvisionScopeInput {
   kind?: string;
   name?: string;
   vertical?: string | null;
-  jurisdiction?: 'eu' | null;
+  // The full storable vocabulary; the server gates which are accepted (K-32).
+  jurisdiction?: 'eu' | 'us' | 'global';
 }
 
 /** A non-2xx (or unreachable) control-plane response. `status` is 0 on a transport error. */

@@ -117,7 +117,8 @@ export function createApi(actor: string | null, baseUrl = '/api') {
       name?: string;
       vertical?: string | null;
       storageShape?: 'A' | 'B';
-      jurisdiction?: 'eu' | null;
+      // Only `global` is accepted today; `eu`/`us` are gated server-side (K-32).
+      jurisdiction?: 'eu' | 'us' | 'global';
     }) => post<Scope>('/scopes', input),
 
     // One method per audited transition, mirroring the API and HostAdmin. The

@@ -895,7 +895,9 @@ export class CloudflareScopeHost implements ScopeHost {
         name: r.name,
         status: r.status,
         storageShape: r.storage_shape,
-        jurisdiction: r.jurisdiction,
+        // Legacy NULL means "unconstrained", which is `global` now (K-32) — coerce
+        // on read so an old directory row parses against the non-nullable enum.
+        jurisdiction: r.jurisdiction ?? 'global',
         vertical: r.vertical,
         schemaVersion: r.schema_version,
         verticalVersionId: r.vertical_version_id,

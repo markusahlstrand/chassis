@@ -5,7 +5,7 @@ import {
   hostname as hostnameSchema,
   hostnameRegion,
   hostnameStatus,
-  jurisdiction,
+  provisionableJurisdiction,
   scopeId as scopeIdSchema,
   scopeStatus,
   storageShape,
@@ -59,7 +59,10 @@ const provisionScopeBody = z.object({
   name: z.string().optional(),
   vertical: z.string().nullable().optional(),
   storageShape: storageShape.optional(),
-  jurisdiction: jurisdiction.optional(),
+  // The gate: only `global` is accepted until `eu`/`us` enforcement exists (K-32).
+  // A request naming a jurisdiction we cannot yet honour is refused at the Zod
+  // boundary with 400, rather than recorded as a residency claim with no mechanism.
+  jurisdiction: provisionableJurisdiction.optional(),
 });
 
 const setTenantStatusBody = z.object({ status: tenantStatus });
