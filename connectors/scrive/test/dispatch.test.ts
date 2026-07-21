@@ -184,7 +184,7 @@ describe('scrive connector — outbound dispatch', () => {
     // will later need to record signatures against.
     const state = await dispatchState(sent.instance.id);
     expect(state!.documentId).toBe(doc!.id);
-    expect(state!.requestIds).toEqual(sent.requests.map((r) => r.id));
+    expect(state!.parties.map((p) => p.requestId)).toEqual(sent.requests.map((r) => r.id));
     expect(state!.scopeId).toBe(s);
   });
 
@@ -205,9 +205,11 @@ describe('scrive connector — outbound dispatch', () => {
     await host.admin.putConnectorState(connId, `scrive:dispatch:${inst.id}`, {
       documentId: 'already-sent',
       instanceId: inst.id,
-      requestIds: [],
       scopeId: s,
       tenantId: t,
+      vertical: 'meridian',
+      contentHash: 'ef'.repeat(32),
+      parties: [],
       dispatchedAt: '2026-01-01T00:00:00.000Z',
     });
 

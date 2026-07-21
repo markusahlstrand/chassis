@@ -1,8 +1,19 @@
 import { z } from 'zod';
-import type { DomainEvent } from '@substrat-run/contracts';
-import type { ConnectorHandler, ConnectorOptions, ScopeHost } from '@substrat-run/kernel';
+import { scopeId, tenantId, type ConnectionId, type DomainEvent } from '@substrat-run/contracts';
+import type {
+  ConnectorConnection,
+  ConnectorHandler,
+  ConnectorOptions,
+  FetchLike,
+  HostAdmin,
+  ScopeHost,
+} from '@substrat-run/kernel';
 import { ScriveApi, SCRIVE_TESTBED, type ScriveParty } from './api.js';
 import { renderPdf } from './pdf.js';
+
+// Web-standard everywhere this runs (Node, Workers); declared locally so the
+// connector pulls in no platform typings, exactly as `api.ts`/`mock.ts` do.
+declare const AbortSignal: { timeout(ms: number): unknown };
 
 export { ScriveApi, SCRIVE_TESTBED, SCRIVE_PRODUCTION } from './api.js';
 export { ScriveMock } from './mock.js';
@@ -15,27 +26,38 @@ export { renderPdf } from './pdf.js';
  * freezes a document and sends it for signature. This turns that into a Scrive
  * document: create → set file → set parties (BankID) → start.
  *
- * ## This connector is incomplete, and deliberately so
+ * ## The return path exists now (#97), but nothing schedules it yet
  *
- * The return path does not exist in the kernel yet, and rather than fake it,
- * the two things it needs are **constructor arguments**. A deployment that
- * cannot supply them cannot use this connector — which is the honest state of
- * the platform, expressed in the type system instead of a comment.
+ * The outbound half above is verified against the real testbed. The return path
+ * — recording a completed signature back onto the protocol instance — is
+ * `reconcileScriveDispatch` below. It could not be written until #97: a
+ * signature lives in the SCOPE database, `getScope` demands a `PrincipalId`, and
+ * a connector is not one. #97 gave a connection its own door
+ * (`getConnectorScope`) and made its authority an ordinary permission grant, so
+ * the driver records a signature by invoking `protocol/record-signature` as the
+ * connection itself.
  *
- * What is missing, precisely:
+ * What each earlier gap became:
  *
- * 1. **Recording the provider's document id** (`onDispatched`). The id belongs
- *    on `protocol_signature_requests.external_ref`, which lives in the SCOPE
- *    database. Host code cannot write there — `ScopeHost.getScope` demands a
- *    `PrincipalId` and a connector is not one (#97). Until it can, at-least-once
- *    delivery means a retried dispatch creates a SECOND Scrive document, because
- *    nothing recorded that the first one exists. That is not a small gap: it is
- *    duplicate legal documents sent to real signatories.
- * 2. **Recording a signature** (`onSigned`). Same wall, same reason.
+ * 1. **Recording the provider's document id / dispatch idempotency.** Solved
+ *    without #97 by a directory-side ledger (`ctx.admin.putConnectorState`): a
+ *    redelivery finds the row and skips instead of sending a SECOND document.
+ *    Directory-side because a connector runs INSIDE the scope's dispatch and
+ *    re-entering the scope actor deadlocks. A narrow residual remains (ledger
+ *    write failing after `start` succeeds) — closable with provider-side dedup
+ *    via the `substrat_instance` tag.
+ * 2. **Recording a signature.** Solved by `reconcileScriveDispatch` on the #97
+ *    seam — a top-level operation, OUTSIDE any dispatch, so re-entering the scope
+ *    is safe. `sweepScriveReconciliations` is the poll driver over it: it
+ *    enumerates the dispatch ledger (`listConnectorState`) and reconciles every
+ *    outstanding instance, so completion needs no per-instance caller.
  *
- * Two further gaps sit behind those and are not represented here at all:
- * connector state has no home, and nothing schedules a poll (there is no cron,
- * queue or alarm anywhere in the deployment).
+ * The one gap that remains: **nothing calls the sweep on a timer** (#96, poll
+ * path). There is no cron, queue or Durable Object alarm in any deployment yet —
+ * the same trigger `drainDue` still lacks — so `sweepScriveReconciliations` runs
+ * from a test or by hand today. That trigger, not the seam or the driver, is why
+ * the connector stays unpublished; it is a deployment concern, not connector
+ * code.
  */
 export interface ScriveConnectorOptions {
   /** `SCRIVE_TESTBED` by default; production needs a paid licence. */
@@ -54,20 +76,56 @@ export interface ScriveConnectorOptions {
 
 /**
  * What the connector remembers about a dispatch, stored per-connection in the
- * directory (`ctx.admin.putConnectorState`). Its whole job is idempotency: a
- * redelivery finds this and skips instead of creating a second document.
+ * directory (`ctx.admin.putConnectorState`).
+ *
+ * Two jobs. **Outbound idempotency:** a redelivery finds this row and skips
+ * instead of creating a second document. **The return path (#97):** the poll
+ * driver reads it to map a signed provider party back to the scope operation
+ * that records it — which needs, per party, the `requestId` it resolves and the
+ * `signatory` to attribute it to, plus the frozen `contentHash` `recordSignature`
+ * checks the provider against, and the `vertical` to reopen the connection under.
+ * None of that is derivable from Scrive's document, so it is captured here at
+ * dispatch, when the event still carries it.
  */
 export interface ScriveDispatchState {
   documentId: string;
   instanceId: string;
-  requestIds: string[];
   scopeId: string;
   tenantId: string;
+  /** The scope's vertical — half the key that reopens the connection to poll. */
+  vertical: string;
+  /**
+   * The frozen content hash from `protocol.signatures-requested`. Reported back
+   * verbatim on record: `recordSignature` re-derives the frozen hash and refuses
+   * a signature whose reported hash disagrees, so the document that was signed is
+   * provably the document that was frozen.
+   */
+  contentHash: string;
+  /**
+   * The dispatched parties, in the order sent to Scrive — which is the order
+   * Scrive returns them, so the Nth provider party is this Nth entry. Carries
+   * what `recordSignature` cannot get from the provider: the `requestId` to
+   * resolve and the substrat `ref`/`kind` to attribute the signature to.
+   */
+  parties: {
+    requestId: string;
+    label: string;
+    kind: 'principal' | 'external';
+    /** The substrat signatory, when known up front; null when identity is only learned at signing. */
+    ref: string | null;
+  }[];
+  /** Requests already recorded by a prior poll — so a re-poll is a no-op, not a double. */
+  recordedRequestIds?: string[];
   dispatchedAt: string;
 }
 
+/**
+ * The connector-state key prefix under which every dispatch ledger row lives —
+ * the handle the poll sweep enumerates by (`listConnectorState(id, prefix)`).
+ */
+const DISPATCH_PREFIX = 'scrive:dispatch:';
 /** The connector-state key for one signature request set. */
-const dispatchKey = (instanceId: string): string => `scrive:dispatch:${instanceId}`;
+const dispatchKey = (instanceId: string): string => `${DISPATCH_PREFIX}${instanceId}`;
 
 /** The payload half of `protocol.signatures-requested` this connector reads. */
 const signaturesRequested = z.object({
@@ -177,9 +235,16 @@ export function scriveConnector(options: ScriveConnectorOptions): ConnectorHandl
     const state: ScriveDispatchState = {
       documentId: doc.id,
       instanceId: payload.instanceId,
-      requestIds: payload.parties.map((p) => p.requestId),
       scopeId: ctx.scopeId,
       tenantId: ctx.tenantId,
+      vertical: ctx.vertical,
+      contentHash: payload.contentHash,
+      parties: payload.parties.map((p) => ({
+        requestId: p.requestId,
+        label: p.label,
+        kind: p.kind,
+        ref: p.ref,
+      })),
       dispatchedAt: event.occurredAt,
     };
     await ctx.admin.putConnectorState(conn.id, key, state);
@@ -209,4 +274,280 @@ export function registerScriveConnector(
       ...options.retry,
     },
   );
+}
+
+/** The outcome of reconciling one dispatched instance against the provider. */
+export interface ScriveReconcileResult {
+  /** The provider document reconciled. */
+  documentId: string;
+  /** Scrive's current document status (`pending`, `closed`, `rejected`, …). */
+  documentStatus: string;
+  /** Requests recorded as signed on THIS run (empty if nothing new completed). */
+  recorded: { requestId: string; signedAt: string }[];
+  /** Parties the provider reports as signed that the driver could not record, and why. */
+  skipped: { requestId: string; reason: string }[];
+  /** True once every party in the set has been recorded into the scope. */
+  complete: boolean;
+}
+
+/**
+ * The RETURN path (#97): read the provider's state for one dispatched instance
+ * and record any completed signatures back into the scope.
+ *
+ * This is the half the connector could not do until #97 landed. A provider's
+ * signature has to be written onto the protocol instance in the SCOPE, and a
+ * connector is not a `PrincipalId`, so `getScope` could not let it in. #97 gives
+ * the door a connection can walk through — `getConnectorScope(connectionId,
+ * scopeId)` returns a stub whose authority is the connection itself, and what it
+ * may do is an ordinary permission check against `connection:<id>` grants. So
+ * this records a signature by invoking `protocol/record-signature` on that stub;
+ * it works iff the connection was granted `protocol:record-signature`
+ * (`grantToConnection`), which appears in the permission diff like any grant.
+ *
+ * **Why a top-level function and not the dispatch handler.** A connector runs
+ * INSIDE the scope's dispatch, and re-entering the scope actor from there
+ * deadlocks (the reason dispatch idempotency lives in the directory, not the
+ * scope). Recording runs as its own top-level operation, outside any dispatch —
+ * which is exactly what a poll driver or a callback ingress is. Neither exists
+ * yet (nothing schedules this — issue #96); this is the reconcile step both will
+ * call, made correct and testable now, invoked by hand or by a test until a
+ * scheduler lands.
+ *
+ * Idempotent by construction: signed requests are remembered in the ledger, so a
+ * re-poll of a half-signed set records only what is newly done, and re-polling a
+ * fully-signed set records nothing.
+ *
+ * `fetch` is passed in because sanctioned egress is the host's to own and it
+ * exposes no top-level opener; the same `fetch` the host was built with is
+ * bound here to the connection (with health recorded via `recordConnectionUse`),
+ * mirroring what the dispatch context does internally.
+ */
+export async function reconcileScriveDispatch(
+  host: ScopeHost,
+  connectionId: ConnectionId,
+  instanceId: string,
+  options: { fetch: FetchLike; baseUrl?: string; timeoutMs?: number },
+): Promise<ScriveReconcileResult> {
+  const admin = host.admin;
+  const key = dispatchKey(instanceId);
+  const state = (await admin.getConnectorState(connectionId, key)) as ScriveDispatchState | undefined;
+  if (!state) {
+    throw new Error(
+      `no scrive dispatch recorded for instance ${instanceId} on connection ${connectionId} — ` +
+        `nothing to reconcile`,
+    );
+  }
+
+  // Read the provider's truth. A callback would only be a hint to do exactly
+  // this; the fact is `documents/{id}/get`.
+  const conn = await openScriveConnection(
+    admin,
+    options.fetch,
+    tenantId.parse(state.tenantId),
+    state.vertical,
+    options.timeoutMs ?? 30_000,
+  );
+  const doc = await new ScriveApi(conn, options.baseUrl ?? SCRIVE_TESTBED).get(state.documentId);
+
+  // The connection acting as itself (#97). Refuses a scope in another tenant or
+  // running another vertical by construction, and every write below is gated on
+  // the connection's own `protocol:record-signature` grant.
+  const scope = await host.getConnectorScope(connectionId, scopeId.parse(state.scopeId));
+
+  const recorded: { requestId: string; signedAt: string }[] = [];
+  const skipped: { requestId: string; reason: string }[] = [];
+  const done = new Set(state.recordedRequestIds ?? []);
+
+  for (const [i, party] of state.parties.entries()) {
+    if (done.has(party.requestId)) continue; // recorded on an earlier poll
+    const providerParty = doc.parties[i];
+    const signedAt = providerParty?.sign_time ?? null;
+    if (!signedAt) continue; // not signed yet
+
+    // Fail closed on a party-order mismatch rather than attributing a signature
+    // to the wrong request. The connector sends exactly the party set Scrive
+    // keeps, in order, so index alignment holds for this model; if a provider
+    // ever reorders, the name disagreeing is the signal to move to name-keyed
+    // matching — and until then this refuses to guess.
+    const providerName = providerParty?.fields?.find((f) => f.type === 'name')?.value;
+    if (providerName !== undefined && providerName !== party.label) {
+      skipped.push({
+        requestId: party.requestId,
+        reason: `provider party ${i} is '${String(providerName)}', dispatch expected '${party.label}' — refusing to attribute`,
+      });
+      continue;
+    }
+
+    if (!party.ref) {
+      // The request named no signatory up front and the connector does not
+      // extract the signer's identity from the provider (personnummer is direct
+      // PII we deliberately never persist), so there is no `ref` to attribute to.
+      skipped.push({
+        requestId: party.requestId,
+        reason: 'provider reports a signature but the request named no signatory ref to attribute it to',
+      });
+      continue;
+    }
+
+    try {
+      await scope.invoke('protocol/record-signature', {
+        requestId: party.requestId,
+        signatory: { kind: party.kind, ref: party.ref, label: party.label },
+        signedAt,
+        // Reported verbatim; `recordSignature` checks it against the re-derived
+        // frozen hash and fails closed on disagreement.
+        contentHash: state.contentHash,
+        // Where the proof lives at the provider — the sealed document.
+        evidenceRef: `scrive:document:${state.documentId}`,
+      });
+      recorded.push({ requestId: party.requestId, signedAt });
+      done.add(party.requestId);
+    } catch (err) {
+      // A request already resolved (a racing poll, or a redelivery) is not an
+      // error to this driver — the signature is on the instance, which is the
+      // goal. Anything else is real and propagates.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already/i.test(msg)) {
+        done.add(party.requestId);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // Remember what is recorded so a re-poll skips it without leaning on
+  // `recordSignature` throwing. Same row as the dispatch ledger, so the dispatch
+  // idempotency guard still finds it.
+  if (recorded.length) {
+    await admin.putConnectorState(connectionId, key, {
+      ...state,
+      recordedRequestIds: [...done],
+    } satisfies ScriveDispatchState);
+  }
+
+  return {
+    documentId: state.documentId,
+    documentStatus: doc.status,
+    recorded,
+    skipped,
+    complete: state.parties.every((p) => done.has(p.requestId)),
+  };
+}
+
+/** What one sweep of a connection's outstanding dispatches did. */
+export interface ScriveSweepResult {
+  /** Dispatch ledger rows enumerated for the connection. */
+  found: number;
+  /** Rows the ledger already shows fully recorded — not polled against the provider. */
+  skipped: number;
+  /** Rows reconciled against the provider this sweep. */
+  polled: number;
+  /** Instances that reached "every party signed" this sweep. */
+  completed: string[];
+  /** Instances polled but still awaiting at least one signature. */
+  outstanding: string[];
+  /** Per-instance reconcile failures; the sweep continues past them. */
+  failed: { instanceId: string; error: string }[];
+}
+
+/**
+ * The SCHEDULER's unit of work (#96, poll path): reconcile every outstanding
+ * dispatch for one connection against the provider.
+ *
+ * `reconcileScriveDispatch` records the signatures for ONE known instance; this
+ * is what finds the instances. It enumerates the dispatch ledger
+ * (`listConnectorState(connectionId, 'scrive:dispatch:')` — the read that method
+ * exists for) and reconciles each row that is not already fully recorded. A
+ * timer calls this; it holds no timer itself. That keeps the trigger a
+ * deployment concern (a Cloudflare cron or Durable Object alarm, the same home
+ * `drainDue` still needs) and this a plain, testable function.
+ *
+ * Robust by construction, because a poller must be: a row already complete per
+ * the ledger is skipped without touching the provider (so a finished signature
+ * is not re-fetched on every tick), and a provider error on one instance is
+ * recorded and stepped over rather than sinking the batch. Idempotent — running
+ * it twice over the same state records nothing the second time.
+ *
+ * Scoped to one connection deliberately: a connection is (tenant, vertical,
+ * provider), so a sweep never crosses a tenant. A platform sweeper iterates the
+ * connections it is responsible for and calls this for each.
+ */
+export async function sweepScriveReconciliations(
+  host: ScopeHost,
+  connectionId: ConnectionId,
+  options: { fetch: FetchLike; baseUrl?: string; timeoutMs?: number },
+): Promise<ScriveSweepResult> {
+  const entries = await host.admin.listConnectorState(connectionId, DISPATCH_PREFIX);
+  const result: ScriveSweepResult = {
+    found: entries.length,
+    skipped: 0,
+    polled: 0,
+    completed: [],
+    outstanding: [],
+    failed: [],
+  };
+
+  for (const { value } of entries) {
+    const state = value as ScriveDispatchState;
+    // The ledger already knows this one is done — don't poll a settled document.
+    const done = new Set(state.recordedRequestIds ?? []);
+    if (state.parties.length > 0 && state.parties.every((p) => done.has(p.requestId))) {
+      result.skipped += 1;
+      continue;
+    }
+    try {
+      const r = await reconcileScriveDispatch(host, connectionId, state.instanceId, options);
+      result.polled += 1;
+      (r.complete ? result.completed : result.outstanding).push(state.instanceId);
+    } catch (err) {
+      result.failed.push({
+        instanceId: state.instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Open the connection with egress bound to it — the same binding the dispatch
+ * context makes internally, rebuilt here from public `HostAdmin` methods because
+ * the host exposes no top-level opener. Health lands on the right connection via
+ * `recordConnectionUse`, exactly as a dispatched call's does.
+ *
+ * (The cleaner home is a host method that hands a `ConnectorConnection` to any
+ * caller, dispatch or poll; that is a kernel addition for when the scheduler
+ * lands, not a precondition for the record-back path.)
+ */
+async function openScriveConnection(
+  admin: HostAdmin,
+  fetchImpl: FetchLike,
+  tenant: ReturnType<typeof tenantId.parse>,
+  vertical: string,
+  timeoutMs: number,
+): Promise<ConnectorConnection> {
+  const open = await admin.openConnection(tenant, vertical, 'scrive');
+  if (!open) {
+    throw new Error(`no live 'scrive' connection for tenant ${tenant} / vertical '${vertical}'`);
+  }
+  return {
+    ...open,
+    fetch: async (input, init) => {
+      try {
+        const res = await fetchImpl(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+        await admin.recordConnectionUse(
+          open.id,
+          res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status} from scrive` },
+        );
+        return res;
+      } catch (err) {
+        await admin.recordConnectionUse(open.id, {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    },
+  };
 }

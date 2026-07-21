@@ -2,7 +2,7 @@
   "name": "@substrat-run/connector-scrive",
   "version": "0.0.1",
   "private": true,
-  "description": "Substrat connector: Scrive eSign (BankID). NOT PUBLISHED — the inbound half is blocked on kernel gaps (#97), so this cannot yet complete a signature.",
+  "description": "Substrat connector: Scrive eSign (BankID). NOT PUBLISHED — the return path lands on the #97 seam, but nothing schedules the poll yet (#96), so a signature does not complete on its own.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",

@@ -79,7 +79,7 @@ needs may not exist yet.
 
 | Connector | Category | Status | Provider |
 |---|---|---|---|
-| [Scrive](/connectors/scrive) | E-signing & identity | **Incomplete** — see its page | Scrive eSign (Swedish BankID) |
+| [Scrive](/connectors/scrive) | E-signing & identity | **Both halves built** — unpublished pending a deployment that schedules the poll, and BankID on the testbed | Scrive eSign (Swedish BankID) |
 
 Categories, as they will fill in (from the master plan's build list):
 

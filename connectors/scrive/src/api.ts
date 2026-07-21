@@ -65,6 +65,15 @@ export const scriveDocument = z.object({
         /** Set once that party has signed. */
         sign_time: z.string().nullable().optional(),
         authentication_method_to_sign: z.string().optional(),
+        /**
+         * The party's fields — read by the poll driver to cross-check that the
+         * provider's Nth party is still the dispatch's Nth party (name), before
+         * attributing a signature to a request. Kept so the reconcile can fail
+         * closed on a reorder rather than mis-record.
+         */
+        fields: z
+          .array(z.object({ type: z.string(), value: z.unknown() }))
+          .optional(),
       }),
     )
     .default([]),

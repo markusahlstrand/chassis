@@ -21,13 +21,36 @@ It is `private` and unpublished on purpose. Four things are missing, none of the
 
 2. ~~**Connector state has no home.**~~ **Done** — the ledger above is that home.
 
-3. **Recording the signature back** ([#97](https://github.com/substrat-run/substrat/issues/97)).
-   When a party signs, the signature belongs on the protocol instance in the *scope*. This is
-   the poll driver's job, not the dispatch handler's: it runs as a top-level operation through
-   `getConnectorScope` (the connection acting as itself), where re-entering the scope is safe.
+3. ~~**Recording the signature back**~~ **Done** ([#97](https://github.com/substrat-run/substrat/issues/97)).
+   When a party signs, the signature belongs on the protocol instance in the *scope*.
+   `reconcileScriveDispatch(host, connectionId, instanceId, { fetch })` reads
+   `documents/{id}/get`, maps each signed party back to its request, and records it by invoking
+   `protocol/record-signature` through `getConnectorScope` — the connection acting as itself,
+   as a top-level operation (not the dispatch handler, where re-entering the scope deadlocks).
+   The connection must hold `protocol:record-signature` (`grantToConnection`), which shows up in
+   the permission diff. Idempotent across polls; verified against `ScriveMock` advanced to
+   `closed`. The one thing a mock can't prove — Scrive's real `get` shape and party order —
+   waits on a testbed BankID round-trip (BankID-to-sign is disabled on the account).
 
-4. **Nothing schedules a poll.** There is no cron trigger, queue or Durable Object alarm in any
-   wrangler config. `drainDue` exists; nothing calls it on a timer.
+4. **The poll driver exists; nothing calls it on a timer.**
+   `sweepScriveReconciliations(host, connectionId, { fetch })` is the scheduler's unit of work:
+   it enumerates the dispatch ledger (`HostAdmin.listConnectorState(id, 'scrive:dispatch:')`) and
+   reconciles every outstanding instance, skipping ones the ledger already shows complete and
+   stepping past a provider error on any one instance. It is idempotent and scoped to one
+   connection (a connection never crosses a tenant). What is *still* missing is the **timer** —
+   there is no cron, queue or Durable Object alarm in any wrangler config, the same trigger
+   `drainDue` still lacks. A platform sweeper would, on a schedule, iterate the connections it
+   owns and call this for each:
+
+   ```ts
+   // in a Cloudflare Worker's scheduled() handler, or a DO alarm:
+   for (const connectionId of scriveConnections) {
+     await sweepScriveReconciliations(host, connectionId, { fetch });
+   }
+   ```
+
+   That trigger is a deployment concern, not connector code — which is why it, not the seam or
+   the driver, is the remaining reason the connector stays unpublished.
 
 5. **No document store.** `attachmentTargets` is declared in the manifest contract and
    implemented nowhere, so there is no place for rendered bytes.

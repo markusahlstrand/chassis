@@ -293,6 +293,7 @@ interface ControlPlaneStub {
   recordConnectionUse(id: string, error: string | null, at: string): Promise<void>;
   putConnectorState(id: string, key: string, value: string, at: string): Promise<void>;
   getConnectorState(id: string, key: string): Promise<string | undefined>;
+  listConnectorState(id: string, prefix?: string): Promise<{ key: string; value: string }[]>;
   linkIdentity(
     provider: string,
     externalId: string,
@@ -1587,6 +1588,13 @@ export class CloudflareScopeHost implements ScopeHost {
       getConnectorState: async (id: ConnectionId, key: string) => {
         const raw = await this.cp.getConnectorState(id, key);
         return raw === undefined ? undefined : (JSON.parse(raw) as unknown);
+      },
+
+      listConnectorState: async (id: ConnectionId, prefix?: string) => {
+        // The DO stores opaque strings; JSON lives on the coordinator, the same
+        // division get/put keep. Prefix filtering happened DO-side.
+        const rows = await this.cp.listConnectorState(id, prefix);
+        return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value) as unknown }));
       },
 
       linkIdentity: async (actor, input: IdentityLink) => {

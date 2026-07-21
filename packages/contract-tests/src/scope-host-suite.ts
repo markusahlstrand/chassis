@@ -591,6 +591,39 @@ export function scopeHostContractSuite(
         });
       });
 
+      it('enumerates state by prefix, ordered by key — the poll driver read', async () => {
+        const id = connectionId.parse(ulid());
+        await host.admin.createConnection(staff, {
+          id,
+          tenantId: t1,
+          vertical: 'connector-vertical',
+          provider: 'listable',
+          label: 'list test',
+          secret: { accessToken: 'x' },
+        });
+        // Two dispatch rows and one unrelated row under a different prefix.
+        await host.admin.putConnectorState(id, 'dispatch:inst-b', { documentId: 'doc-b' });
+        await host.admin.putConnectorState(id, 'dispatch:inst-a', { documentId: 'doc-a' });
+        await host.admin.putConnectorState(id, 'cursor', { at: 'somewhere' });
+
+        // Prefix narrows to the dispatch rows, ordered by key.
+        expect(await host.admin.listConnectorState(id, 'dispatch:')).toEqual([
+          { key: 'dispatch:inst-a', value: { documentId: 'doc-a' } },
+          { key: 'dispatch:inst-b', value: { documentId: 'doc-b' } },
+        ]);
+        // No prefix returns everything the connection holds.
+        expect((await host.admin.listConnectorState(id)).map((r) => r.key)).toEqual([
+          'cursor',
+          'dispatch:inst-a',
+          'dispatch:inst-b',
+        ]);
+        // A prefix that matches nothing is empty, not an error.
+        expect(await host.admin.listConnectorState(id, 'nope:')).toEqual([]);
+        // Another connection's state is never returned.
+        const other = connectionId.parse(ulid());
+        expect(await host.admin.listConnectorState(other, 'dispatch:')).toEqual([]);
+      });
+
       it('dies with the connection — revoke cascades', async () => {
         const id = connectionId.parse(ulid());
         await host.admin.createConnection(staff, {
