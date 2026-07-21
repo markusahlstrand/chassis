@@ -25,7 +25,18 @@ export type PiiClass = z.infer<typeof piiClass>;
 export const eventType = z.string().regex(/^[a-z0-9-]+\.[a-z0-9-]+$/);
 
 export const systemActor = z.object({ system: moduleId });
-export const actor = z.union([principalId, systemActor]);
+/**
+ * A CONNECTOR acted — an external provider's callback, effected through a
+ * connection (#97).
+ *
+ * A third member rather than a synthetic principal, for the reason
+ * `PlatformActorId` is branded separately from `PrincipalId`: a connector that
+ * reads as a person in the audit trail is worse than one that cannot act at
+ * all. The spine has to be able to say "Scrive did this" without naming a human
+ * who did not.
+ */
+export const connectorActor = z.object({ connection: z.string().min(1) });
+export const actor = z.union([principalId, systemActor, connectorActor]);
 export type Actor = z.infer<typeof actor>;
 
 const piiInvariant = (

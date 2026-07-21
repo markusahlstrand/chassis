@@ -297,6 +297,13 @@ export function defineScopeDO(
       principal: PrincipalId,
       tenantId: TenantId,
       scopeId: ScopeId,
+      /**
+       * Set when the caller is a CONNECTION rather than a person (#97). The
+       * coordinator has already checked that the connection is live and matches
+       * this scope's tenant and vertical; the DO uses it for the permission
+       * subject and the event actor, so those two can never disagree.
+       */
+      connectionId?: string,
     ): Promise<unknown> {
       await this.ensureMigrations();
       const handler = this.operations.get(operation);
@@ -308,7 +315,13 @@ export function defineScopeDO(
         // emitted events back as one — verified across `await` in workerd.
         try {
           await this.ctx.storage.transaction(async () => {
-            const ctx = this.operationContext(principal, tenantId, scopeId);
+            const ctx = this.operationContext(
+              principal,
+              tenantId,
+              scopeId,
+              undefined,
+              connectionId,
+            );
             await this.runGuards(operation, ctx, input);
             result = await (handler as OperationHandler<unknown, unknown>)(ctx, input);
           });
@@ -606,6 +619,7 @@ export function defineScopeDO(
       tenantId: TenantId,
       scopeId: ScopeId,
       systemActor?: { system: string },
+      connectionId?: string,
     ): OperationContext {
       const checker = this.checker;
       const relations = this.relations;
@@ -623,7 +637,7 @@ export function defineScopeDO(
             occurredAt: instant.parse(new Date().toISOString()),
             tenantId,
             scopeId,
-            actor: systemActor ?? principal,
+            actor: systemActor ?? (connectionId ? { connection: connectionId } : principal),
           });
           sql.exec(
             `INSERT INTO _substrat_outbox
@@ -658,7 +672,14 @@ export function defineScopeDO(
                   },
                 ],
               })
-            : checker.check(principal, permission, { tenantId, scopeId }, entity),
+            : checker.check(
+                connectionId
+                  ? { kind: 'connection', id: connectionId }
+                  : { kind: 'principal', id: principal },
+                permission,
+                { tenantId, scopeId },
+                entity,
+              ),
         link: (child: EntityRef, parent: EntityRef) => {
           const allowed = relations.get(child.entityType);
           if (!allowed?.has(parent.entityType)) {

@@ -4,6 +4,7 @@ import {
   type EntityRef,
   type Node,
   type PermissionKey,
+  type CheckSubject,
   type PrincipalId,
 } from '@substrat-run/contracts';
 
@@ -18,13 +19,21 @@ import {
  * against entity-narrowed grants (§4.2 rule 3).
  */
 export interface PermissionChecker {
+  /**
+   * `subject` rather than `principal` since #97: a connection can hold a grant,
+   * and must not be laundered through a principal to do it. Every existing
+   * caller passes `{ kind: 'principal', id }` and behaves exactly as before.
+   */
   check(
-    principal: PrincipalId,
+    subject: CheckSubject,
     permission: PermissionKey,
     node: Node,
     entity?: EntityRef,
   ): Promise<Decision>;
 }
+
+/** Convenience for the overwhelmingly common case. */
+export const asPrincipal = (id: PrincipalId): CheckSubject => ({ kind: 'principal', id });
 
 export class PermissionDenied extends Error {
   constructor(message: string) {

@@ -12,7 +12,9 @@ import {
   identityPool,
   instant,
   connection,
+  connectionGrant,
   connectionSecret,
+  subjectRef,
   createConnectionInput,
   moduleManifest,
   createOrgInput,
@@ -36,7 +38,9 @@ import {
   tenantRole,
   type AdminAction,
   type AccessLogEntry,
+  type CheckSubject,
   type Connection,
+  type ConnectionGrant,
   type ConnectionFilter,
   type ConnectionId,
   type ConnectionSecret,
@@ -75,6 +79,7 @@ import {
   type TenantStatus,
 } from '@substrat-run/contracts';
 import {
+  asPrincipal,
   resolveScopeRecord,
   ulid,
   type AccessLogFilter,
@@ -1007,7 +1012,61 @@ export class SqliteScopeHost implements ScopeHost {
       // the migration's own message, which is the one an operator needs.
       throw new Error(`scope not active (status: ${row.status}): ${scopeId}`);
     }
-    const ctx = this.operationContext(rt, principal);
+    return this.buildStub(tenantId, scopeId, rt, asPrincipal(principal));
+  }
+
+  /**
+   * A scope stub whose authority is a CONNECTION (#97).
+   *
+   * Three gates, all inherited from what the connection already is rather than
+   * declared again: the connection must be live, the scope must belong to its
+   * tenant, and the scope must run its vertical. A leaked provider token
+   * therefore reaches exactly the scopes that connection was for — the
+   * isolation the (tenant, vertical, provider) key already asserts, enforced at
+   * the only door that could have widened it.
+   *
+   * What the connection may then DO is an ordinary permission check against
+   * `connection:<id>` grants. One enforcement path, one place to read it, one
+   * way to revoke it.
+   */
+  async getConnectorScope(connectionId: ConnectionId, scopeId: ScopeId): Promise<ScopeStub> {
+    const conn = this.connectionRow(connectionId);
+    if (conn.revoked_at) {
+      throw new Error(`connection ${connectionId} is revoked`);
+    }
+    const scope = this.directory
+      .prepare('SELECT tenant_id, vertical, status FROM scopes WHERE scope_id = ?')
+      .get(scopeId) as { tenant_id: string; vertical: string | null; status: string } | undefined;
+    if (!scope || scope.tenant_id !== conn.tenant_id) {
+      // Same wording as the principal path: a scope in another tenant is
+      // indistinguishable from one that does not exist.
+      throw new Error(`unknown scope for connection: ${scopeId}`);
+    }
+    if (scope.vertical !== conn.vertical) {
+      throw new Error(
+        `connection ${connectionId} is for vertical '${conn.vertical}' and scope ${scopeId} ` +
+          `runs '${scope.vertical ?? 'none'}'`,
+      );
+    }
+    if (scope.status !== 'active') {
+      throw new Error(`scope not active (status: ${scope.status}): ${scopeId}`);
+    }
+    const rt = this.runtime(conn.tenant_id as TenantId, scopeId);
+    await this.applyPendingMigrations(rt);
+    return this.buildStub(conn.tenant_id as TenantId, scopeId, rt, {
+      kind: 'connection',
+      id: connectionId,
+    });
+  }
+
+  /** The stub body, shared by the principal and connection doors. */
+  private buildStub(
+    tenantId: TenantId,
+    scopeId: ScopeId,
+    rt: ScopeRuntime,
+    subject: CheckSubject,
+  ): ScopeStub {
+    const ctx = this.operationContext(rt, subject);
     const operations = this.operations;
 
     return {
@@ -1269,7 +1328,7 @@ export class SqliteScopeHost implements ScopeHost {
             .all(consumer.eventType, mod.id) as OutboxRow[];
           for (const row of rows) {
             const event = this.parseOutboxRow(row);
-            const ctx = this.operationContext(rt, this.systemPrincipal, {
+            const ctx = this.operationContext(rt, asPrincipal(this.systemPrincipal), {
               system: mod.id,
             });
             rt.db.exec('BEGIN IMMEDIATE');
@@ -1726,6 +1785,56 @@ export class SqliteScopeHost implements ScopeHost {
           grant,
         );
       },
+      grantToConnection: async (actor: PlatformActorId, raw: ConnectionGrant) => {
+        const grant = connectionGrant.parse(raw);
+        const conn = this.connectionRow(grant.connectionId);
+        if (conn.revoked_at) {
+          throw new Error(`connection ${grant.connectionId} is revoked — grant nothing to it`);
+        }
+        // The grant may not reach outside what the connection already is. A
+        // connection is keyed (tenant, vertical, provider); letting it hold a
+        // permission in another tenant would make the key decorative.
+        if (conn.tenant_id !== grant.node.tenantId) {
+          throw new Error(
+            `connection ${grant.connectionId} belongs to tenant ${conn.tenant_id} and cannot ` +
+              `be granted anything in ${grant.node.tenantId}`,
+          );
+        }
+        if (grant.node.scopeId) {
+          const scope = this.directory
+            .prepare('SELECT tenant_id, vertical FROM scopes WHERE scope_id = ?')
+            .get(grant.node.scopeId) as { tenant_id: string; vertical: string | null } | undefined;
+          if (!scope || scope.tenant_id !== grant.node.tenantId) {
+            throw new Error(`unknown scope ${grant.node.scopeId} in tenant ${grant.node.tenantId}`);
+          }
+          if (scope.vertical !== conn.vertical) {
+            throw new Error(
+              `connection ${grant.connectionId} is for vertical '${conn.vertical}' and scope ` +
+                `${grant.node.scopeId} runs '${scope.vertical ?? 'none'}'`,
+            );
+          }
+        }
+        writeGrant(
+          subjectRef({ kind: 'connection', id: grant.connectionId }),
+          grant.permission,
+          grant.node,
+          undefined,
+          grant.expiresAt,
+        );
+        this.recordAdmin(
+          actor,
+          'grantToConnection',
+          { tenantId: grant.node.tenantId, scopeId: grant.node.scopeId, vertical: conn.vertical },
+          null,
+          {
+            connectionId: grant.connectionId,
+            provider: conn.provider,
+            permission: grant.permission,
+            node: grant.node,
+          },
+        );
+      },
+
       grantToOrg: async (actor, orgId, permission, node, entity) => {
         // The org must exist in the node's tenant. A grant to a phantom org is
         // worse than an error: it looks applied, resolves for nobody, and shows up
@@ -2835,11 +2944,17 @@ export class SqliteScopeHost implements ScopeHost {
 
   // -------------------------------------------------------------------------
 
+  /**
+   * `subject` decides BOTH the permission check and the event actor, so the two
+   * can never disagree about who acted (#97). `overrideActor` remains for the
+   * system-actor path, where the acting module is the honest answer.
+   */
   private operationContext(
     rt: ScopeRuntime,
-    principal: PrincipalId,
-    systemActor?: { system: string },
+    subject: CheckSubject,
+    overrideActor?: { system: string },
   ): OperationContext {
+    const principal = subject.id as PrincipalId;
     const checker = this.checker;
     const relations = this.relations;
     return {
@@ -2855,7 +2970,9 @@ export class SqliteScopeHost implements ScopeHost {
           occurredAt: instant.parse(new Date().toISOString()),
           tenantId: rt.tenantId,
           scopeId: rt.scopeId,
-          actor: systemActor ?? principal,
+          actor:
+            overrideActor ??
+            (subject.kind === 'connection' ? { connection: subject.id } : principal),
         });
         rt.db
           .prepare(
@@ -2880,20 +2997,20 @@ export class SqliteScopeHost implements ScopeHost {
           );
       },
       check: (permission, entity?) =>
-        systemActor
+        overrideActor
           ? Promise.resolve({
               allowed: true as const,
               proof: [
                 {
                   subject: objectRef.parse(
-                    `system:${systemActor.system.replace(/[^a-zA-Z0-9_.-]/g, '-')}`,
+                    `system:${overrideActor.system.replace(/[^a-zA-Z0-9_.-]/g, '-')}`,
                   ),
                   relation: `granted:${permission}`,
                   object: objectRef.parse(`scope:${rt.scopeId}`),
                 },
               ],
             })
-          : checker.check(principal, permission, { tenantId: rt.tenantId, scopeId: rt.scopeId }, entity),
+          : checker.check(subject, permission, { tenantId: rt.tenantId, scopeId: rt.scopeId }, entity),
       link: (child: EntityRef, parent: EntityRef) => {
         const allowed = relations.get(child.entityType);
         if (!allowed?.has(parent.entityType)) {

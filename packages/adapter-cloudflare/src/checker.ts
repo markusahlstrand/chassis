@@ -1,10 +1,11 @@
 import {
   objectRef,
+  subjectRef,
   type Decision,
   type EntityRef,
   type Node,
   type PermissionKey,
-  type PrincipalId,
+  type CheckSubject,
   type RelationTuple,
   type RoleDefinition,
 } from '@substrat-run/contracts';
@@ -73,7 +74,7 @@ export function createDoTupleChecker(deps: DoCheckerDeps): PermissionChecker {
 
   return {
     async check(
-      principal: PrincipalId,
+      subject: CheckSubject,
       permission: PermissionKey,
       node: Node,
       entity?: EntityRef,
@@ -82,11 +83,18 @@ export function createDoTupleChecker(deps: DoCheckerDeps): PermissionChecker {
       const deny: Decision = { allowed: false, checked: permission, node };
       const cp = deps.controlPlane;
 
-      // Rule 4 — membership: the subject set is the principal plus its orgs.
-      const subjects: { ref: string; via?: RelationTuple }[] = [{ ref: `principal:${principal}` }];
-      for (const m of await cp.tenantTuples(node.tenantId, `principal:${principal}`, 'member')) {
-        if (m.relation === 'member' && live(m, now)) {
-          subjects.push({ ref: m.object, via: t(m.subject, m.relation, m.object) });
+      // Rule 4 — membership: the subject set is the caller plus its orgs.
+      //
+      // A CONNECTION has no memberships and never will — it is not a person and
+      // belongs to no org — so the expansion is skipped rather than queried.
+      // Its authority is exactly the grants written against `connection:<id>`.
+      const selfRef = subjectRef(subject);
+      const subjects: { ref: string; via?: RelationTuple }[] = [{ ref: selfRef }];
+      if (subject.kind === 'principal') {
+        for (const m of await cp.tenantTuples(node.tenantId, selfRef, 'member')) {
+          if (m.relation === 'member' && live(m, now)) {
+            subjects.push({ ref: m.object, via: t(m.subject, m.relation, m.object) });
+          }
         }
       }
 
