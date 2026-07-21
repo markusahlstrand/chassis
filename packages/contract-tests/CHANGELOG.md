@@ -1,5 +1,102 @@
 # @substrat-run/contract-tests
 
+## 0.11.0
+
+### Patch Changes
+
+- a277bb7: **Fix: a migration whose comment or string literal contains a semicolon no longer fails only on
+  Durable Objects.**
+
+  The two scope-host adapters applied module migrations differently, and that divergence was a
+  latent trap:
+
+  - the **SQLite** adapter hands the whole migration blob to better-sqlite3's `exec`, which parses
+    comments, string literals, and multiple statements correctly;
+  - the **Cloudflare** adapter ran `migration.sql.split(';')` and `exec`'d each fragment — a naive
+    split that truncates a statement the moment a `;` appears inside a `--` / `/* */` comment or a
+    string literal. SQLite then reports `incomplete input`.
+
+  So a migration could be **green on every node test and CI run, then fail only on `workerd`** in
+  production. (Found porting Meridian to Cloudflare: an `hr_absence_ledger` column comment read
+  `-- signed decimal days; balance = SUM(delta)` and broke `CREATE TABLE`.)
+
+  The fix replaces the naive split with `splitSqlStatements` — a small SQL-aware scanner that skips
+  line and block comments, copies string literals through verbatim (including the `''` escape), and
+  splits only on a top-level `;`. Comments are dropped from emitted statements, so a trailing
+  comment can never become a comment-only fragment that `exec` rejects either.
+
+  To make the class of bug unmissable and keep the adapters from diverging again, the shared
+  contract-test module `testMod`'s migration now deliberately contains all the hard cases — a `;` in
+  a line comment, in a block comment, and in a string-literal `DEFAULT`, plus a second statement.
+  Every suite that provisions a scope therefore exercises it on **both** adapters; a naive splitter
+  fails provisioning outright. `splitSqlStatements` also has direct unit coverage of each edge case.
+
+- 7e17b16: **Connector state, and idempotent dispatch — the Scrive connector no longer duplicates
+  documents on retry.**
+
+  The connector took an injected `onDispatched` callback because it had nowhere to record what
+  it had done. Delivery is at-least-once, so a redelivery created a _second_ Scrive document —
+  duplicate legal paperwork to real signatories.
+
+  The obvious fix — write the dispatch record into the scope — **deadlocks**, confirmed with a
+  spike: a connector runs inside the scope's post-commit dispatch, and re-entering the scope
+  actor from there waits on the task that is waiting for it. So the ledger lives in the
+  **directory**, which a connector reaches through `ctx.admin` without touching the scope:
+
+  ```ts
+  HostAdmin.putConnectorState(connectionId, key, value);
+  HostAdmin.getConnectorState(connectionId, key);
+  ```
+
+  Arbitrary JSON, keyed by `(connection, key)`, in a new `_substrat_connector_state` directory
+  table on both adapters. Not audited — high-frequency machine state, one write per dispatch, the
+  same class as `recordConnectionUse`. It dies with the connection: revoke cascades.
+
+  The connector now checks the ledger before creating a document and skips if a prior dispatch is
+  recorded, then records the dispatch after `start`. `onDispatched` is gone. A narrow residual
+  window remains (ledger write fails after `start` succeeds → the retry still duplicates),
+  closable with provider-side dedup via the `substrat_instance` tag the connector now sets.
+
+  `getConnectorScope` (from #108) is deliberately unused here: recording a _signature_ back into
+  the scope is the poll driver's job, where it runs as a top-level operation and re-entry is
+  safe. Dispatch idempotency is not a scope write and must not be one.
+
+  Contract tests on both adapters cover the state round-trip, upsert, and revoke-cascade; the
+  connector's own suite proves a recorded dispatch is skipped rather than repeated.
+
+- e4db6ed: **`HostAdmin.listConnectorState` — the read a poll driver needs to find its own outstanding work.**
+
+  `getConnectorState(id, key)` answers "did I already do THIS one" from a deterministic key — the
+  dispatch-idempotency path. It cannot answer "what is still outstanding", because a poller does
+  not know the keys up front:
+
+  ```ts
+  listConnectorState(id: ConnectionId, prefix?: string): Promise<{ key: string; value: unknown }[]>
+  ```
+
+  Returns every state row for a connection, optionally narrowed to keys under `prefix`, ordered by
+  key. A connector records one row per dispatch under `<provider>:dispatch:<id>`, and a scheduled
+  sweep enumerates them (`prefix = '<provider>:dispatch:'`) to reconcile each against the provider.
+  Without this a sweep would have to be handed every id it might reconcile, which defeats the point
+  of a sweep.
+
+  A directory-local machine read, the same class as `getConnectorState` — not audited. Implemented
+  on both adapters (sqlite in-process; Cloudflare on the control-plane DO, prefix filtered
+  coordinator-side to avoid LIKE/GLOB escaping); the contract-test suite covers prefix narrowing,
+  ordering, the empty-match case, and per-connection isolation, so both adapters are held to the
+  same behaviour.
+
+  This is the enumeration half of the Scrive connector's poll path (#96): `drainDue` and the new
+  `sweepScriveReconciliations` both still need a _timer_ to call them, which remains a deployment
+  concern (no cron/alarm exists yet).
+
+- Updated dependencies [7e17b16]
+- Updated dependencies [858912e]
+- Updated dependencies [e4db6ed]
+- Updated dependencies [e4db6ed]
+  - @substrat-run/kernel@0.11.0
+  - @substrat-run/contracts@0.11.0
+
 ## 0.10.0
 
 ### Minor Changes
@@ -364,7 +461,7 @@
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-                    z.object({ facility: entityRef, unitPrice: money })
+                      z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is
