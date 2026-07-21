@@ -7,7 +7,7 @@
     "dev": "vitepress dev",
     "build": "vitepress build",
     "preview": "vitepress preview",
-    "deploy": "vitepress build && CLOUDFLARE_ACCOUNT_ID=bfbba687e68f84266013cc6dd14759c9 wrangler pages deploy",
+    "deploy": "vitepress build && wrangler pages deploy",
     "typecheck": "exit 0",
     "test": "exit 0"
   },
