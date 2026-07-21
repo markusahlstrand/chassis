@@ -18,6 +18,7 @@ export default withMermaid(defineConfig({
       { text: 'Guide', link: '/guide/what-is-substrat', activeMatch: '/guide/' },
       { text: 'Concepts', link: '/concepts/tenancy', activeMatch: '/concepts/' },
       { text: 'Engines', link: '/engines/', activeMatch: '/engines/' },
+      { text: 'Connectors', link: '/connectors/', activeMatch: '/connectors/' },
       { text: 'Verticals', link: '/verticals/', activeMatch: '/verticals/' },
       { text: 'Reference', link: '/reference/contracts', activeMatch: '/reference/' },
     ],
@@ -26,6 +27,7 @@ export default withMermaid(defineConfig({
       '/guide/': guideSidebar(),
       '/concepts/': guideSidebar(),
       '/engines/': guideSidebar(),
+      '/connectors/': guideSidebar(),
       '/verticals/': guideSidebar(),
       '/reference/': guideSidebar(),
     },
@@ -99,6 +101,13 @@ function guideSidebar() {
         engineSidebar('invoicing', 'Invoicing'),
         engineSidebar('protocol', 'Protocols'),
         engineSidebar('invites', 'Invites'),
+      ],
+    },
+    {
+      text: 'Connectors',
+      items: [
+        { text: 'What is a connector?', link: '/connectors/' },
+        { text: 'Scrive (e-signing)', link: '/connectors/scrive' },
       ],
     },
     {
