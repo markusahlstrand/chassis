@@ -1,0 +1,64 @@
+{
+	"name": "substrat-meridian",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+	// Better Auth (end-user sign-in) needs Node built-ins on workerd.
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	// Better Auth's edge store — end-user identity/credentials/sessions, separate
+	// from the directory DO. Apply migrations/0001_better_auth.sql before deploy:
+	//   wrangler d1 migrations apply substrat-meridian-auth   (--local for dev)
+	// database_id is a placeholder for local dev; set the real one before deploy.
+	"d1_databases": [
+		{
+			"binding": "AUTH_DB",
+			"database_name": "substrat-meridian-auth",
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			// One ScopeDO per scope (kernel + protocol engine + Meridian module bundled),
+			// and this vertical's own directory. Self-contained for now; wiring to the
+			// SHARED control plane (script_name binding / connected mode) is a later stage.
+			{ "name": "SCOPE", "class_name": "ScopeDO" },
+			{ "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
+		}
+	],
+	// Serve the built employee SPA (app/dist) from the same origin as the API.
+	// run_worker_first sends every request to the Worker first (it owns /api/* and
+	// /internal/*); the catch-all delegates the rest to ASSETS with SPA fallback.
+	"assets": {
+		"directory": "./app/dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": true
+	},
+	// The poll-path timer (#96): one platform sweep per tick drains due deliveries
+	// (outbound Scrive dispatch + executor retries) and reconciles live connections.
+	// This is what the node runtime got from setInterval.
+	"triggers": { "crons": ["*/2 * * * *"] },
+
+	// Connected mode (first-flow.md slice 4): reach the SHARED control plane so the
+	// portal provisions into this vertical and a suspend there gates requests here.
+	// The service binding is how worker-to-worker calls reach it (a same-zone
+	// workers.dev fetch is blocked, Cloudflare 1042). Omit both for a self-contained
+	// / `wrangler dev` box. Also needs `wrangler secret put SERVICE_TOKEN` (matching
+	// the control plane's) and `PLATFORM_SECRET` / `ROUTER_SECRET` (matching theirs).
+	"vars": {
+		"CONTROL_PLANE_URL": "https://substrat-control-plane.ahlstrand.workers.dev/api"
+	},
+	"services": [
+		{ "binding": "CONTROL_PLANE_SVC", "service": "substrat-control-plane" }
+	]
+	// ALLOW_DEV_HEADER / STANDALONE are set by `pnpm cf:dev` for local use only, so a
+	// real `wrangler deploy` stays fail-closed. Scrive creds + CONNECTION_SECRET_KEY
+	// are `wrangler secret put`, never checked in.
+}

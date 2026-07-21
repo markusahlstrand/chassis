@@ -9,15 +9,18 @@ export type {
   ExpenseRow,
 } from './module.js';
 export {
-  buildDemoHost,
-  seedDemo,
   provisionMeridian,
   connectScrive,
   MODULES,
   ROLES,
   ENTITY_GRANTS,
+  VERTICAL,
   type MeridianInstance,
+  type ScriveCredential,
+} from './provision.js';
+export {
+  buildDemoHost,
+  seedDemo,
   type DemoWorld,
   type ScriveConfig,
-  type ScriveCredential,
 } from './seed.js';
