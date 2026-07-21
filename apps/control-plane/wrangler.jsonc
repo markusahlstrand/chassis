@@ -4,6 +4,11 @@
 	"compatibility_date": "2025-01-01",
 	// Better Auth (staff sign-in) needs Node built-ins on workerd.
 	"compatibility_flags": ["nodejs_compat"],
+	// Serve the console + control-plane API on console.substrat.net. A Custom Domain
+	// (not a route): the worker fully owns this hostname, so wrangler provisions the
+	// DNS record and certificate on deploy. First-level subdomain — Universal SSL
+	// covers it, no ACM needed (unlike the two-level tenant hostnames on substrat.run).
+	"routes": [{ "pattern": "console.substrat.net", "custom_domain": true }],
 	"durable_objects": {
 		"bindings": [
 			// The whole directory (control-plane.md §4): tenants, scopes, roles,
@@ -19,22 +24,21 @@
 			"new_sqlite_classes": ["ControlPlaneDO", "ScopeDO"]
 		}
 	],
-	// Better Auth's staff store (identity, credentials, sessions), separate from
-	// the directory DO. Apply migrations/0001_better_auth.sql to it before deploy.
-	// Vertical deployments this control plane may provision into (K-31). Only the
-	// vertical can create a usable scope DO, so provisioning is a call to it. Named
-	// VERTICAL_<SLUG> with dashes as underscores — the same convention the router uses.
-	//
-	// Also needs `wrangler secret put PLATFORM_SECRET`, matching each vertical's own.
-	// Without it the instances route reports no deployment bound rather than failing
-	// at the far end.
-	"services": [{ "binding": "VERTICAL_FSM", "service": "substrat-fsm" }],
+	// No vertical service bindings yet: this is a platform-only deploy (console +
+	// directory + staff auth). A vertical is added here as VERTICAL_<SLUG> once its
+	// worker exists (K-31), together with `wrangler secret put PLATFORM_SECRET`
+	// matching that vertical's own. Until then `verticalsFor` is empty and the
+	// "create instance" flow reports no deployment bound, rather than dangling a
+	// binding to a service that does not exist.
 
+	// Better Auth's staff store (identity, credentials, sessions), separate from the
+	// directory DO. Apply migrations/0001+0002 to it before deploy (the deploy script
+	// gates on it). This id is the substrat.net production account's D1 (region WEUR).
 	"d1_databases": [
 		{
 			"binding": "AUTH_DB",
 			"database_name": "substrat-control-plane-auth",
-			"database_id": "37b1c7ac-5855-43ba-81c4-8c0659ef995f"
+			"database_id": "da63a4b0-3b45-474f-bce0-1cbe18080906"
 		}
 	],
 	// Serve the built console SPA (apps/console/dist) from the same origin as the
