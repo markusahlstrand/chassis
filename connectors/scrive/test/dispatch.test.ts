@@ -110,7 +110,7 @@ describe('scrive connector — outbound dispatch', () => {
       vertical: 'meridian',
       provider: 'scrive',
       label: 'Nordljus Scrive (testbed)',
-      secret: { accessToken: 'testbed-token' },
+      secret: { clientId: 'ci', clientSecret: 'cs', tokenId: 'ti', tokenSecret: 'ts' },
     });
 
     stub = await host.getScope(principal, t, s);
@@ -163,7 +163,7 @@ describe('scrive connector — outbound dispatch', () => {
     // Started means Scrive has invited the parties — the file and parties were
     // both accepted, which is what `start` refuses without.
     expect(doc!.status).toBe('pending');
-    expect(doc!.file?.name).toBe('anstallningsavtal.pdf');
+    // A file was uploaded (Scrive does not echo the filename, so assert bytes).
     expect(doc!.file!.bytes).toBeGreaterThan(0);
     expect(doc!.title).toContain('anstallningsavtal');
 

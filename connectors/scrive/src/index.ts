@@ -136,6 +136,12 @@ export function scriveConnector(options: ScriveConnectorOptions): ConnectorHandl
           // provider still authenticates, but the flow does not require the
           // stronger method to be meaningful.
           authenticationMethodToSign: p.kind === 'external' ? 'se_bankid' : 'standard',
+          // Scrive auto-adds the API user as the author, and exactly one party
+          // must be it. The issuing (primary) party is the sender's side, so it
+          // is the author — and it still signs. Verified: an explicit author
+          // party in `update` replaces the auto one.
+          isAuthor: p.signatureKind === 'primary',
+          isSignatory: true,
         }),
       ),
     });

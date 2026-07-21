@@ -97,11 +97,14 @@ export class ScriveMock {
           json: () => Promise.resolve(body),
         });
 
-      if (this.failWith) return respond(this.failWith, { error: 'mock failure' });
-      if (!init?.headers?.Authorization?.startsWith('Bearer ')) {
-        // Fail the way a real API does when the credential is missing, so the
-        // connector's error path is exercised rather than assumed.
-        return respond(401, { error: 'missing bearer token' });
+      if (this.failWith) return respond(this.failWith, { error_message: 'mock failure' });
+      // OAuth1 PLAINTEXT, matching the real testbed: the connector sends an
+      // `authorization` header starting `oauth_signature_method="PLAINTEXT"`.
+      // A `Bearer` header (the old, wrong scheme) must NOT authenticate here, or
+      // the mock would keep passing a shape the real API rejects.
+      const auth = init?.headers?.authorization ?? init?.headers?.Authorization ?? '';
+      if (!auth.includes('oauth_signature_method="PLAINTEXT"')) {
+        return respond(401, { error_message: 'No valid access credentials were provided.' });
       }
 
       const path = new URL(url).pathname;
@@ -127,21 +130,39 @@ export class ScriveMock {
       if (!doc) return respond(404, { error: `mock: unknown document ${id}` });
 
       if (action === 'setfile') {
-        doc.file = { name: init?.headers?.['x-filename'] ?? 'document.pdf', bytes: (init?.body ?? '').length };
+        // The real body is multipart/form-data bytes (a Uint8Array), not a
+        // string — the length is all the mock needs to know a file arrived.
+        const size = typeof init?.body === 'string' ? init.body.length : (init?.body?.length ?? 0);
+        doc.file = { name: 'document.pdf', bytes: size };
         return respond(200, this.wire(doc));
       }
       if (action === 'update') {
-        const patch = JSON.parse(init?.body ?? '{}') as {
-          document?: {
-            title?: string;
-            api_callback_url?: string;
-            parties?: { authentication_method_to_sign: string; fields: { type: string; value: unknown }[] }[];
-          };
+        // The real API takes `document=<url-encoded JSON>` as a form field, not a
+        // JSON request body — the mock parses it the same way so the connector's
+        // encoding is under test.
+        const raw = typeof init?.body === 'string' ? init.body : '';
+        const encoded = /(?:^|&)document=([^&]*)/.exec(raw)?.[1] ?? '';
+        const patch = JSON.parse(decodeURIComponent(encoded) || '{}') as {
+          title?: string;
+          api_callback_url?: string;
+          parties?: {
+            is_author?: boolean;
+            is_signatory?: boolean;
+            authentication_method_to_sign: string;
+            fields: { type: string; value: unknown }[];
+          }[];
         };
-        if (patch.document?.title) doc.title = patch.document.title;
-        if (patch.document?.api_callback_url) doc.callbackUrl = patch.document.api_callback_url;
-        if (patch.document?.parties) {
-          doc.parties = patch.document.parties.map((p, i) => ({
+        if (patch.title) doc.title = patch.title;
+        if (patch.api_callback_url) doc.callbackUrl = patch.api_callback_url;
+        if (patch.parties) {
+          const authors = patch.parties.filter((p) => p.is_author).length;
+          if (authors !== 1) {
+            // Scrive requires exactly one author across the party set. The mock
+            // enforces it so a regression in the connector's party mapping fails
+            // here rather than silently against the real API.
+            return respond(400, { error_message: `exactly one author required, got ${authors}` });
+          }
+          doc.parties = patch.parties.map((p, i) => ({
             id: `party-${i}`,
             name: String(p.fields.find((f) => f.type === 'name')?.value ?? ''),
             signTime: null,

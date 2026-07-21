@@ -17,7 +17,7 @@ export interface ConnectorCall {
   url: string;
   method: string | undefined;
   auth: string | undefined;
-  body: string | undefined;
+  body: string | Uint8Array | undefined;
 }
 
 export const connectorCalls: ConnectorCall[] = [];
@@ -34,7 +34,9 @@ export const connectorTestFetch: FetchLike = (url, init) => {
     auth: init?.headers?.Authorization,
     body: init?.body,
   });
-  const failing = (init?.body ?? '').includes('fail');
+  // Body may now be bytes (a real upload); only a string body carries the 'fail'
+  // marker the tests use to trigger the error path.
+  const failing = typeof init?.body === 'string' && init.body.includes('fail');
   return Promise.resolve({
     ok: !failing,
     status: failing ? 503 : 200,

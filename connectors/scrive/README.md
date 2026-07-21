@@ -39,6 +39,23 @@ Rendering the real document belongs to the **vertical**, which owns the content 
 cannot read another module's tables and should not learn a vertical's vocabulary to try. It
 needs (4) to hand the bytes over.
 
+## Verified against the testbed
+
+The API layer was **checked against `api-testbed.scrive.com`**, not just the docs — and the
+first version, written from the docs, was wrong in three ways one live call exposed at once:
+
+- **auth is OAuth1 PLAINTEXT**, not OAuth2 bearer (the UI's "Client" + "Token" credentials are
+  two halves of one four-part signature; the `oauth2.scrive.com` endpoint rejects them)
+- **`documents/new` returns no `status`** — only `get` does, so mutation responses are parsed
+  for their id and status is re-read
+- **`setfile` is `multipart/form-data`**, not a base64 body
+
+`test/live.test.ts` runs the real lifecycle (`new → setfile → update → get`) when
+`connectors/scrive/.dev.vars` holds a complete OAuth1 credential, and **skips** otherwise — so
+CI without secrets stays offline and a local run with the testbed verifies the actual API. It
+uses `standard` auth because **`se_bankid`-to-sign is disabled on the testbed account** (`start`
+returns 409); the BankID round-trip waits on that setting.
+
 ## Testing
 
 `ScriveMock` implements the documented endpoints in memory, so the whole lifecycle runs without
