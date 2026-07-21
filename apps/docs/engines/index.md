@@ -70,6 +70,10 @@ contrasts to clear it up:
   composes its in-scope functions in the *same transaction* — `createWorkOrder(ctx, …)` and
   your own table write commit together or not at all. The isolation is architectural, not
   physical.
+- **Not a [connector](/connectors/).** An engine owns invariants and domain state *inside* a
+  scope; a connector reaches a third-party service *outside* one. An engine never calls the
+  network — that is precisely a connector's job. The two are different layers, and the
+  clearest tell is that an engine has tables and permissions while a connector has neither.
 
 ## Anatomy of an engine package
 
