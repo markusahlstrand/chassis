@@ -3,11 +3,14 @@
 Turns a signature request from the [protocol engine](/engines/protocol/) into a real signing
 flow at **Scrive**, authenticated with Swedish **BankID**.
 
-::: danger This connector cannot yet complete a signature
-It is `private` and unpublished on purpose. Its **outbound** half works — a request becomes a
-started Scrive document — but the **inbound** half (recording the signature back) needs kernel
-seams that are only now landing. See [What's missing](#what-s-missing). Do not read "documented"
-as "done."
+::: warning Both halves are built; it is unpublished because nothing schedules it yet
+The kernel seams the inbound half needed have landed, and both halves now work: a request becomes
+a started Scrive document (**outbound**), and a completed signature is recorded back into the
+scope (**inbound**, via `reconcileScriveDispatch` on the [authority seam](/connectors/#the-seam-a-connector-plugs-into)).
+It stays `private` and unpublished for two reasons, neither in the connector: **no deployment runs
+the poll on a timer yet** (the [scheduler](https://github.com/substrat-run/substrat/blob/main/docs/design/scheduler.md)'s
+call site), and **BankID-to-sign is disabled on the testbed account**, so the real signing
+round-trip is unverified. See [What's missing](#what-s-missing).
 :::
 
 ## At a glance
@@ -16,7 +19,7 @@ as "done."
 |---|---|
 | **Provider** | Scrive eSign, `se_bankid` authentication-to-sign |
 | **Category** | E-signing & identity |
-| **Status** | Outbound built; inbound blocked on kernel seams |
+| **Status** | Both halves built (outbound + return path + poll); unpublished — no deployment schedules it, BankID off on testbed |
 | **Package** | `@substrat-run/connector-scrive` (private, unpublished) |
 | **Consumes** | `protocol.signatures-requested` |
 | **Registered with** | `registerConnector('scrive', 'protocol.signatures-requested', …)` |
@@ -78,7 +81,12 @@ Given a `scrive` signature request, the connector:
    callbacks carry **no signature to verify**, so a callback can only ever be a *hint* to re-read
    the document, never a trusted fact.
 6. **Starts it** — `POST …/start`. The document is now `pending` and the parties are invited.
-7. **Hands the provider's document id back** so it can be recorded against the signature request.
+7. **Records the dispatch** in a directory-side ledger (`putConnectorState`, keyed by the
+   connection), carrying the document id, the frozen content hash, and each party's request id and
+   signatory ref. Two jobs: a redelivery finds this row and **skips** instead of sending a second
+   document, and the poll driver reads it to map a signed party back to the request it resolves.
+   Directory-side because a connector runs *inside* the scope's dispatch and re-entering the scope
+   actor deadlocks.
 
 Retry is tuned for a contract, not a directory write: **8 attempts**, 5-second base backoff, up
 to a 15-minute ceiling. Giving up on a signature after the executor default of five tries would
@@ -86,38 +94,59 @@ be giving up on a contract.
 
 ## Reaching the signature back
 
-Once a party signs, Scrive changes the document status. Two ways to learn of it, and this
-connector is built for the first:
+Once a party signs, Scrive changes the document status, and the connector records that signature
+onto the protocol instance in the scope. Two ways to learn of the change; this connector is built
+for the first, and the second is a later optimization on the *same* write-back:
 
 - **Polling** — `GET /api/v2/documents/{id}/get` returns the full document and its status. This
   needs no ingress at all, which is why webhook transport
   ([#96](https://github.com/substrat-run/substrat/issues/96)) is *not* on the critical path.
 - **Webhooks** — Scrive can POST on status change, but unauthenticated, so the callback URL is a
   capability and the body is never trusted. A webhook is an optimization over polling, not a
-  replacement for it.
+  replacement for it — even with one, the handler re-reads `…/get` and runs the same reconcile.
 
-Either way, the write-back goes through the [inbound authority seam](/connectors/#the-seam-a-connector-plugs-into):
-the connection opens a scope stub and records the signature as itself.
+The write-back goes through the [inbound authority seam](/connectors/#the-seam-a-connector-plugs-into):
+`reconcileScriveDispatch` opens a scope stub with `getConnectorScope` — the connection acting as
+itself — and records the signature by invoking `protocol/record-signature`, gated on the
+connection's own `protocol:record-signature` grant (visible in the permission diff). It runs as a
+**top-level operation, outside any dispatch**, so re-entering the scope is safe; it re-checks the
+provider-reported content hash against the frozen one and fails closed on a mismatch; and it is
+idempotent across polls. `sweepScriveReconciliations` is the poll driver over it — it enumerates
+the dispatch ledger (`listConnectorState`) and reconciles every outstanding instance.
+
+What still has no home is the **timer** that calls the sweep. `runPlatformSweep` (the kernel's
+[scheduler](https://github.com/substrat-run/substrat/blob/main/docs/design/scheduler.md) unit of
+work) drives it, but a deployment has to call it on a cron, alarm, or interval — and the
+control-plane worker is deliberately not that home, because its scope DO is module-less. The call
+site belongs in the vertical's own runtime.
 
 ## What's missing
 
-The reason this connector is honest rather than done. Four gaps, found by building it:
+Most of the gaps found by building it have since closed. What is done, and what is left:
 
-1. **Recording the provider's document id** back onto the signature request. Without it,
-   at-least-once delivery means a retried dispatch creates a **second Scrive document** —
-   duplicate legal paperwork to real signatories. This is the sharp one: the correctness problem
-   is the *duplicated dispatch*, not the missing signature. The
-   [authority seam (#97)](https://github.com/substrat-run/substrat/issues/97) unblocks it.
-2. **Recording a signature.** Same seam.
-3. **Connector state has no home** — even "this event → that document id" has nowhere durable to
-   live outside a scope yet.
-4. **No document store.** There is no place for rendered document *bytes*, which is why this
-   sends an attestation sheet rather than the avtal, and why the real contract's rendering waits
-   on the vertical plus a store.
+1. ~~**Recording the provider's document id / dispatch idempotency.**~~ **Done.** A redelivery once
+   created a *second* Scrive document — duplicate legal paperwork to real signatories, the sharp
+   correctness problem. The connector now records each dispatch in a directory-side ledger and
+   skips if a prior one is found.
+2. ~~**Recording a signature.**~~ **Done** via the
+   [authority seam (#97)](https://github.com/substrat-run/substrat/issues/97): `reconcileScriveDispatch`
+   records it as the connection, through `getConnectorScope`.
+3. ~~**Connector state has no home.**~~ **Done** — the dispatch ledger above is that home
+   (`putConnectorState` / `listConnectorState`).
+4. **No document store.** There is still no place for rendered document *bytes*, which is why this
+   sends an attestation sheet rather than the avtal, and why the real contract's rendering waits on
+   the vertical plus a store.
+5. **Nothing schedules the poll.** The poll driver (`sweepScriveReconciliations`) and the platform
+   scheduler unit of work (`runPlatformSweep`) exist and are tested, but no deployment calls them
+   on a timer yet ([#96](https://github.com/substrat-run/substrat/issues/96), the poll path). This
+   is a deployment concern — a one-line call site in the vertical's runtime — not connector code.
+6. **BankID-to-sign is disabled on the testbed account**, so `start` returns 409 for `se_bankid`
+   and the real BankID signing round-trip (and Scrive's live `get` party shape and order) cannot
+   be verified yet. The live test uses `standard` auth until it is enabled.
 
-Until (1) and (2) close, the connector takes its write-back callback as a **required constructor
-argument** — a deployment that cannot supply one cannot use the connector. That is the honest
-state of the platform, expressed in the type system rather than a comment.
+Because the return path landed, the connector no longer takes a required write-back callback: the
+callback URL is now **optional** (polling is a complete strategy on its own), and where it is set,
+a callback is only ever a hint to re-read — never a trusted fact.
 
 ## Testing without an account
 
