@@ -1,98 +1,104 @@
 # @substrat-run/connector-scrive
 
-Scrive eSign (BankID) — the **outbound half** of external signing.
+Scrive eSign (Swedish **BankID**) for Substrat: turns a vertical's signature request into a real
+Scrive signing flow, and records the completed signatures back into the scope. A **connector** is
+host code — you register it on a scope host; it is never module code.
 
-`engine-protocol` emits `protocol.signatures-requested` when a vertical freezes a document and
-sends it for signature. This turns that into a Scrive document: create → set file → set parties
-with `se_bankid` → start.
+## What it does
 
-## ⚠️ This connector cannot complete a signature
+Two halves, both built and tested against the real testbed API.
 
-It is `private` and unpublished on purpose. Four things are missing, none of them here:
+**Outbound.** `engine-protocol` emits `protocol.signatures-requested` when a vertical freezes a
+document and sends it for signature. The connector (only for `method: 'scrive'`) turns that into a
+Scrive document: **create → set file → set parties → start**, external signatories on `se_bankid`.
+It records each dispatch in a directory-side ledger (`putConnectorState`, keyed by the connection)
+so an at-least-once redelivery skips instead of creating a *second* document — duplicate legal
+paperwork to real signatories. Directory-side because a connector runs *inside* the scope's
+dispatch and re-entering the scope actor deadlocks.
 
-1. ~~**Dispatch is not idempotent.**~~ **Done.** A redelivery once created a *second* Scrive
-   document — duplicate legal paperwork to real signatories. The connector now records each
-   dispatch in a directory-side ledger (`ctx.admin.putConnectorState`, keyed by the connection)
-   and skips if a prior dispatch is found. Directory-side because a connector runs *inside* the
-   scope's dispatch and re-entering the scope actor deadlocks (verified). A narrow residual
-   remains — if the ledger write itself fails after the provider `start` succeeds, the retry
-   still duplicates — closable with provider-side dedup via the `substrat_instance` tag the
-   connector already sets, once a list-by-tag query lands.
+**Inbound.** Once parties sign at Scrive, `reconcileScriveDispatch(host, connectionId, instanceId,
+{ fetch })` reads `documents/{id}/get`, maps each signed party back to its request, and records
+the signature onto the protocol instance by invoking `protocol/record-signature` through
+`getConnectorScope` — the connection acting as itself ([#97](https://github.com/substrat-run/substrat/issues/97)),
+a top-level operation (not the dispatch handler, where re-entering the scope deadlocks). It
+re-checks the provider-reported content hash against the frozen one and **fails closed** on a
+mismatch, and it is idempotent across polls. `sweepScriveReconciliations(host, connectionId,
+{ fetch })` is the poll driver over it: it enumerates the dispatch ledger
+(`listConnectorState(id, 'scrive:dispatch:')`) and reconciles every outstanding instance, skipping
+those already complete and stepping past a provider error on any one.
 
-2. ~~**Connector state has no home.**~~ **Done** — the ledger above is that home.
+## Using it
 
-3. ~~**Recording the signature back**~~ **Done** ([#97](https://github.com/substrat-run/substrat/issues/97)).
-   When a party signs, the signature belongs on the protocol instance in the *scope*.
-   `reconcileScriveDispatch(host, connectionId, instanceId, { fetch })` reads
-   `documents/{id}/get`, maps each signed party back to its request, and records it by invoking
-   `protocol/record-signature` through `getConnectorScope` — the connection acting as itself,
-   as a top-level operation (not the dispatch handler, where re-entering the scope deadlocks).
-   The connection must hold `protocol:record-signature` (`grantToConnection`), which shows up in
-   the permission diff. Idempotent across polls; verified against `ScriveMock` advanced to
-   `closed`. The one thing a mock can't prove — Scrive's real `get` shape and party order —
-   waits on a testbed BankID round-trip (BankID-to-sign is disabled on the account).
+```ts
+import { registerScriveConnector, sweepScriveReconciliations } from '@substrat-run/connector-scrive';
 
-4. **The poll driver exists; nothing calls it on a timer.**
-   `sweepScriveReconciliations(host, connectionId, { fetch })` is the scheduler's unit of work:
-   it enumerates the dispatch ledger (`HostAdmin.listConnectorState(id, 'scrive:dispatch:')`) and
-   reconciles every outstanding instance, skipping ones the ledger already shows complete and
-   stepping past a provider error on any one instance. It is idempotent and scoped to one
-   connection (a connection never crosses a tenant). What is *still* missing is the **timer** —
-   there is no cron, queue or Durable Object alarm in any wrangler config, the same trigger
-   `drainDue` still lacks. A platform sweeper would, on a schedule, iterate the connections it
-   owns and call this for each:
+// 1. Register the connector on the scope host (host code, like an engine module).
+registerScriveConnector(host, { baseUrl: SCRIVE_TESTBED /* or SCRIVE_PRODUCTION */ });
 
-   ```ts
-   // in a Cloudflare Worker's scheduled() handler, or a DO alarm:
-   for (const connectionId of scriveConnections) {
-     await sweepScriveReconciliations(host, connectionId, { fetch });
-   }
-   ```
+// 2. Open a connection with the OAuth1 credential, and grant it the one permission
+//    that lets it write a signature back — held by NO human role.
+await host.admin.createConnection(actor, {
+  id, tenantId, vertical, provider: 'scrive', label,
+  secret: { clientId, clientSecret, tokenId, tokenSecret },   // sealed by the host's SecretBox
+});
+await host.admin.grantToConnection(actor, {
+  connectionId: id, permission: 'protocol:record-signature', node, grantedBy: actor,
+});
 
-   That trigger is a deployment concern, not connector code — which is why it, not the seam or
-   the driver, is the remaining reason the connector stays unpublished.
+// 3. Schedule the poll — YOUR deployment calls the sweep on a timer.
+//    Node:        startPlatformSweeper(host, { sweepers: { scrive: sweepScriveReconciliations }, intervalMs })
+//    Cloudflare:  a scheduled() Cron / DO alarm calling runPlatformSweep(host, { sweepers: { scrive: … } })
+```
 
-5. **No document store.** `attachmentTargets` is declared in the manifest contract and
-   implemented nowhere, so there is no place for rendered bytes.
+The credential is Scrive's OAuth1 "personal access credentials" — four parts that combine into a
+PLAINTEXT signature (`{ clientId, clientSecret, tokenId, tokenSecret }`), **not** OAuth2 bearer. A
+signatory's personnummer is passed through to Scrive on the signing request and **never stored**:
+it is `direct` PII, and `engine-protocol` records an opaque `DataSubjectId` as the signatory
+instead. The host needs a `SecretBox` configured to seal the credential at rest.
 
-## What it therefore sends
+## Caveats worth knowing
 
-An **attestation sheet**, not the avtal: the template, the parties, and the content hash the
-signature refers to. That is honest for a hash-attestation model and enough to exercise the
-seam, but it is not a contract anybody should sign.
+1. **Your deployment must schedule the poll** (step 3). The connector provides the driver; it
+   cannot hold a timer — that is a deployment concern (a cron, a Durable Object alarm, or
+   `startPlatformSweeper`'s interval). Without one, dispatch works but signatures are never
+   recorded back.
 
-Rendering the real document belongs to the **vertical**, which owns the content — a connector
-cannot read another module's tables and should not learn a vertical's vocabulary to try. It
-needs (4) to hand the bytes over.
+2. **The live BankID signing round-trip is unverified.** The outbound lifecycle is checked against
+   `api-testbed.scrive.com`, but `se_bankid`-to-sign is **disabled on the testbed account**
+   (`start` → 409), so the actual signature — and Scrive's real signed-`get` party shape and order
+   — have only been exercised against `ScriveMock`. Because the reconcile fails closed on a
+   party-shape mismatch, a wrong assumption *skips* (visibly, in the sweep result), never
+   mis-records. It stays a `0.x` release for this reason.
+
+3. **It sends an attestation sheet, not the avtal.** A one-page PDF naming the template, the
+   parties, and the content hash the signature refers to — honest for a hash-attestation model,
+   but not the contract itself. Rendering the real document belongs to the **vertical** (a
+   connector cannot read another module's tables), and it needs a document store that does not
+   exist yet (`attachmentTargets` is declared in the manifest contract and implemented nowhere).
 
 ## Verified against the testbed
 
-The API layer was **checked against `api-testbed.scrive.com`**, not just the docs — and the
-first version, written from the docs, was wrong in three ways one live call exposed at once:
+The API layer was checked against `api-testbed.scrive.com`, not just the docs — and the first
+version, written from the docs, was wrong in three ways one live call exposed at once:
 
 - **auth is OAuth1 PLAINTEXT**, not OAuth2 bearer (the UI's "Client" + "Token" credentials are
   two halves of one four-part signature; the `oauth2.scrive.com` endpoint rejects them)
-- **`documents/new` returns no `status`** — only `get` does, so mutation responses are parsed
-  for their id and status is re-read
+- **`documents/new` returns no `status`** — only `get` does, so mutation responses are parsed for
+  their id and status is re-read
 - **`setfile` is `multipart/form-data`**, not a base64 body
 
 `test/live.test.ts` runs the real lifecycle (`new → setfile → update → get`) when
-`connectors/scrive/.dev.vars` holds a complete OAuth1 credential, and **skips** otherwise — so
-CI without secrets stays offline and a local run with the testbed verifies the actual API. It
-uses `standard` auth because **`se_bankid`-to-sign is disabled on the testbed account** (`start`
-returns 409); the BankID round-trip waits on that setting.
+`connectors/scrive/.dev.vars` holds a complete OAuth1 credential, and **skips** otherwise — so CI
+without secrets stays offline and a local run against the testbed verifies the actual API. It uses
+`standard` auth because `se_bankid`-to-sign is disabled on the account (see caveat 2).
 
 ## Testing
 
-`ScriveMock` implements the documented endpoints in memory, so the whole lifecycle runs without
-a provider account.
+`ScriveMock` implements the endpoints in memory, so the whole lifecycle runs without a provider
+account — credential resolution, egress, health, retry, and the dispatch → sign → reconcile loop
+(a test signs the mock's parties, then drives `runPlatformSweep`).
 
-**What a mock proves:** that our shape works — credential resolution, egress, health, retry,
-the document lifecycle.
-
-**What it cannot prove:** that our reading of Scrive's API is correct. The mock *is* that
-reading — same author, same misunderstandings, on both sides of the call. Green here means
-*ready to check against `api-testbed.scrive.com`*, never *verified*.
-
-It stays useful afterwards: a real provider will not return 503 on demand, or let you
-fast-forward two days to a signature.
+**What a mock proves:** that our shape works. **What it cannot prove:** that our reading of
+Scrive's API is correct at the one step the testbed cannot reach — the BankID signature and its
+`get` shape. The mock *is* our reading; green here meant *ready to check against the testbed*, and
+the outbound half now has been (caveat 2 is the residue).
