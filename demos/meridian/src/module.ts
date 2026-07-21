@@ -121,7 +121,7 @@ export const meridianMigrations = [
         employee_id    TEXT NOT NULL REFERENCES hr_employees(id),
         leave_type_key TEXT NOT NULL REFERENCES hr_leave_types(key),
         entry_kind     TEXT NOT NULL CHECK (entry_kind IN ('accrual','booking','correction','carryover')),
-        delta          TEXT NOT NULL, -- signed decimal days; balance = SUM(delta)
+        delta          TEXT NOT NULL, -- signed decimal days, balance = SUM(delta)
         effective_date TEXT NOT NULL,
         request_id     TEXT,          -- the approved request that produced a booking
         note           TEXT,

@@ -1,0 +1,30 @@
+{
+	"name": "substrat-meridian",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+	// Better Auth (end-user sign-in, a later stage) needs Node built-ins on workerd.
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"durable_objects": {
+		"bindings": [
+			// One ScopeDO per scope (kernel + protocol engine + Meridian module bundled),
+			// and this vertical's own directory. Self-contained for now; wiring to the
+			// SHARED control plane (script_name binding / connected mode) is a later stage.
+			{ "name": "SCOPE", "class_name": "ScopeDO" },
+			{ "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
+		}
+	],
+	// The poll-path timer (#96): one platform sweep per tick drains due deliveries
+	// (outbound Scrive dispatch + executor retries) and reconciles live connections.
+	// This is what the node runtime got from setInterval.
+	"triggers": { "crons": ["*/2 * * * *"] }
+	// No `vars`: ALLOW_DEV_HEADER / STANDALONE are set by `pnpm cf:dev` for local use
+	// only, so a real `wrangler deploy` stays fail-closed. Scrive creds + the
+	// CONNECTION_SECRET_KEY are `wrangler secret put`, never checked in.
+}
