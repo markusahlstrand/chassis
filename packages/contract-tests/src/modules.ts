@@ -308,8 +308,21 @@ export const testMod: ModuleRegistration = {
   manifest: testModManifest,
   migrations: [
     {
+      // Deliberately exercises the migration splitter's hard cases, so EVERY suite
+      // that provisions a scope guards against a naive `split(';')` regressing on
+      // an adapter: a `;` inside a line comment, inside a block comment, and inside
+      // a string-literal DEFAULT — plus a second statement, so a truncated split
+      // would leave `testmod_notes` missing. A broken splitter fails provisioning
+      // outright ("incomplete input"), which is unmissable.
       version: '0001-init',
-      sql: 'CREATE TABLE testmod_items (id TEXT PRIMARY KEY, box TEXT NOT NULL)',
+      sql: `
+        CREATE TABLE testmod_items (id TEXT PRIMARY KEY, box TEXT NOT NULL); -- items; keyed by id
+        /* a block comment; with a semicolon */
+        CREATE TABLE testmod_notes (
+          id   TEXT PRIMARY KEY,
+          body TEXT NOT NULL DEFAULT 'n/a; see item'  -- string default holds a semicolon
+        );
+      `,
     },
   ],
   operations: {

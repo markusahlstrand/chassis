@@ -138,6 +138,71 @@ function toRpcError(err: unknown): Error {
   return new Error(String(err));
 }
 
+/**
+ * Split a migration into its statements, honouring SQL syntax.
+ *
+ * The DO's `SqlStorage.exec` runs one statement per call, so a migration blob is
+ * split on `;`. A naive `sql.split(';')` breaks the moment a `;` appears inside a
+ * `--`/`/* *​/` comment or a string literal — it truncates the statement and the DO
+ * reports "incomplete input". The SQLite adapter never hit this because
+ * better-sqlite3's `exec` takes the whole blob; this is what made a migration that
+ * passed on SQLite fail only on Durable Objects (the divergence this fix closes).
+ *
+ * So this is a small SQL-aware scanner: it skips line and block comments, copies
+ * string literals through verbatim (including the `''` escape), and splits only on
+ * a top-level `;`. Comments are dropped from the emitted statements — which also
+ * means a trailing comment can never become a comment-only "statement" that
+ * `exec` rejects. Blank fragments are skipped.
+ */
+export function splitSqlStatements(sql: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  const n = sql.length;
+  let i = 0;
+  while (i < n) {
+    const c = sql[i];
+    const c2 = sql[i + 1];
+    if (c === '-' && c2 === '-') {
+      while (i < n && sql[i] !== '\n') i += 1; // line comment → end of line
+      continue;
+    }
+    if (c === '/' && c2 === '*') {
+      i += 2;
+      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i += 1;
+      i += 2; // block comment → past the closing */
+      continue;
+    }
+    if (c === "'") {
+      cur += c;
+      i += 1;
+      while (i < n) {
+        cur += sql[i];
+        if (sql[i] === "'") {
+          if (sql[i + 1] === "'") {
+            cur += sql[i + 1]; // '' is an escaped quote, still inside the string
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (c === ';') {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      i += 1;
+      continue;
+    }
+    cur += c;
+    i += 1;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
 export function defineScopeDO(
   modules: ModuleRegistration[],
   bareOps: Record<string, OperationHandler<never, unknown>>,
@@ -387,9 +452,8 @@ export function defineScopeDO(
                 )
                 .toArray()[0];
               if (!already) {
-                for (const stmt of migration.sql.split(';')) {
-                  const s = stmt.trim();
-                  if (s) this.sql.exec(s);
+                for (const stmt of splitSqlStatements(migration.sql)) {
+                  this.sql.exec(stmt);
                 }
                 this.sql.exec(
                   'INSERT INTO _substrat_migrations (module_id, version, applied_at) VALUES (?, ?, ?)',
