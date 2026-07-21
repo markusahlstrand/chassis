@@ -762,6 +762,24 @@ export interface HostAdmin {
    */
   putConnectorState(id: ConnectionId, key: string, value: unknown): Promise<void>;
   getConnectorState(id: ConnectionId, key: string): Promise<unknown | undefined>;
+  /**
+   * Every state row for a connection, optionally narrowed to keys under a
+   * `prefix`, ordered by key.
+   *
+   * `getConnectorState` answers "did I already do THIS one" from a deterministic
+   * key — the dispatch path. This answers "what is still outstanding" without
+   * knowing the keys up front, which is what a **poll driver** needs: a connector
+   * records one row per dispatch under `<provider>:dispatch:<id>`, and a
+   * scheduled sweep enumerates them (`prefix = '<provider>:dispatch:'`) to
+   * reconcile each against the provider. Without it a sweep would have to be told
+   * every id it might reconcile — which defeats the point of a sweep.
+   *
+   * A read of directory-local machine state, like get/put; not audited.
+   */
+  listConnectorState(
+    id: ConnectionId,
+    prefix?: string,
+  ): Promise<{ key: string; value: unknown }[]>;
 
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
 

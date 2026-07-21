@@ -48,3 +48,11 @@ export {
   PlatformCallError,
   PLATFORM_SECRET_HEADER,
 } from './platform-call.js';
+export { runPlatformSweep, startPlatformSweeper } from './platform-sweep.js';
+export type {
+  ConnectorSweeper,
+  PlatformSweepOptions,
+  PlatformSweepReport,
+  PlatformSweeperHandle,
+  StartPlatformSweeperOptions,
+} from './platform-sweep.js';

@@ -2655,6 +2655,19 @@ export class SqliteScopeHost implements ScopeHost {
         return row ? (JSON.parse(row.value) as unknown) : undefined;
       },
 
+      listConnectorState: async (id: ConnectionId, prefix?: string) => {
+        const rows = this.directory
+          .prepare(
+            'SELECT state_key, value FROM _substrat_connector_state WHERE connection_id = ? ORDER BY state_key',
+          )
+          .all(id) as { state_key: string; value: string }[];
+        // Prefix filter in JS: the key space per connection is small (one row per
+        // dispatch), and it dodges LIKE/GLOB metacharacter escaping on the prefix.
+        return rows
+          .filter((r) => !prefix || r.state_key.startsWith(prefix))
+          .map((r) => ({ key: r.state_key, value: JSON.parse(r.value) as unknown }));
+      },
+
       linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {
         const parsed = identityLink.parse(input);
         requirePoolServes(parsed.provider, parsed.tenantId);

@@ -1406,6 +1406,20 @@ export class ControlPlaneDO extends DurableObject {
     return row?.value;
   }
 
+  listConnectorState(id: string, prefix?: string): { key: string; value: string }[] {
+    const rows = this.sql
+      .exec(
+        'SELECT state_key, value FROM _substrat_connector_state WHERE connection_id = ? ORDER BY state_key',
+        id,
+      )
+      .toArray() as unknown as { state_key: string; value: string }[];
+    // Prefix filter in JS on the coordinator side — the per-connection key space
+    // is small, and it avoids LIKE/GLOB escaping on caller-supplied prefixes.
+    return rows
+      .filter((r) => !prefix || r.state_key.startsWith(prefix))
+      .map((r) => ({ key: r.state_key, value: r.value }));
+  }
+
   linkIdentity(
     provider: string,
     externalId: string,
