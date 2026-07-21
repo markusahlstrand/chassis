@@ -35,15 +35,23 @@ bound document hash, and the parties (each with a label, a `principal` / `extern
 
 ## The credential
 
-The connection stores an OAuth2 bearer token:
+The connection stores Scrive's **OAuth1 personal access credentials** — four parts:
 
 ```json
-{ "accessToken": "…", "refreshToken": "…" }
+{ "clientId": "…", "clientSecret": "…", "tokenId": "…", "tokenSecret": "…" }
 ```
 
-sealed at rest by the host's `SecretBox`. Scrive's access token lives one hour and its refresh
-token thirty days, which is why the [connection store](/connectors/#the-seam-a-connector-plugs-into)
-carries refresh at all.
+sealed at rest by the host's `SecretBox`. They combine into a PLAINTEXT signature header on every
+call (`oauth_signature="<clientSecret>&<tokenSecret>"`); there is no token exchange.
+
+::: tip Verified against reality
+The connector was first written for OAuth2 bearer tokens, from the docs. A live call to the
+testbed rejected that immediately — Scrive's UI labels "Client credentials" and "Token
+credentials" are two *halves* of one credential, not two schemes. This is the
+[connector seam's](/connectors/) "green means ready to check, never verified" caveat cashing
+out, and why the connector carries an opt-in test that runs against `api-testbed.scrive.com`
+when credentials are present.
+:::
 
 **A personnummer is never stored.** When a party signs with BankID, their Swedish personal
 number is passed *through* to Scrive on the signing request and kept nowhere: it is `direct` PII,
