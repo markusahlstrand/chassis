@@ -192,7 +192,14 @@ export interface FetchLike {
 export interface ConnectorRequestInit {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  /**
+   * `Uint8Array` as well as `string` because a real provider upload is binary:
+   * Scrive's `setfile` is `multipart/form-data`, whose body is a byte sequence a
+   * string cannot carry without corrupting the file. Web `fetch` accepts both, so
+   * this only widens the declared surface — the adapter passes it straight
+   * through.
+   */
+  body?: string | Uint8Array;
   signal?: unknown;
 }
 export interface ConnectorResponse {

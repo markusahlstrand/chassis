@@ -1,24 +1,57 @@
 import { z } from 'zod';
 import type { ConnectorConnection } from '@substrat-run/kernel';
 
+// Web-standard everywhere this runs (Node, Workers); declared locally so the
+// connector pulls in no platform typings, exactly as the kernel does.
+declare const TextEncoder: new () => { encode(input: string): Uint8Array };
+
 /**
- * A thin, typed client over the documented Scrive eSign v2 endpoints.
+ * A thin, typed client over the Scrive eSign v2 endpoints.
  *
  * Every call goes through the connection's `fetch`, never a global one: that is
  * what gets it a timeout, an egress policy, and health recorded against the
  * right connection. Module code cannot reach any of this — boundary-lint bans
  * `fetch` outright — and a connector is host code.
  *
- * **Written against the published docs, not against a live account.** Until
- * someone runs it at `api-testbed.scrive.com`, the response shapes below are a
- * reading of documentation. Treat a green test suite as "ready to check", never
- * as "verified".
+ * **The shapes here were verified against `api-testbed.scrive.com`, not just the
+ * docs.** The first version of this file was written from the documentation and
+ * was wrong in three ways a live call exposed at once (auth scheme, the upload
+ * encoding, the create-response shape). Each is called out below where it bit.
  */
 
 export const SCRIVE_TESTBED = 'https://api-testbed.scrive.com';
 export const SCRIVE_PRODUCTION = 'https://scrive.com';
 
-/** The subset of the document object this connector actually depends on. */
+/**
+ * A Scrive connection's credential — OAuth1 "personal access credentials".
+ *
+ * NOT OAuth2 bearer, which the first version assumed. Scrive's UI labels these
+ * "Client credentials" and "Token credentials", which reads like two schemes but
+ * is one: the four parts combine into a PLAINTEXT OAuth signature. The
+ * `oauth2.scrive.com` token endpoint rejects them with `invalid_client` — it is
+ * a different mechanism entirely.
+ */
+export const scriveSecret = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+  tokenId: z.string().min(1),
+  tokenSecret: z.string().min(1),
+});
+export type ScriveSecret = z.infer<typeof scriveSecret>;
+
+/**
+ * An id-bearing response — what `new` / `setfile` / `update` / `start` return.
+ *
+ * `POST /documents/new` returns NO top-level `status` (verified) — only
+ * `/documents/{id}/get` returns the full object. The first version parsed every
+ * response as a full document and would have thrown on call one. So mutation
+ * responses are parsed for their id only, and status is read from `get` — which
+ * is the right design anyway: don't trust a mutation's echo, re-read the truth.
+ */
+export const scriveDocRef = z.object({ id: z.string().min(1) });
+export type ScriveDocRef = z.infer<typeof scriveDocRef>;
+
+/** The full document, as `get` returns it — extra fields ignored. */
 export const scriveDocument = z.object({
   id: z.string().min(1),
   status: z.enum(['preparation', 'pending', 'closed', 'canceled', 'timedout', 'rejected']),
@@ -26,10 +59,12 @@ export const scriveDocument = z.object({
     .array(
       z.object({
         id: z.string().min(1),
+        is_author: z.boolean().optional(),
+        is_signatory: z.boolean().optional(),
+        signatory_role: z.string().optional(),
         /** Set once that party has signed. */
         sign_time: z.string().nullable().optional(),
-        /** Provider-side identifiers; what lands in `evidence_ref`. */
-        fields: z.array(z.object({ type: z.string(), value: z.unknown() })).optional(),
+        authentication_method_to_sign: z.string().optional(),
       }),
     )
     .default([]),
@@ -44,17 +79,41 @@ export interface ScriveParty {
    * Swedish personnummer, when the flow authenticates to sign with BankID.
    *
    * Passed THROUGH to the provider and never persisted by us: it is `direct`
-   * PII, and `engine-protocol` deliberately stores an opaque `DataSubjectId` as
-   * the signatory instead. The provider needs it; our tables must not have it.
+   * PII, and `engine-protocol` stores an opaque `DataSubjectId` as the signatory
+   * instead. The provider needs it; our tables must not have it.
    */
   personalNumber?: string;
-  /** `se_bankid` for Swedish BankID; the provider's own vocabulary. */
+  /** `se_bankid` for Swedish BankID; `standard` otherwise. */
   authenticationMethodToSign: 'standard' | 'se_bankid';
+  /**
+   * The sender/author. Scrive auto-adds the API user as an author party on
+   * `new`; exactly one party across the set must be the author, so the connector
+   * marks the issuing (primary) party as it. Verified: sending an explicit
+   * author party in `update` replaces the auto one.
+   */
+  isAuthor?: boolean;
+  /** A viewer rather than a signer — an author who does not sign. */
+  isSignatory?: boolean;
 }
 
-const asJson = async (res: { ok: boolean; status: number; text(): Promise<string> }, what: string) => {
+const asJson = async (
+  res: { ok: boolean; status: number; text(): Promise<string> },
+  what: string,
+) => {
   const body = await res.text();
-  if (!res.ok) throw new Error(`scrive ${what} failed: HTTP ${res.status} ${body.slice(0, 400)}`);
+  if (!res.ok) {
+    // Scrive's error body is JSON with `error_message`; surface it rather than a
+    // bare status, because "This feature is disabled" is the difference between a
+    // bug and an account setting.
+    let detail = body.slice(0, 400);
+    try {
+      const parsed = JSON.parse(body) as { error_message?: string };
+      if (parsed.error_message) detail = parsed.error_message;
+    } catch {
+      /* not JSON; keep the raw slice */
+    }
+    throw new Error(`scrive ${what} failed: HTTP ${res.status} ${detail}`);
+  }
   try {
     return JSON.parse(body) as unknown;
   } catch {
@@ -63,97 +122,104 @@ const asJson = async (res: { ok: boolean; status: number; text(): Promise<string
 };
 
 export class ScriveApi {
+  private readonly secret: ScriveSecret;
+
   constructor(
     private readonly conn: ConnectorConnection,
     private readonly baseUrl: string = SCRIVE_TESTBED,
-  ) {}
-
-  /**
-   * OAuth2 bearer. Scrive also documents a PLAINTEXT OAuth1-style header for
-   * personal tokens; this uses the bearer form because it is the one with a
-   * refresh story, and refresh is what the connection store exists to carry.
-   */
-  private headers(extra: Record<string, string> = {}): Record<string, string> {
-    const token = this.conn.secret.accessToken;
-    if (!token) {
-      throw new Error(
-        `connection ${this.conn.id} carries no accessToken — the secret shape a Scrive ` +
-          `connection needs is { accessToken, refreshToken? }`,
-      );
-    }
-    return { Authorization: `Bearer ${token}`, ...extra };
+  ) {
+    this.secret = scriveSecret.parse(conn.secret);
   }
 
-  async createDocument(): Promise<ScriveDocument> {
+  /**
+   * The OAuth1 PLAINTEXT authorization header. The signature is
+   * `<clientSecret>&<tokenSecret>` — literally the two secrets joined by `&`,
+   * which is what "PLAINTEXT" means: no HMAC, TLS is the confidentiality.
+   */
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
+    const s = this.secret;
+    const auth =
+      `oauth_signature_method="PLAINTEXT", ` +
+      `oauth_consumer_key="${s.clientId}", ` +
+      `oauth_token="${s.tokenId}", ` +
+      `oauth_signature="${s.clientSecret}&${s.tokenSecret}"`;
+    return { authorization: auth, ...extra };
+  }
+
+  async createDocument(): Promise<ScriveDocRef> {
     const res = await this.conn.fetch(`${this.baseUrl}/api/v2/documents/new`, {
       method: 'POST',
       headers: this.headers(),
     });
-    return scriveDocument.parse(await asJson(res, 'documents/new'));
+    return scriveDocRef.parse(await asJson(res, 'documents/new'));
   }
 
   /**
-   * Attach the file. Separate from creation in Scrive's own API, which is what
-   * makes a no-file creation step possible at all.
+   * Attach the PDF. **`multipart/form-data`**, verified — not the raw base64 body
+   * the first version sent. The multipart envelope is built as bytes because the
+   * file is binary and a string body would corrupt it (which is why
+   * `ConnectorRequestInit.body` accepts `Uint8Array`).
    */
   async setFile(documentId: string, filename: string, pdf: Uint8Array): Promise<void> {
-    const res = await this.conn.fetch(
-      `${this.baseUrl}/api/v2/documents/${documentId}/setfile`,
-      {
-        method: 'POST',
-        headers: this.headers({ 'content-type': 'application/pdf', 'x-filename': filename }),
-        body: base64(pdf),
-      },
-    );
+    const boundary = `----substrat${filename.length}${pdf.length}`;
+    const body = multipartFile(boundary, 'file', filename, pdf);
+    const res = await this.conn.fetch(`${this.baseUrl}/api/v2/documents/${documentId}/setfile`, {
+      method: 'POST',
+      headers: this.headers({ 'content-type': `multipart/form-data; boundary=${boundary}` }),
+      body,
+    });
     await asJson(res, 'setfile');
   }
 
-  /** Parties, callback URL and title, in one update — the documented shape. */
+  /** Parties, callback URL and title, in one `document=` form field. */
   async update(
     documentId: string,
     patch: { title?: string; parties?: ScriveParty[]; callbackUrl?: string },
-  ): Promise<ScriveDocument> {
-    const body = {
-      document: {
-        ...(patch.title ? { title: patch.title } : {}),
-        ...(patch.callbackUrl ? { api_callback_url: patch.callbackUrl } : {}),
-        ...(patch.parties
-          ? {
-              parties: patch.parties.map((p) => ({
-                authentication_method_to_sign: p.authenticationMethodToSign,
-                fields: [
-                  { type: 'name', order: 1, value: p.name },
-                  ...(p.email ? [{ type: 'email', value: p.email }] : []),
-                  ...(p.personalNumber
-                    ? [{ type: 'personal_number', value: p.personalNumber }]
-                    : []),
-                ],
-              })),
-            }
-          : {}),
-      },
+  ): Promise<ScriveDocRef> {
+    const document = {
+      ...(patch.title ? { title: patch.title } : {}),
+      ...(patch.callbackUrl ? { api_callback_url: patch.callbackUrl } : {}),
+      ...(patch.parties
+        ? {
+            parties: patch.parties.map((p) => ({
+              is_author: p.isAuthor ?? false,
+              is_signatory: p.isSignatory ?? true,
+              authentication_method_to_sign: p.authenticationMethodToSign,
+              fields: [
+                { type: 'name', order: 1, value: p.name },
+                ...(p.email ? [{ type: 'email', value: p.email }] : []),
+                ...(p.personalNumber
+                  ? [{ type: 'personal_number', value: p.personalNumber }]
+                  : []),
+              ],
+            })),
+          }
+        : {}),
     };
+    // Scrive takes the document JSON as a url-encoded `document=` form field, not
+    // a JSON request body — another shape the docs left ambiguous and the testbed
+    // settled.
     const res = await this.conn.fetch(`${this.baseUrl}/api/v2/documents/${documentId}/update`, {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json' }),
-      body: JSON.stringify(body),
+      headers: this.headers({ 'content-type': 'application/x-www-form-urlencoded' }),
+      body: `document=${encodeURIComponent(JSON.stringify(document))}`,
     });
-    return scriveDocument.parse(await asJson(res, 'update'));
+    return scriveDocRef.parse(await asJson(res, 'update'));
   }
 
   /** Send it. After this the document is `pending` and the parties are invited. */
-  async start(documentId: string): Promise<ScriveDocument> {
+  async start(documentId: string): Promise<ScriveDocRef> {
     const res = await this.conn.fetch(`${this.baseUrl}/api/v2/documents/${documentId}/start`, {
       method: 'POST',
       headers: this.headers(),
     });
-    return scriveDocument.parse(await asJson(res, 'start'));
+    return scriveDocRef.parse(await asJson(res, 'start'));
   }
 
   /**
-   * Current state. This is the POLLING path, and it is why webhook ingress
-   * (#96) is not on the critical path: Scrive's callbacks are unauthenticated
-   * anyway, so a callback can only ever be a hint to re-read this.
+   * Current state — the polling path, and the only call that returns `status`.
+   * Webhook ingress (#96) is not on the critical path precisely because this
+   * exists and Scrive's callbacks are unauthenticated anyway.
    */
   async get(documentId: string): Promise<ScriveDocument> {
     const res = await this.conn.fetch(`${this.baseUrl}/api/v2/documents/${documentId}/get`, {
@@ -164,9 +230,23 @@ export class ScriveApi {
   }
 }
 
-/** Base64 without node:buffer — web-standard only, so it runs in Workers. */
-function base64(bytes: Uint8Array): string {
-  let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return (globalThis as unknown as { btoa(v: string): string }).btoa(s);
+/** A one-file `multipart/form-data` body, as bytes. Web-standard, no node:buffer. */
+function multipartFile(
+  boundary: string,
+  field: string,
+  filename: string,
+  file: Uint8Array,
+): Uint8Array {
+  const enc = new TextEncoder();
+  const head = enc.encode(
+    `--${boundary}\r\n` +
+      `content-disposition: form-data; name="${field}"; filename="${filename}"\r\n` +
+      `content-type: application/pdf\r\n\r\n`,
+  );
+  const tail = enc.encode(`\r\n--${boundary}--\r\n`);
+  const out = new Uint8Array(head.length + file.length + tail.length);
+  out.set(head, 0);
+  out.set(file, head.length);
+  out.set(tail, head.length + file.length);
+  return out;
 }
