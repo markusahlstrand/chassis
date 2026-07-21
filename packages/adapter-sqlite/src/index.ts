@@ -636,6 +636,17 @@ export class SqliteScopeHost implements ScopeHost {
         ciphertext    TEXT NOT NULL,
         updated_at    TEXT NOT NULL
       );
+      -- A connector's own durable state (#101 gap 3), keyed by connection. The
+      -- dispatch-idempotency ledger: (connection, event key) -> what was done,
+      -- so a redelivery skips instead of repeating an outward effect. Directory-
+      -- side because a connector cannot write the scope during its own dispatch.
+      CREATE TABLE IF NOT EXISTS _substrat_connector_state (
+        connection_id TEXT NOT NULL,
+        state_key     TEXT NOT NULL,
+        value         TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY (connection_id, state_key)
+      );
       CREATE TABLE IF NOT EXISTS _substrat_identities (
         provider     TEXT NOT NULL,
         external_id  TEXT NOT NULL,
@@ -2561,6 +2572,11 @@ export class SqliteScopeHost implements ScopeHost {
         this.directory
           .prepare('DELETE FROM _substrat_connection_secrets WHERE connection_id = ?')
           .run(id);
+        // Connector state dies with the connection: it is that connection's
+        // private bookkeeping and means nothing once it can no longer act.
+        this.directory
+          .prepare('DELETE FROM _substrat_connector_state WHERE connection_id = ?')
+          .run(id);
         this.recordAdmin(
           actor,
           'revokeConnection',
@@ -2619,6 +2635,24 @@ export class SqliteScopeHost implements ScopeHost {
              WHERE id = ?`,
           )
           .run(outcome.error.slice(0, 2000), now, id);
+      },
+
+      putConnectorState: async (id: ConnectionId, key: string, value: unknown) => {
+        this.directory
+          .prepare(
+            `INSERT INTO _substrat_connector_state (connection_id, state_key, value, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (connection_id, state_key)
+             DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+          )
+          .run(id, key, JSON.stringify(value ?? null), new Date().toISOString());
+      },
+
+      getConnectorState: async (id: ConnectionId, key: string) => {
+        const row = this.directory
+          .prepare('SELECT value FROM _substrat_connector_state WHERE connection_id = ? AND state_key = ?')
+          .get(id, key) as { value: string } | undefined;
+        return row ? (JSON.parse(row.value) as unknown) : undefined;
       },
 
       linkIdentity: async (actor: PlatformActorId, input: IdentityLink) => {

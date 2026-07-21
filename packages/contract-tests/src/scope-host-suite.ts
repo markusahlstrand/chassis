@@ -564,6 +564,50 @@ export function scopeHostContractSuite(
       });
     });
 
+    // -- connector state: a connector's own durable bookkeeping (#101 gap 3) ---
+
+    describe('connector state', () => {
+      it('round-trips arbitrary JSON keyed by (connection, key)', async () => {
+        const id = connectionId.parse(ulid());
+        await host.admin.createConnection(staff, {
+          id,
+          tenantId: t1,
+          vertical: 'connector-vertical',
+          provider: 'stateful',
+          label: 'state test',
+          secret: { accessToken: 'x' },
+        });
+        expect(await host.admin.getConnectorState(id, 'k')).toBeUndefined();
+        await host.admin.putConnectorState(id, 'dispatch:inst-1', { documentId: 'doc-9', n: 2 });
+        expect(await host.admin.getConnectorState(id, 'dispatch:inst-1')).toEqual({
+          documentId: 'doc-9',
+          n: 2,
+        });
+        // Upsert: a second put replaces.
+        await host.admin.putConnectorState(id, 'dispatch:inst-1', { documentId: 'doc-9', n: 3 });
+        expect(await host.admin.getConnectorState(id, 'dispatch:inst-1')).toEqual({
+          documentId: 'doc-9',
+          n: 3,
+        });
+      });
+
+      it('dies with the connection — revoke cascades', async () => {
+        const id = connectionId.parse(ulid());
+        await host.admin.createConnection(staff, {
+          id,
+          tenantId: t1,
+          vertical: 'connector-vertical',
+          provider: 'ephemeral',
+          label: 'ephemeral',
+          secret: { accessToken: 'x' },
+        });
+        await host.admin.putConnectorState(id, 'k', { v: 1 });
+        await host.admin.revokeConnection(staff, id);
+        // The bookkeeping is gone with the connection that owned it.
+        expect(await host.admin.getConnectorState(id, 'k')).toBeUndefined();
+      });
+    });
+
 
     // -- connectors: credential + egress, bound to the scope's vertical -------
 

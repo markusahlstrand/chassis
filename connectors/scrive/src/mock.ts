@@ -145,6 +145,7 @@ export class ScriveMock {
         const patch = JSON.parse(decodeURIComponent(encoded) || '{}') as {
           title?: string;
           api_callback_url?: string;
+          tags?: { name: string; value: string }[];
           parties?: {
             is_author?: boolean;
             is_signatory?: boolean;

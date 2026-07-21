@@ -50,25 +50,24 @@ export interface ScriveConnectorOptions {
    * strategy and needs no ingress at all (#96).
    */
   callbackUrl?: (instanceId: string) => string;
-  /**
-   * Called once the document is live at the provider. **The #97 seam.**
-   *
-   * Must persist `externalRef` against the signature request, or the next retry
-   * duplicates the document. Required, because a connector that silently
-   * forgets what it created is worse than one that refuses to run.
-   */
-  onDispatched: (report: DispatchedDocument) => Promise<void>;
 }
 
-export interface DispatchedDocument {
+/**
+ * What the connector remembers about a dispatch, stored per-connection in the
+ * directory (`ctx.admin.putConnectorState`). Its whole job is idempotency: a
+ * redelivery finds this and skips instead of creating a second document.
+ */
+export interface ScriveDispatchState {
+  documentId: string;
   instanceId: string;
-  tenantId: string;
-  scopeId: string;
-  /** Scrive's document id — belongs on every request row for this instance. */
-  externalRef: string;
-  /** The request ids this document covers, in the order its parties were set. */
   requestIds: string[];
+  scopeId: string;
+  tenantId: string;
+  dispatchedAt: string;
 }
+
+/** The connector-state key for one signature request set. */
+const dispatchKey = (instanceId: string): string => `scrive:dispatch:${instanceId}`;
 
 /** The payload half of `protocol.signatures-requested` this connector reads. */
 const signaturesRequested = z.object({
@@ -103,6 +102,19 @@ export function scriveConnector(options: ScriveConnectorOptions): ConnectorHandl
     if (payload.method !== 'scrive') return; // not ours; delivered, not effected
 
     const conn = await ctx.connection('scrive');
+
+    // Idempotency (#101 gap 3). Delivery is at-least-once, so a redelivery must
+    // not create a SECOND Scrive document — duplicate legal paperwork sent to
+    // real signatories. The connector cannot record "done" in the scope, because
+    // it runs INSIDE the scope's dispatch and re-entering the scope actor
+    // deadlocks (verified). So the dispatch ledger lives in the directory, which
+    // `ctx.admin` reaches without touching the scope.
+    const key = dispatchKey(payload.instanceId);
+    const prior = (await ctx.admin.getConnectorState(conn.id, key)) as
+      | ScriveDispatchState
+      | undefined;
+    if (prior) return; // already dispatched — do nothing, idempotently
+
     const api = new ScriveApi(conn, baseUrl);
 
     // The artifact. NOT the avtal — this connector cannot read the vertical's
@@ -129,6 +141,11 @@ export function scriveConnector(options: ScriveConnectorOptions): ConnectorHandl
     await api.update(doc.id, {
       title: `${payload.templateKey} v${payload.templateVersion}`,
       ...(options.callbackUrl ? { callbackUrl: options.callbackUrl(payload.instanceId) } : {}),
+      // Tag the document with the instance id (verified settable). It is not yet
+      // used for dedup — the list-by-tag filter needs a query syntax not settled
+      // here — but it makes the eventual provider-side reconciliation that would
+      // close the narrow create-then-record window (below) a filter away.
+      tags: [{ name: 'substrat_instance', value: payload.instanceId }],
       parties: payload.parties.map(
         (p): ScriveParty => ({
           name: p.label,
@@ -147,16 +164,25 @@ export function scriveConnector(options: ScriveConnectorOptions): ConnectorHandl
     });
     await api.start(doc.id);
 
-    // Hand the id back to whoever can persist it. If this throws, the delivery
-    // fails and retries — which is right: an unrecorded document is exactly the
-    // state that causes duplicates, so it must not be treated as success.
-    await options.onDispatched({
+    // Record the dispatch so a redelivery skips it. This is the write that
+    // closes the duplicate hole for the common case (a retry after a fully
+    // successful dispatch).
+    //
+    // The residual: if this write itself fails after `start` succeeded, the
+    // retry finds no state and creates a second document. Closing that fully
+    // needs provider-side dedup — the `substrat_instance` tag set above, once a
+    // list-by-tag query lets the connector adopt an existing document instead of
+    // creating one. Left as a follow-up; a rare double is a large improvement on
+    // every-retry-doubles.
+    const state: ScriveDispatchState = {
+      documentId: doc.id,
       instanceId: payload.instanceId,
-      tenantId: ctx.tenantId,
-      scopeId: ctx.scopeId,
-      externalRef: doc.id,
       requestIds: payload.parties.map((p) => p.requestId),
-    });
+      scopeId: ctx.scopeId,
+      tenantId: ctx.tenantId,
+      dispatchedAt: event.occurredAt,
+    };
+    await ctx.admin.putConnectorState(conn.id, key, state);
   };
 }
 

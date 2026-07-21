@@ -742,6 +742,27 @@ export interface HostAdmin {
    */
   recordConnectionUse(id: ConnectionId, outcome: { ok: true } | { ok: false; error: string }): Promise<void>;
 
+  /**
+   * Durable, connection-scoped state a connector keeps for itself — the home a
+   * connector's bookkeeping never had.
+   *
+   * The load-bearing use is **dispatch idempotency**. A connector runs from the
+   * outbox at-least-once, so a redelivery must not repeat an outward effect —
+   * and it cannot record "already did this" in the scope, because a connector
+   * runs *inside* the scope's dispatch and re-entering the scope actor
+   * deadlocks. This lives in the DIRECTORY instead, which the connector reaches
+   * through `ctx.admin` without touching the scope: before it creates a document
+   * at the provider it checks for prior state under a deterministic key, and
+   * skips if it is there.
+   *
+   * `value` is arbitrary JSON, opaque to the kernel — a `{ documentId, … }` map
+   * the connector interprets. NOT audited: this is high-frequency machine state,
+   * one write per dispatch, the same class as `recordConnectionUse`. Rows die
+   * with the connection (revoke cascades).
+   */
+  putConnectorState(id: ConnectionId, key: string, value: unknown): Promise<void>;
+  getConnectorState(id: ConnectionId, key: string): Promise<unknown | undefined>;
+
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
 
   /**
