@@ -34,6 +34,13 @@ import {
   SCRIVE_TESTBED,
 } from '@substrat-run/connector-scrive';
 import { MODULES, provisionMeridian, type ScriveCredential } from './provision.js';
+import { buildAuth } from './auth.js';
+import {
+  betterAuthAdapter,
+  devHeaderAdapter,
+  resolvePrincipal,
+  type AuthAdapter,
+} from './auth-adapters.js';
 
 /** The scope-DO class = the app binary: kernel + protocol + Meridian, bundled. */
 export const ScopeDO = defineScopeDO(MODULES, {});
@@ -60,6 +67,10 @@ interface Env {
   STANDALONE?: string;
   DEMO_TENANT?: string;
   DEMO_SCOPE?: string;
+  /** Better Auth's edge store (D1) — end-user identity/credentials/sessions. */
+  AUTH_DB: D1Database;
+  BETTER_AUTH_SECRET?: string;
+  BASE_URL?: string;
   // --- Scrive (optional): the four OAuth1 creds + a base64 32-byte SecretBox key enable it ---
   SCRIVE_CLIENT_ID?: string;
   SCRIVE_CLIENT_SECRET?: string;
@@ -137,13 +148,21 @@ function nodeFor(req: Request, env: Env): Node {
   });
 }
 
-/** Dev-header principal resolution (external-vertical pattern). Off unless ALLOW_DEV_HEADER=true. */
-function devPrincipal(req: Request, env: Env): ReturnType<typeof principalId.parse> | null {
-  if (env.ALLOW_DEV_HEADER !== 'true') return null;
-  const raw = req.headers.get('x-principal');
-  if (!raw) return null;
-  const parsed = principalId.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+const originOf = (req: Request): string => new URL(req.url).origin;
+
+/**
+ * The mounted auth seam: Better Auth (a D1 session cookie) first, then the
+ * dev-header bypass ONLY when explicitly opted in — secure by default. The kernel
+ * only ever receives the resolved `PrincipalId`. A Better Auth user with no linked
+ * identity here resolves to nobody (registering an email is not becoming an
+ * employee); `/internal/link` binds a login to a principal.
+ */
+function adaptersFor(env: Env, req: Request, node: Node): AuthAdapter[] {
+  const adapters: AuthAdapter[] = [
+    betterAuthAdapter(buildAuth(env, originOf(req)), hostFor(env), node),
+  ];
+  if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter());
+  return adapters;
 }
 
 const provisionInstanceBody = z.object({
@@ -154,7 +173,44 @@ const provisionInstanceBody = z.object({
   name: z.string().min(1),
 });
 
+const linkBody = z.object({
+  tenantId,
+  scopeId,
+  principal: principalId,
+  /** The Better Auth user id (from sign-up) to bind to `principal`. */
+  externalId: z.string().min(1),
+});
+
 const app = new Hono<{ Bindings: Env }>();
+
+// Better Auth owns identity/credentials/sessions in D1, mounted under /api/auth/*.
+// A per-request instance (stateless coordinator); the origin makes CSRF pass anywhere.
+app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env, originOf(c.req.raw)).handler(c.req.raw));
+
+/**
+ * Bind a Better Auth login to a principal (K-31 follow-on). Platform-gated, like
+ * `/internal/provision` — it is how the portal (or an admin) makes a
+ * freshly-provisioned instance usable by a real login: the owner signs up, and
+ * this links that user id to the owner principal. Registering an email alone
+ * grants nothing until this runs.
+ */
+app.post('/internal/link', async (c) => {
+  try {
+    assertPlatformCall(c.req.raw.headers, { expectedSecret: c.env.PLATFORM_SECRET });
+  } catch (e) {
+    if (e instanceof PlatformCallError) throw new HTTPException(403, { message: e.message });
+    throw e;
+  }
+  const body = linkBody.parse(await c.req.json());
+  await hostFor(c.env).admin.linkIdentity(STAFF, {
+    provider: 'better-auth',
+    externalId: body.externalId,
+    principal: body.principal,
+    tenantId: body.tenantId,
+    scopeId: body.scopeId,
+  });
+  return c.json({ linked: true }, 201);
+});
 
 /**
  * Provision ONE instance on the platform's instruction (K-31). Authenticated by
@@ -174,18 +230,19 @@ app.post('/internal/provision', async (c) => {
   return c.json(instance, 201);
 });
 
-/** Resolve the caller (dev-header) → the routed node → a scope stub. 401 if unresolved. */
+/** Resolve the caller across the mounted adapters → the routed node → a scope stub. 401 if none match. */
 async function stub(c: { env: Env; req: { raw: Request } }) {
   const node = nodeFor(c.req.raw, c.env);
-  const principal = devPrincipal(c.req.raw, c.env);
-  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-  return hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  const result = await resolvePrincipal(adaptersFor(c.env, c.req.raw, node), c.req.raw.headers);
+  if (!result) throw new HTTPException(401, { message: 'unauthorized' });
+  return hostFor(c.env).getScope(result.principal, node.tenantId, node.scopeId);
 }
 
-app.get('/api/me', (c) => {
-  const principal = devPrincipal(c.req.raw, c.env);
-  if (!principal) return c.json({ error: 'unauthorized' }, 401);
-  return c.json({ principal });
+app.get('/api/me', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  const result = await resolvePrincipal(adaptersFor(c.env, c.req.raw, node), c.req.raw.headers);
+  if (!result) return c.json({ error: 'unauthorized' }, 401);
+  return c.json({ principal: result.principal, via: result.via, display: result.display });
 });
 
 // Generic invoke: the kernel checks the permission inside every operation, so a

@@ -2,9 +2,21 @@
 	"name": "substrat-meridian",
 	"main": "src/worker.ts",
 	"compatibility_date": "2025-01-01",
-	// Better Auth (end-user sign-in, a later stage) needs Node built-ins on workerd.
+	// Better Auth (end-user sign-in) needs Node built-ins on workerd.
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
+	// Better Auth's edge store — end-user identity/credentials/sessions, separate
+	// from the directory DO. Apply migrations/0001_better_auth.sql before deploy:
+	//   wrangler d1 migrations apply substrat-meridian-auth   (--local for dev)
+	// database_id is a placeholder for local dev; set the real one before deploy.
+	"d1_databases": [
+		{
+			"binding": "AUTH_DB",
+			"database_name": "substrat-meridian-auth",
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
 	"durable_objects": {
 		"bindings": [
 			// One ScopeDO per scope (kernel + protocol engine + Meridian module bundled),

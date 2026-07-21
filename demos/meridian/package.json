@@ -15,17 +15,18 @@
     "cf:dry-run": "wrangler deploy --dry-run --outdir dist-worker"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.0",
     "@substrat-run/adapter-cloudflare": "workspace:^",
     "@substrat-run/adapter-sqlite": "workspace:^",
     "@substrat-run/connector-scrive": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/engine-protocol": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
-    "@hono/node-server": "^1.13.0",
-    "hono": "^4.6.0",
-    "zod": "^4.4.3",
     "better-auth": "^1.6.23",
-    "better-sqlite3": "^12.0.0"
+    "better-sqlite3": "^12.0.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.6.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250109.0",
