@@ -5,7 +5,12 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import Database from 'better-sqlite3';
-import { PermissionDenied, ulid, type ScopeStub } from '@substrat-run/kernel';
+import { PermissionDenied, startPlatformSweeper, ulid, type FetchLike, type ScopeStub } from '@substrat-run/kernel';
+import {
+  ScriveMock,
+  SCRIVE_TESTBED,
+  sweepScriveReconciliations,
+} from '@substrat-run/connector-scrive';
 import { buildAuthNode, migrateAuth } from './auth-node.js';
 import {
   devHeaderAdapter,
@@ -13,7 +18,7 @@ import {
   type AuthAdapter,
 } from './auth-adapters.js';
 import { platformActorId, type PrincipalId, type ScopeId, type TenantId } from '@substrat-run/contracts';
-import { buildDemoHost, seedDemo, type DemoWorld } from './index.js';
+import { buildDemoHost, seedDemo, type DemoWorld, type ScriveConfig } from './index.js';
 
 /**
  * Dev API server for the Meridian demo. Deliberately thin: pick the dev
@@ -38,8 +43,45 @@ mkdirSync(dataDir, { recursive: true });
 const PORT = Number(process.env.PORT ?? 8875);
 const WEB_PORT = Number(process.env.WEB_PORT ?? 5275);
 
-const host = buildDemoHost(dataDir);
-const world: DemoWorld = await seedDemo(host, dataDir);
+/**
+ * Scrive wiring, opt-in from the environment. Three modes:
+ *   - real testbed: SCRIVE_CLIENT_ID/SECRET + SCRIVE_TOKEN_ID/SECRET set → global fetch
+ *   - mock:         MERIDIAN_SCRIVE_MOCK=1 → ScriveMock, offline, with a dev sign endpoint
+ *   - off (default): no connection, no sweeper — the contract sits pending, honest
+ *     without a provider.
+ * `mock` is returned when ScriveMock backs the egress, so the dev route can drive it.
+ */
+function resolveScrive(): { config: ScriveConfig; egress: FetchLike; mock: ScriveMock | null } | null {
+  const { SCRIVE_CLIENT_ID, SCRIVE_CLIENT_SECRET, SCRIVE_TOKEN_ID, SCRIVE_TOKEN_SECRET } = process.env;
+  if (SCRIVE_CLIENT_ID && SCRIVE_CLIENT_SECRET && SCRIVE_TOKEN_ID && SCRIVE_TOKEN_SECRET) {
+    const secret = {
+      clientId: SCRIVE_CLIENT_ID,
+      clientSecret: SCRIVE_CLIENT_SECRET,
+      tokenId: SCRIVE_TOKEN_ID,
+      tokenSecret: SCRIVE_TOKEN_SECRET,
+    };
+    // Real testbed: the runtime's global fetch is the egress (host default), so
+    // pass no `fetch` and hand the sweeper the same global.
+    return {
+      config: { secret, baseUrl: process.env.SCRIVE_BASE_URL ?? SCRIVE_TESTBED },
+      egress: (globalThis as unknown as { fetch: FetchLike }).fetch,
+      mock: null,
+    };
+  }
+  if (process.env.MERIDIAN_SCRIVE_MOCK === '1') {
+    const mock = new ScriveMock();
+    return {
+      config: { secret: { clientId: 'ci', clientSecret: 'cs', tokenId: 'ti', tokenSecret: 'ts' }, fetch: mock.fetch },
+      egress: mock.fetch,
+      mock,
+    };
+  }
+  return null;
+}
+
+const scrive = resolveScrive();
+const host = buildDemoHost(dataDir, scrive?.config);
+const world: DemoWorld = await seedDemo(host, dataDir, scrive?.config.secret);
 
 const auth = buildAuthNode(dataDir, `http://localhost:${PORT}`, [
   `http://localhost:${PORT}`,
@@ -146,10 +188,49 @@ app.post('/api/invoke', async (c) => {
   return c.json((await (await stub(c)).invoke(op, input)) ?? null);
 });
 
+// Dev-only: simulate the provider-side signature so the poll loop is observable
+// with the mock (a real testbed signs in the browser instead). Signs every party
+// of every mock document; the next sweep records them and the contract goes
+// `signed`. Gated on the dev header AND mock mode, so it never exists on a real run.
+if (scrive?.mock && process.env.ALLOW_DEV_HEADER === 'true') {
+  const mock = scrive.mock;
+  app.post('/api/dev/scrive-sign', (c) => {
+    const at = new Date().toISOString();
+    let signed = 0;
+    for (const doc of mock.documents.values()) {
+      doc.parties.forEach((_p, i) => {
+        mock.sign(doc.id, i, at);
+        signed += 1;
+      });
+    }
+    return c.json({ signed, documents: mock.documents.size });
+  });
+}
+
 // Better Auth owns /api/auth/*. Mounted last so it cannot shadow a demo route.
 app.on(['GET', 'POST'], '/api/auth/*', (c) => auth.handler(c.req.raw));
 
 await seedPersonaLogins();
+
+// The scheduler's call site (#96): drive the poll on a timer so a signature
+// completed at Scrive is recorded back into the scope without anyone asking. This
+// is the one line a deployment adds; the driver and reconcile live in the kernel
+// and the connector. Non-overlapping by construction.
+if (scrive) {
+  const pollMs = Number(process.env.SCRIVE_POLL_MS ?? 15_000);
+  startPlatformSweeper(host, {
+    actor: platformActorId.parse(ulid()),
+    fetch: scrive.egress,
+    sweepers: { scrive: sweepScriveReconciliations },
+    intervalMs: pollMs,
+    onPass: (o) => {
+      if ('error' in o) console.error('[scrive-sweep]', o.error);
+      else if (o.errors.length) console.error('[scrive-sweep]', o.errors.length, 'error(s)', o.errors);
+      else if (o.connectionsSwept) console.log(`[scrive-sweep] polled ${o.connectionsSwept} connection(s)`);
+    },
+  });
+  console.log(`  scrive sweeper          every ${pollMs / 1000}s ${scrive.mock ? '(ScriveMock)' : '(testbed)'}`);
+}
 
 serve({ fetch: app.fetch, port: PORT });
 console.log(`\n  Meridian (HR) demo API  http://localhost:${PORT}`);

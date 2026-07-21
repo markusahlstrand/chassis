@@ -343,6 +343,9 @@ importers:
       '@substrat-run/adapter-sqlite':
         specifier: workspace:^
         version: link:../../packages/adapter-sqlite
+      '@substrat-run/connector-scrive':
+        specifier: workspace:^
+        version: link:../../connectors/scrive
       '@substrat-run/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts

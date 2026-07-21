@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@substrat-run/adapter-sqlite": "workspace:^",
+    "@substrat-run/connector-scrive": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/engine-protocol": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
