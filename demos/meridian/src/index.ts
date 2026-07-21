@@ -12,9 +12,12 @@ export {
   buildDemoHost,
   seedDemo,
   provisionMeridian,
+  connectScrive,
   MODULES,
   ROLES,
   ENTITY_GRANTS,
   type MeridianInstance,
   type DemoWorld,
+  type ScriveConfig,
+  type ScriveCredential,
 } from './seed.js';

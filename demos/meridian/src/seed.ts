@@ -1,20 +1,60 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  connectionId,
   platformActorId,
   principalId,
   scopeId,
   tenantId,
+  type ConnectionId,
   type PermissionKey,
   type PrincipalId,
   type RoleDefinition,
   type ScopeId,
   type TenantId,
 } from '@substrat-run/contracts';
-import { ulid } from '@substrat-run/kernel';
+import { ulid, webCryptoSecretBox, type FetchLike } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
+import { registerScriveConnector } from '@substrat-run/connector-scrive';
 import { meridianModule, HR_PERM } from './module.js';
+
+/** The Scrive vertical slug — the `vertical` half of every scope and connection here. */
+const VERTICAL = 'meridian';
+
+/**
+ * OAuth1 credential a Scrive connection stores — the four parts that combine into
+ * a PLAINTEXT signature (mirrors the connector's `scriveSecret`). Passed in from
+ * the environment; never checked in.
+ */
+// A `type`, not an `interface`: the connection store's secret is a
+// `Record<string, string>`, and TS only lets a (non-augmentable) type alias
+// satisfy that index signature.
+export type ScriveCredential = {
+  clientId: string;
+  clientSecret: string;
+  tokenId: string;
+  tokenSecret: string;
+};
+
+/**
+ * Enabling Scrive on a host: the egress it talks over (the real testbed via the
+ * runtime `fetch`, or `ScriveMock` in a test), and the credential every instance's
+ * connection seals. Absent, the demo runs exactly as before — the contract sits
+ * frozen and pending, which is the honest state without a provider wired.
+ */
+export interface ScriveConfig {
+  fetch?: FetchLike;
+  baseUrl?: string;
+  secret: ScriveCredential;
+}
+
+/**
+ * A dev-only key sealing connection secrets at rest. A real deployment supplies
+ * its own via `SecretBox`; this exists so the demo can hold a credential locally
+ * without shipping one in the clear.
+ */
+const DEV_SECRET_KEY = new Uint8Array(32).fill(7);
 
 /**
  * Meridian demo world (spec/concept.md §3): one multi-country company
@@ -78,10 +118,10 @@ const hrAdminPerms: PermissionKey[] = [
   PROTO.create,
   PROTO.fill,
   // The contract half: freeze the document and send it to Scrive. Note that
-  // PROTO.recordSignature is deliberately NOT here and belongs to no role —
-  // it speaks for the provider, not for a person, and nothing in this demo can
-  // legitimately hold it until webhook ingress (#96) and the inbound authority
-  // seam (#97) exist.
+  // PROTO.recordSignature is deliberately NOT here and belongs to no human role —
+  // it speaks for the provider, not for a person. It is held by the Scrive
+  // CONNECTION instead (connectScrive → grantToConnection), the inbound authority
+  // seam (#97) now that it and the poll path (#96) have landed.
   PROTO.bind,
   PROTO.requestSignature,
   PROTO.sign,
@@ -133,10 +173,55 @@ export const ENTITY_GRANTS: { entityType: string; permissions: PermissionKey[] }
   { entityType: 'employee', permissions: EMPLOYEE_SELF },
 ];
 
-export function buildDemoHost(dir: string): SqliteScopeHost {
-  const host = new SqliteScopeHost({ dir });
+export function buildDemoHost(dir: string, scrive?: ScriveConfig): SqliteScopeHost {
+  const host = new SqliteScopeHost({
+    dir,
+    // A `SecretBox` is only needed to seal a connection credential — so it is set
+    // exactly when Scrive is wired, and the default host (every existing test)
+    // still needs none. `fetch` is the connector's egress: the testbed, or a mock.
+    ...(scrive
+      ? { secretBox: webCryptoSecretBox('meridian-dev', DEV_SECRET_KEY), fetch: scrive.fetch }
+      : {}),
+  });
   for (const m of MODULES) host.registerModule(m);
+  // The connector is host code registered on the scope host, exactly like an
+  // engine module — but only when Scrive is enabled, because a registered
+  // connector with no connection would fail every dispatch.
+  if (scrive) registerScriveConnector(host, { baseUrl: scrive.baseUrl });
   return host;
+}
+
+/**
+ * Give an instance a live Scrive connection and the one grant that lets the
+ * reconcile driver write a completed signature back into the scope as the
+ * connection itself (#97).
+ *
+ * The connection is keyed (tenant, `meridian`, `scrive`) and holds ONLY
+ * `protocol:record-signature` — the key no human role holds. That is the whole
+ * authority a leaked Scrive token would carry: record a signature on this
+ * vertical's data, nothing else, and it shows up in the permission diff.
+ */
+export async function connectScrive(
+  host: SqliteScopeHost,
+  input: { tenantId: TenantId; scopeId: ScopeId; secret: ScriveCredential },
+): Promise<ConnectionId> {
+  const staff = platformActorId.parse(ulid());
+  const id = connectionId.parse(ulid());
+  await host.admin.createConnection(staff, {
+    id,
+    tenantId: input.tenantId,
+    vertical: VERTICAL,
+    provider: 'scrive',
+    label: 'Scrive (testbed)',
+    secret: input.secret,
+  });
+  await host.admin.grantToConnection(staff, {
+    connectionId: id,
+    permission: PROTO.recordSignature,
+    node: { tenantId: input.tenantId, scopeId: input.scopeId },
+    grantedBy: staff,
+  });
+  return id;
 }
 
 const ONBOARDING_SE = {
@@ -231,6 +316,7 @@ const ANSTALLNINGSAVTAL_ES = {
 export async function provisionMeridian(
   host: SqliteScopeHost,
   input: { tenantId: TenantId; scopeId: ScopeId; owner: PrincipalId; slug: string; name: string },
+  opts: { scrive?: ScriveCredential } = {},
 ): Promise<MeridianInstance> {
   const staff = platformActorId.parse(ulid());
 
@@ -250,6 +336,10 @@ export async function provisionMeridian(
     tenantId: input.tenantId,
     scopeId: input.scopeId,
     jurisdiction: 'eu',
+    // The scope must name its vertical for a connection to reach it — a
+    // connection is keyed (tenant, vertical, provider), and `getConnectorScope`
+    // refuses a scope running a different one. Correct regardless of Scrive.
+    vertical: VERTICAL,
   });
   // Provisioning writes the row as `provisioning`; nothing may use the scope until
   // it is active (K-31). Here the platform and the vertical are the same process, so
@@ -263,10 +353,26 @@ export async function provisionMeridian(
     node: { tenantId: input.tenantId, scopeId: null },
   });
 
+  // Wire the provider BEFORE any contract is issued: a dispatch fires post-commit
+  // inside the same process, so the connection has to exist by the time
+  // `hr/issue-employment-contract` emits, or the connector fails with no
+  // credential. Only when Scrive is enabled — otherwise there is no credential.
+  if (opts.scrive) {
+    await connectScrive(host, {
+      tenantId: input.tenantId,
+      scopeId: input.scopeId,
+      secret: opts.scrive,
+    });
+  }
+
   return { tenantId: input.tenantId, scopeId: input.scopeId, owner: input.owner };
 }
 
-export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<DemoWorld> {
+export async function seedDemo(
+  host: SqliteScopeHost,
+  dir: string,
+  scrive?: ScriveCredential,
+): Promise<DemoWorld> {
   const castPath = join(dir, 'cast.json');
   const fresh = !existsSync(castPath);
   const raw: Record<string, string> = fresh
@@ -292,15 +398,18 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
 
   const staff = platformActorId.parse(ulid());
 
-  // The real instance — everything a customer would get, and nothing else.
-  await provisionMeridian(host, {
-    tenantId: world.t1, scopeId: world.sSe, owner: world.hedda,
-    slug: 'nordljus', name: 'Nordljus AB',
-  });
+  // The real instance — everything a customer would get, and nothing else. When
+  // Scrive is enabled this also opens the connection, so Karin's contract below
+  // dispatches to the provider instead of sitting undelivered.
+  await provisionMeridian(
+    host,
+    { tenantId: world.t1, scopeId: world.sSe, owner: world.hedda, slug: 'nordljus', name: 'Nordljus AB' },
+    { scrive },
+  );
   // A second scope in the SAME tenant — one company, two countries. Provisioning
   // creates one scope because that is what an instance needs; more are the
   // customer's to add.
-  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.sEs, kind: 'entity', name: 'Spain', jurisdiction: 'eu' });
+  await host.provisionScope(staff, { tenantId: world.t1, scopeId: world.sEs, kind: 'entity', name: 'Spain', jurisdiction: 'eu', vertical: VERTICAL });
   await host.admin.activateScope(staff, world.t1, world.sEs);
 
   // ---------------------------------------------------------------------------
@@ -346,10 +455,10 @@ export async function seedDemo(host: SqliteScopeHost, dir: string): Promise<Demo
     await se.invoke('hr/start-onboarding', { templateKey: 'onboarding-se', employeeId: elinEmp.id });
 
     // Karin has been offered a job and has NOT started: no principal_ref, no
-    // started_at. Her anställningsavtal is out at Scrive awaiting two BankID
-    // signatures, so the app opens on a contract that is frozen and pending —
-    // the state the whole document/async change exists to represent. Nothing
-    // can advance it until #96/#97 land, and that is the honest demo.
+    // started_at. Her anställningsavtal is frozen and pending two signatures. With
+    // Scrive enabled it is dispatched to the provider and the poll driver records
+    // each signature back as it arrives (#96/#97); without it, the contract simply
+    // sits pending — the honest state when no provider is wired.
     await se.invoke('hr/set-employment-terms', {
       employeeId: karinEmp.id,
       roleTitle: 'Systemutvecklare',
