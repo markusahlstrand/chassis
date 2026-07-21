@@ -58,6 +58,8 @@ interface Node {
 interface Env {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
+  /** The built SPA (`./app/dist`), served for everything that isn't an /api or /internal route. */
+  ASSETS: Fetcher;
   /** Local dev only: when 'true', trust the `x-principal` header. NEVER in prod. */
   ALLOW_DEV_HEADER?: string;
   /** Shared secret the router presents (K-26); a request without it cannot assert a tenant. */
@@ -290,6 +292,12 @@ app.post('/api/invoke', async (c) => {
   const { op, input } = await c.req.json<{ op: string; input?: unknown }>();
   return c.json((await (await stub(c)).invoke(op, input)) ?? null);
 });
+
+// Serve the built SPA (./app/dist) for everything that isn't an /api or /internal
+// route. MUST come after all those routes so Hono handles /api/auth/* etc. first;
+// the catch-all then delegates to ASSETS, which returns index.html for unknown
+// client routes (SPA fallback). Single origin → Better Auth's cookie is same-origin.
+app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 
 app.onError((err, c) => {
   const status = err instanceof HTTPException ? err.status : 400;

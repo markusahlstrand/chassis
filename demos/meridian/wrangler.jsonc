@@ -32,6 +32,15 @@
 			"new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
 		}
 	],
+	// Serve the built employee SPA (app/dist) from the same origin as the API.
+	// run_worker_first sends every request to the Worker first (it owns /api/* and
+	// /internal/*); the catch-all delegates the rest to ASSETS with SPA fallback.
+	"assets": {
+		"directory": "./app/dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": true
+	},
 	// The poll-path timer (#96): one platform sweep per tick drains due deliveries
 	// (outbound Scrive dispatch + executor retries) and reconciles live connections.
 	// This is what the node runtime got from setInterval.

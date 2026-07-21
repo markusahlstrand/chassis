@@ -2,7 +2,7 @@
 '@substrat-run/demo-meridian': patch
 ---
 
-**Meridian runs on Cloudflare — worker port, stages 0-1 (toward dynamic portal deployment).**
+**Meridian runs on Cloudflare — the full worker port, provisionable from the portal.**
 
 The first two stages of porting Meridian from its node/SQLite server to a deployable Cloudflare
 Worker, so it can be provisioned dynamically from the control-plane portal like Callout:
@@ -59,4 +59,13 @@ dangling a binding to a service that does not exist." They are deploy steps, in 
    both. The console's create-instance flow then provisions Meridian instances, and the router
    fronts them by bound hostname.
 
-**Incomplete:** Stage 4 (SPA assets) remains.
+**Stage 4 — the SPA.** The employee app (`app/dist`) is served from the same origin via an
+`assets` binding with `run_worker_first` + single-page-application fallback; the worker owns
+`/api/*` and `/internal/*`, everything else falls through to the SPA. `cf:dev`/`cf:deploy` build
+the app first. Verified on `workerd`: `GET /` serves the app, a client route falls back to
+`index.html` (200), and `/internal/provision` + `/api/invoke` stay worker-owned.
+
+The port is complete on the code side (Stages 0-4, each verified on real `workerd`): provisioning
+handshake, the Scrive connector + a `scheduled()` Cron sweep, Better Auth on D1, connected-mode
+lifecycle gating, and the SPA. What remains is purely deployment — create the D1, set the secrets,
+`cf:deploy`, and add the `VERTICAL_MERIDIAN` router/control-plane bindings (deploy order above).
