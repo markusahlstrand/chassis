@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { PrincipalId, ScopeId, TenantId } from '@substrat-run/contracts';
 import { ulid } from '@substrat-run/kernel';
-import { Badge, Dialog, Input } from '../components';
+import { Badge, Dialog, Input, Select } from '../components';
 import type { Api } from '../lib/api';
 import {
   createInstance,
@@ -54,6 +54,10 @@ export function CreateInstance({ api, open, onCancel, onDone, onFailed }: Create
   const [verticalSlug, setVerticalSlug] = useState('fsm');
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
+  // Fixed at provisioning (K-7). Only `global` is selectable today; `eu`/`us` are
+  // shown but disabled, because their enforcement (Regional Services, an Enterprise
+  // add-on) is not in place and the control plane refuses them (K-32).
+  const [jurisdiction, setJurisdiction] = useState<'eu' | 'us' | 'global'>('global');
   const [hostname, setHostname] = useState('');
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<Record<InstanceStep, StepState>>(freshSteps);
@@ -71,6 +75,7 @@ export function CreateInstance({ api, open, onCancel, onDone, onFailed }: Create
           verticalSlug,
           slug,
           name,
+          jurisdiction,
           hostname,
           tenantId: ulid() as TenantId,
           scopeId: ulid() as ScopeId,
@@ -91,6 +96,7 @@ export function CreateInstance({ api, open, onCancel, onDone, onFailed }: Create
   function reset() {
     setSlug('');
     setName('');
+    setJurisdiction('global');
     setHostname('');
     setState(freshSteps());
   }
@@ -130,6 +136,24 @@ export function CreateInstance({ api, open, onCancel, onDone, onFailed }: Create
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <div>
+          <Select
+            label="Jurisdiction"
+            value={jurisdiction}
+            onChange={(e) => setJurisdiction(e.target.value as 'eu' | 'us' | 'global')}
+            options={[
+              { value: 'global', label: 'Global — unconstrained' },
+              { value: 'eu', label: 'EU — Enterprise (not yet available)', disabled: true },
+              { value: 'us', label: 'US — Enterprise (not yet available)', disabled: true },
+            ]}
+          />
+          <span
+            style={{ display: 'block', marginTop: 4, fontSize: 12, color: 'var(--text-tertiary)' }}
+          >
+            Fixed at provisioning and never editable. Pinned regions need Regional
+            Services, an Enterprise add-on.
+          </span>
+        </div>
         <Input
           label="Hostname"
           mono

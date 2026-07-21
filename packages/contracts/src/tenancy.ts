@@ -58,9 +58,31 @@ export type ScopeStatus = z.infer<typeof scopeStatus>;
 export const storageShape = z.enum(['A', 'B']);
 export type StorageShape = z.infer<typeof storageShape>;
 
-// Fixed at provisioning; a DO can never relocate (design K-7)
-export const jurisdiction = z.enum(['eu']).nullable();
+// Fixed at provisioning; a DO can never relocate (design K-7). `global` is the
+// honest name for an unconstrained scope — no regional subnamespace, placed near
+// first access — which is what EVERY scope is today, so naming it renames nothing
+// at runtime. It also ends the old `null`, which meant both "unconstrained" and
+// "nobody decided" at once (K-32). `eu`/`us` name residency guarantees whose
+// enforcement (DO jurisdiction subnamespace, Regional Services) is not built yet,
+// so the provisioning boundary gates them — see `provisionableJurisdiction`.
+//
+// The full vocabulary ships now, ahead of enforcement, precisely BECAUSE this is
+// immutable: a scope that took a value we could not name later would be a data
+// migration rather than a config change. Widening what is ACCEPTED is additive;
+// widening what can be STORED is not, so the storable set is complete from the start.
+export const jurisdiction = z.enum(['eu', 'us', 'global']);
 export type Jurisdiction = z.infer<typeof jurisdiction>;
+
+// Which jurisdictions the provisioning boundary currently ACCEPTS — a subset of
+// what `jurisdiction` can store. `eu`/`us` are absent until their enforcement
+// exists (a US isn't even a Cloudflare DO jurisdiction — it's Regional Services +
+// a D1 location hint), because accepting them would record a residency guarantee
+// with no mechanism behind it, which is worse than not offering it. Widen THIS
+// list — never `jurisdiction` — when enforcement lands. Gated the same way
+// `STANDALONE` and `ALLOW_DEV_HEADER` are: the capability is absent, not present
+// and checked (K-31).
+export const provisionableJurisdiction = z.enum(['global']);
+export type ProvisionableJurisdiction = z.infer<typeof provisionableJurisdiction>;
 
 /**
  * A scope's last *failed* migration attempt (kernel-design §5.3), or null when the

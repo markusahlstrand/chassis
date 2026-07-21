@@ -212,7 +212,10 @@ if (cpUrl) {
           kind: s.kind,
           name: s.name,
           vertical: s.vertical,
-          jurisdiction: (s.jurisdiction ?? null) as 'eu' | null,
+          // The local scope's nominal jurisdiction is not forwarded: the shared
+          // control plane gates everything but `global` until `eu`/`us` enforcement
+          // exists (K-32), so registering it as anything else would be refused, and
+          // an unenforced `eu` claim is a lie either way. The CP records `global`.
         });
         // The scope exists locally already; this confirms it to the shared directory
         // so the row is not left inert (K-31).

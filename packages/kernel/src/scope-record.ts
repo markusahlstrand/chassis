@@ -36,6 +36,10 @@ export function resolveScopeRecord(input: ProvisionScopeInput): ResolvedScopeRec
     name: input.name ?? slug,
     vertical: input.vertical ?? null,
     storageShape: input.storageShape ?? 'A',
-    jurisdiction: input.jurisdiction ?? null,
+    // No jurisdiction stated means `global` — unconstrained, the honest name for
+    // what an un-pinned scope already is (K-32). The old default was `null`, which
+    // also meant "nobody decided"; `global` is a decision, and the only one the
+    // provisioning boundary accepts until `eu`/`us` enforcement exists.
+    jurisdiction: input.jurisdiction ?? 'global',
   };
 }

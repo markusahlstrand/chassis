@@ -3,8 +3,8 @@ import type { ChangeEvent, CSSProperties } from 'react';
 
 export interface SelectProps {
   label?: string;
-  /** Options: strings or {value, label}. */
-  options: Array<string | { value: string; label: string }>;
+  /** Options: strings or {value, label}. `disabled` renders but cannot be picked. */
+  options: Array<string | { value: string; label: string; disabled?: boolean }>;
   size?: 'sm' | 'md' | 'lg';
   value?: string;
   onChange?: (e: ChangeEvent<HTMLSelectElement>) => void;
@@ -68,7 +68,7 @@ export function Select({ label, options, size = 'md', value, onChange, style }: 
           {options.map((o) => {
             const opt = typeof o === 'string' ? { value: o, label: o } : o;
             return (
-              <option key={opt.value} value={opt.value}>
+              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
                 {opt.label}
               </option>
             );

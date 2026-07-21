@@ -94,7 +94,7 @@ export function Scopes({ api, scopes, tenants, entitlements, hostnames, onChange
     { header: 'Shape', render: (s) => s.storageShape, mono: true, align: 'center', width: 70 },
     {
       header: 'Jurisdiction',
-      render: (s) => (s.jurisdiction ? <Tag mono>{s.jurisdiction}</Tag> : <span style={{ color: 'var(--text-placeholder)' }}>—</span>),
+      render: (s) => <Tag mono>{s.jurisdiction}</Tag>,
     },
     { header: 'Schema', render: (s) => s.schemaVersion, mono: true, muted: true, width: 80 },
     {
@@ -218,7 +218,13 @@ export function Scopes({ api, scopes, tenants, entitlements, hostnames, onChange
               { label: 'Kind', value: selected.kind, mono: true },
               { label: 'Storage shape', value: `Shape ${selected.storageShape}` },
               // Fixed at provisioning (K-7) — displayed, never editable.
-              { label: 'Jurisdiction', value: selected.jurisdiction ? 'EU — fixed at provisioning' : 'Unrestricted' },
+              {
+                label: 'Jurisdiction',
+                value:
+                  selected.jurisdiction === 'global'
+                    ? 'Global — unconstrained'
+                    : `${selected.jurisdiction.toUpperCase()} — fixed at provisioning`,
+              },
               { label: 'Schema', value: selected.schemaVersion, mono: true },
               ...(selected.migrationFailure
                 ? [

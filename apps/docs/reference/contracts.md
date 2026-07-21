@@ -38,7 +38,8 @@ jurisdiction, so they must never encode anything.
 ## Tenancy (`tenancy.ts`)
 
 `tenant` / `Tenant`, `scope` / `Scope`, plus `tenantStatus`, `scopeStatus`,
-`storageShape` (`'A' | 'B'`) and `jurisdiction` (`'eu' | null`), and `createTenantInput`.
+`storageShape` (`'A' | 'B'`) and `jurisdiction` (`'eu' | 'us' | 'global'`, plus
+`provisionableJurisdiction` — the subset the control plane currently accepts), and `createTenantInput`.
 Also `org` / `Org` and `createOrgInput` — organizations inside a tenant, which
 membership tuples point at and `grantToOrg` targets. `migrationFailure` on a scope is
 non-null when its last migration attempt failed, which is what stops a scope that

@@ -1,4 +1,5 @@
 {
   "name": "substrat-docs",
+  "account_id": "8cbb7553a78d4d4bc4159906c77214a3",
   "pages_build_output_dir": ".vitepress/dist"
 }

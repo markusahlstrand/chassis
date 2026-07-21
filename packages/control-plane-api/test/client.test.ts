@@ -38,7 +38,9 @@ describe('ControlPlaneClient — the connect seam', () => {
     // The vertical registers itself.
     await client.createTenant({ id: T, slug: 'acme', name: 'Acme' });
     await client.grantEntitlement(T, 'notes');
-    await client.provisionScope({ tenantId: T, scopeId: S, slug: 'main', vertical: 'demo', jurisdiction: 'eu' });
+    // `global` is the only provisionable jurisdiction over HTTP until enforcement
+    // exists (K-32); `eu`/`us` are gated at the boundary.
+    await client.provisionScope({ tenantId: T, scopeId: S, slug: 'main', vertical: 'demo', jurisdiction: 'global' });
     // Registration and confirmation are the same moment in this direction, but they
     // stay two calls — the directory never decides on its own that a scope is ready.
     await client.activateScope(T, S);
