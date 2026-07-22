@@ -1,0 +1,280 @@
+/**
+ * Demo data for the screens the platform does not back yet (docs/design/dashboard.md
+ * §6: M1 team, M2 ops, M3 plan, plus the design-ahead future screens). The M0 flow
+ * — sign-in, the app list, create-app, the app header — runs on the real worker
+ * API (lib/api.ts); everything here is clearly-labelled placeholder data shown
+ * behind the design's honesty banners, never presented as live.
+ *
+ * The generic "Acme" tenant from the design handoff.
+ */
+import type { IconName } from './icons';
+
+/** Per-vertical display metadata — the "kind" label and its layer-accent colour. */
+export interface VerticalMeta {
+  label: string;
+  accent: string;
+}
+
+const LAYER = {
+  vertical: 'var(--layer-vertical)', // amber — Documents
+  engine: 'var(--layer-engine)', // cyan — Work Orders
+  kernel: 'var(--layer-kernel)', // indigo — Invoicing
+} as const;
+
+const VERTICAL_META: Record<string, VerticalMeta> = {
+  protocol: { label: 'Documents', accent: LAYER.vertical },
+  documents: { label: 'Documents', accent: LAYER.vertical },
+  dashboard: { label: 'Dashboard', accent: LAYER.kernel },
+  workorder: { label: 'Work Orders', accent: LAYER.engine },
+  callout: { label: 'Callout', accent: LAYER.engine },
+  invoicing: { label: 'Invoicing', accent: LAYER.kernel },
+};
+
+/** Look up a vertical's label + accent, falling back to a title-cased slug. */
+export function verticalMeta(slug: string): VerticalMeta {
+  return (
+    VERTICAL_META[slug] ?? {
+      label: slug.charAt(0).toUpperCase() + slug.slice(1),
+      accent: LAYER.kernel,
+    }
+  );
+}
+
+// -- M1: team ---------------------------------------------------------------
+
+export type MemberStatus = 'active' | 'invited' | 'revoked';
+export interface Member {
+  name: string;
+  email: string;
+  role: 'owner' | 'admin' | 'member' | 'viewer';
+  status: MemberStatus;
+  added: string;
+  avatar: 'brand' | 'cyan' | 'amber' | 'muted';
+  you?: boolean;
+}
+
+export const MEMBERS: Member[] = [
+  { name: 'Dana Vogel', email: 'dana@acme.com', role: 'owner', status: 'active', added: 'Mar 2, 2026', avatar: 'brand', you: true },
+  { name: 'Jonas Berg', email: 'jonas@acme.com', role: 'admin', status: 'active', added: 'Apr 11, 2026', avatar: 'cyan' },
+  { name: 'Priya Shah', email: 'priya@acme.com', role: 'member', status: 'invited', added: 'Jul 20, 2026', avatar: 'amber' },
+  { name: 'Leo Martin', email: 'leo@acme.com', role: 'viewer', status: 'revoked', added: 'May 5, 2026', avatar: 'muted' },
+];
+
+export interface RolePerm {
+  label: string;
+  owner: boolean;
+  admin: boolean;
+  member: boolean;
+  viewer: boolean;
+}
+export const ROLE_MATRIX: RolePerm[] = [
+  { label: 'Create & manage apps', owner: true, admin: true, member: false, viewer: false },
+  { label: 'Manage domains, env vars & integrations', owner: true, admin: true, member: false, viewer: false },
+  { label: 'Invite & manage members', owner: true, admin: true, member: false, viewer: false },
+  { label: 'Use apps & edit content', owner: true, admin: true, member: true, viewer: false },
+  { label: 'View apps, analytics & billing', owner: true, admin: true, member: true, viewer: true },
+];
+
+// -- M2: domains ------------------------------------------------------------
+
+export type DomainStatus = 'active' | 'pending' | 'failed';
+export interface DomainRow {
+  hostname: string;
+  app: string;
+  status: DomainStatus;
+  added: string;
+  primary?: boolean;
+  /** Present on failed rows — the wrong-CNAME explainer. */
+  problem?: { current: string; expected: string };
+}
+export const DOMAINS: DomainRow[] = [
+  { hostname: 'hr.acme.com', app: 'Acme HR', status: 'active', added: 'Jul 21, 2026', primary: true },
+  { hostname: 'legal.acme.com', app: 'Acme Legal', status: 'pending', added: 'today' },
+  {
+    hostname: 'app.acme.io',
+    app: 'Acme Field Ops',
+    status: 'failed',
+    added: 'Jul 18, 2026',
+    problem: { current: 'old-host.example.com', expected: 'edge.substrat.run' },
+  },
+];
+
+// -- M2: env vars -----------------------------------------------------------
+
+export interface EnvVar {
+  key: string;
+  /** The masked-or-revealed display value; `revealed` marks an audited reveal. */
+  value: string;
+  environment: 'Production' | 'Preview' | 'All';
+  revealed?: boolean;
+}
+export const ENV_VARS: EnvVar[] = [
+  { key: 'SCRIVE_API_TOKEN', value: '••••••••••••••••', environment: 'Production' },
+  { key: 'FORTNOX_CLIENT_SECRET', value: 'fnx_5c81…e2a9', environment: 'All', revealed: true },
+  { key: 'SMTP_PASSWORD', value: '••••••••••••', environment: 'Production' },
+  { key: 'POSTMARK_SERVER_TOKEN', value: '••••••••••••••••••', environment: 'Preview' },
+];
+
+// -- M2: integrations -------------------------------------------------------
+
+export interface Integration {
+  monogram: string;
+  name: string;
+  description: string;
+  connected: boolean;
+  usedBy?: string;
+}
+export const INTEGRATIONS: Integration[] = [
+  { monogram: 'Sc', name: 'Scrive', description: 'E-signing for documents and protocols.', connected: true, usedBy: 'Acme HR, Acme Legal' },
+  { monogram: 'Fx', name: 'Fortnox', description: 'Push invoice basis to your accounting.', connected: true, usedBy: 'Acme Finance' },
+  { monogram: 'Sl', name: 'Slack', description: 'Notify channels on app events.', connected: false },
+  { monogram: 'Pm', name: 'Postmark', description: 'Transactional email from your apps.', connected: false },
+];
+
+// -- M3: plan ---------------------------------------------------------------
+
+export interface EntitlementRow {
+  label: string;
+  accent?: string;
+  included: boolean;
+  used: string;
+  upgrade?: boolean;
+}
+export const ENTITLEMENTS: EntitlementRow[] = [
+  { label: 'Documents engine', accent: LAYER.vertical, included: true, used: '2 apps' },
+  { label: 'Work Orders engine', accent: LAYER.engine, included: true, used: '1 app' },
+  { label: 'Invoicing engine', accent: LAYER.kernel, included: false, used: '—', upgrade: true },
+  { label: 'Apps', included: true, used: '4 / 5' },
+  { label: 'Members', included: true, used: '4 / 10' },
+  { label: 'Custom domains', included: true, used: '3 / 10' },
+];
+
+// -- future: deployments ----------------------------------------------------
+
+export interface Deployment {
+  version: string;
+  source: string;
+  status: 'current' | 'previous';
+  promoted: string;
+  by: string;
+}
+export const DEPLOYMENTS: Deployment[] = [
+  { version: 'v0.0.2', source: 'hr-portal@e4f21c9', status: 'current', promoted: 'Jul 20, 2026 14:02', by: 'dana@acme.com' },
+  { version: 'v0.0.1', source: 'hr-portal@b91d044', status: 'previous', promoted: 'Jul 14, 2026 09:40', by: 'dana@acme.com' },
+];
+
+// -- future: analytics ------------------------------------------------------
+
+export interface Kpi {
+  label: string;
+  value: string;
+  delta: string;
+  up: boolean;
+}
+export const KPIS: Kpi[] = [
+  { label: 'Requests', value: '1.24M', delta: '▲ 12.4% vs prior 7d', up: true },
+  { label: 'Active users', value: '3,482', delta: '▲ 5.1% vs prior 7d', up: true },
+  { label: 'Operations / day', value: '86.2k', delta: '▲ 8.9% vs prior 7d', up: true },
+  { label: 'Error rate', value: '0.42%', delta: '▼ 0.1pt vs prior 7d', up: true },
+];
+export const BARS: Array<{ hr: number; ops: number; legal: number }> = [
+  { hr: 46, ops: 22, legal: 14 }, { hr: 52, ops: 24, legal: 15 }, { hr: 44, ops: 28, legal: 12 },
+  { hr: 58, ops: 30, legal: 18 }, { hr: 62, ops: 26, legal: 16 }, { hr: 40, ops: 18, legal: 10 },
+  { hr: 36, ops: 16, legal: 9 }, { hr: 55, ops: 32, legal: 17 }, { hr: 60, ops: 35, legal: 19 },
+  { hr: 66, ops: 30, legal: 21 }, { hr: 58, ops: 36, legal: 18 }, { hr: 72, ops: 38, legal: 22 },
+  { hr: 50, ops: 24, legal: 13 }, { hr: 68, ops: 40, legal: 24 },
+];
+export interface AnalyticsRow {
+  app: string;
+  accent: string;
+  requests: string;
+  users: string;
+  errorRate: string;
+  up: boolean;
+}
+export const ANALYTICS_ROWS: AnalyticsRow[] = [
+  { app: 'Acme HR', accent: LAYER.vertical, requests: '712,400', users: '1,904', errorRate: '0.31%', up: true },
+  { app: 'Acme Field Ops', accent: LAYER.engine, requests: '385,900', users: '1,120', errorRate: '0.66%', up: true },
+  { app: 'Acme Legal', accent: LAYER.kernel, requests: '141,700', users: '458', errorRate: '0.28%', up: false },
+];
+
+// -- future: billing --------------------------------------------------------
+
+export interface Invoice {
+  id: string;
+  amount: string;
+  status: 'Paid';
+  date: string;
+}
+export const INVOICES: Invoice[] = [
+  { id: 'INV-2026-0007', amount: '€480.00', status: 'Paid', date: 'Jul 1, 2026' },
+  { id: 'INV-2026-0006', amount: '€400.00', status: 'Paid', date: 'Jun 1, 2026' },
+];
+
+// -- polish: notifications --------------------------------------------------
+
+export interface Notification {
+  dot: 'success' | 'warning' | 'neutral';
+  body: string;
+  time: string;
+  unread?: boolean;
+}
+export const NOTIFICATIONS: Notification[] = [
+  { dot: 'success', body: '**Acme Field Ops** is ready — `acme-field-ops.substrat.run` is live.', time: '2m ago', unread: true },
+  { dot: 'warning', body: '`legal.acme.com` isn’t verified yet — the CNAME hasn’t propagated.', time: '1h ago' },
+  { dot: 'neutral', body: '`priya@acme.com` accepted your invite.', time: 'yesterday' },
+];
+
+// -- create-app: sources ----------------------------------------------------
+
+export interface RepoRow {
+  name: string;
+  meta: string;
+  accent: string;
+  /** The catalog slug this source maps onto (resolved against the live catalog). */
+  slug: string;
+}
+export const REPOS: RepoRow[] = [
+  { name: 'acme-inc/hr-portal', meta: 'Documents engine · updated 3d ago', accent: LAYER.vertical, slug: 'protocol' },
+  { name: 'acme-inc/legal-docs', meta: 'Documents engine · updated 1w ago', accent: LAYER.vertical, slug: 'protocol' },
+  { name: 'acme-inc/field-ops', meta: 'Work Orders engine · updated 2w ago', accent: LAYER.engine, slug: 'callout' },
+];
+export interface MarketplaceRow {
+  name: string;
+  meta: string;
+  accent: string;
+  slug: string;
+}
+export const MARKETPLACE: MarketplaceRow[] = [
+  { name: 'Callout — field service', meta: 'Work orders, time & material, self-inspection', accent: LAYER.engine, slug: 'callout' },
+  { name: 'Kallkälla Kaffe — e-commerce', meta: 'Catalog, cart, stock, discounts, orders', accent: LAYER.vertical, slug: 'protocol' },
+  { name: 'Handlebar — bike workshop', meta: 'The same engines, re-vocabularied to a workshop', accent: LAYER.engine, slug: 'callout' },
+];
+
+// -- select option lists (mirror the gallery) -------------------------------
+
+export const STATUS_FILTER = ['All statuses', 'Active', 'Provisioning', 'Failed'];
+export const ENV_OPTS = ['Production', 'Preview', 'All'];
+export const ROLE_OPTS = ['Owner', 'Admin', 'Member', 'Viewer'];
+export const RANGE_OPTS = ['Last 7 days', 'Last 24 hours', 'Last 30 days', 'Custom'];
+export const APP_FILTER = ['All apps', 'Acme HR', 'Acme Legal', 'Acme Field Ops'];
+
+/** The per-app detail tabs (counts are demo). */
+export const APP_TABS: Array<{ value: string; label: string; count?: number; future?: boolean }> = [
+  { value: 'overview', label: 'Overview' },
+  { value: 'deployments', label: 'Deployments', future: true },
+  { value: 'env', label: 'Environment Variables', count: 4 },
+  { value: 'domains', label: 'Domains', count: 1 },
+  { value: 'integrations', label: 'Integrations', count: 2 },
+  { value: 'settings', label: 'Settings' },
+];
+
+export interface PaletteAction {
+  label: string;
+  icon: IconName;
+}
+export const PALETTE_ACTIONS: PaletteAction[] = [
+  { label: 'Create app', icon: 'plus' },
+  { label: 'Invite member', icon: 'users' },
+  { label: 'Add domain', icon: 'globe' },
+];

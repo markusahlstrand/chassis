@@ -6,3 +6,4 @@ packages:
   - "demos/*/app"
   - "demos/*/admin"
   - "apps/*"
+  - "apps/*/web"

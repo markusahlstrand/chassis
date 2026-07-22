@@ -1,6 +1,7 @@
 import {
   platformActorId,
   type PermissionKey,
+  type PlatformActorId,
   type PrincipalId,
   type RoleDefinition,
   type ScopeId,
@@ -91,10 +92,19 @@ export async function createApp(
     /** Which vertical the app runs (catalog slug). */
     verticalSlug: string;
     name: string;
-    /** SKU the app's modules load under (defaults to the vertical slug). */
-    appEntitlementKey?: string;
+    /**
+     * The SKU flags the app's modules load under (default-deny, §4.3). A single-engine
+     * app has one; a composed vertical like Callout needs one per engine it runs.
+     * Defaults to `[verticalSlug]`.
+     */
+    appEntitlements?: string[];
     /** Permissions to grant the owner INSIDE the new app scope, so they can use it. */
     appOwnerGrants?: PermissionKey[];
+    /**
+     * The tenant-app base domain the default hostname is minted under. The bound
+     * hostname is `<slug>.<jurisdiction>.substrat.run` (K-30); overridable for tests.
+     */
+    baseDomain?: string;
   },
 ): Promise<DashboardAppRow> {
   // 1. Authorize + record, as the caller, in their own dashboard scope.
@@ -109,11 +119,14 @@ export async function createApp(
   //    ambient — never an argument the caller supplied).
   const staff = platformActorId.parse(ulid());
   const tenantId = input.node.tenantId;
-  await host.admin.grantEntitlement(staff, tenantId, input.appEntitlementKey ?? input.verticalSlug);
+  for (const key of input.appEntitlements ?? [input.verticalSlug]) {
+    await host.admin.grantEntitlement(staff, tenantId, key);
+  }
+  const jurisdiction = 'global' as const;
   await host.provisionScope(staff, {
     tenantId,
     scopeId: input.appScopeId,
-    jurisdiction: 'global',
+    jurisdiction,
     vertical: input.verticalSlug,
   });
   await host.admin.activateScope(staff, tenantId, input.appScopeId);
@@ -126,6 +139,68 @@ export async function createApp(
     });
   }
 
-  // 3. Flip the account's record to active.
-  return scope.invoke('dashboard/mark-app-active', { appScopeId: input.appScopeId });
+  // 3. Bind a default hostname `<slug>.<jurisdiction>.substrat.run` (K-30). This
+  //    records the URL in the directory; it does NOT resolve until the router +
+  //    DNS + ACM are in place (dashboard.md §6 steps beyond M0). Best-effort: a
+  //    global-uniqueness collision must not fail an otherwise-good provision, so
+  //    fall back to a scope-tailed slug, then to no hostname.
+  const hostname = await bindDefaultHostname(host, {
+    staff,
+    tenantId,
+    scopeId: input.appScopeId,
+    name: input.name,
+    jurisdiction,
+    baseDomain: input.baseDomain ?? 'substrat.run',
+  });
+
+  // 4. Flip the account's record to active, recording the hostname if one bound.
+  return scope.invoke('dashboard/mark-app-active', {
+    appScopeId: input.appScopeId,
+    ...(hostname ? { hostname } : {}),
+  });
+}
+
+/** A URL-safe slug from an app name. */
+function slugify(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'app'
+  );
+}
+
+/**
+ * Bind the scope's default hostname and mark it active, returning the bound value
+ * (or null if none could be bound). `surface: 'app'` + `canonical: true` mirror the
+ * console's create-instance flow; `region: null` because `global` has no regional
+ * pinning. Tries the clean slug first, then a scope-tailed slug on collision.
+ */
+async function bindDefaultHostname(
+  host: ScopeHost,
+  args: { staff: PlatformActorId; tenantId: TenantId; scopeId: ScopeId; name: string; jurisdiction: string; baseDomain: string },
+): Promise<string | null> {
+  const base = slugify(args.name);
+  const tail = args.scopeId.toLowerCase().slice(-4);
+  const candidates = [
+    `${base}.${args.jurisdiction}.${args.baseDomain}`,
+    `${base}-${tail}.${args.jurisdiction}.${args.baseDomain}`,
+  ];
+  for (const hostname of candidates) {
+    try {
+      await host.admin.bindHostname(args.staff, {
+        hostname,
+        tenantId: args.tenantId,
+        scopeId: args.scopeId,
+        surface: 'app',
+        region: null,
+        canonical: true,
+      });
+      await host.admin.setHostnameStatus(args.staff, hostname, 'active');
+      return hostname;
+    } catch {
+      // Collision or transient — try the next candidate.
+    }
+  }
+  return null;
 }

@@ -1,0 +1,398 @@
+import { useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
+import { Ic, StrataGlyph, type IconName } from '../lib/icons';
+import { initials } from '../lib/format';
+
+export type NavKey =
+  | 'overview'
+  | 'apps'
+  | 'domains'
+  | 'team'
+  | 'integrations'
+  | 'analytics'
+  | 'billing'
+  | 'settings';
+
+interface NavItem {
+  key: NavKey;
+  label: string;
+  icon: IconName;
+  count?: number;
+}
+const MAIN: NavItem[] = [
+  { key: 'overview', label: 'Overview', icon: 'grid' },
+  { key: 'apps', label: 'Apps', icon: 'box', count: 4 },
+  { key: 'domains', label: 'Domains', icon: 'globe', count: 3 },
+  { key: 'team', label: 'Team', icon: 'users', count: 4 },
+  { key: 'integrations', label: 'Integrations', icon: 'plug' },
+];
+const ACCOUNT: NavItem[] = [
+  { key: 'analytics', label: 'Analytics', icon: 'chart' },
+  { key: 'billing', label: 'Billing', icon: 'card' },
+  { key: 'settings', label: 'Settings', icon: 'settings' },
+];
+
+function NavRow({ item, active, onNav }: { item: NavItem; active: boolean; onNav: (k: NavKey) => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <a
+      href={`#/${item.key}`}
+      onClick={(e) => {
+        e.preventDefault();
+        onNav(item.key);
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        height: 32,
+        padding: '0 10px',
+        borderRadius: 6,
+        textDecoration: 'none',
+        background: active ? 'var(--surface-active)' : hover ? 'var(--surface-hover)' : 'transparent',
+        color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+        fontSize: 14,
+        fontWeight: active ? 500 : 400,
+      }}
+    >
+      <span style={{ display: 'inline-flex', width: 16, color: active ? 'var(--text-brand)' : 'var(--text-tertiary)' }}>
+        <Ic name={item.icon} />
+      </span>
+      <span style={{ flex: 1 }}>{item.label}</span>
+      {item.count !== undefined && (
+        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>{item.count}</span>
+      )}
+    </a>
+  );
+}
+
+export interface Crumb {
+  label: string;
+  onClick?: () => void;
+}
+
+export interface DashShellProps {
+  active: NavKey;
+  onNav: (k: NavKey) => void;
+  org: string;
+  userEmail: string;
+  userName: string;
+  crumbs: Crumb[];
+  unread: boolean;
+  onToggleTheme: () => void;
+  onOpenPalette: () => void;
+  onOpenNotifications: () => void;
+  onSignOut: () => void;
+  children: ReactNode;
+}
+
+export function DashShell(props: DashShellProps) {
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--surface-page)' }}>
+      {/* Sidebar */}
+      <nav
+        style={{
+          width: 232,
+          flexShrink: 0,
+          boxSizing: 'border-box',
+          background: 'var(--surface-page)',
+          borderRight: '1px solid var(--border-default)',
+          padding: '12px 8px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 10px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <StrataGlyph size={18} />
+            <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>substrat</span>
+          </div>
+          <span style={{ fontSize: 12.5, color: 'var(--text-secondary)', paddingLeft: 26 }}>{props.org}</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {MAIN.map((it) => (
+            <NavRow key={it.key} item={it} active={props.active === it.key} onNav={props.onNav} />
+          ))}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', padding: '0 10px 6px' }}>
+            Account
+          </div>
+          {ACCOUNT.map((it) => (
+            <NavRow key={it.key} item={it} active={props.active === it.key} onNav={props.onNav} />
+          ))}
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px 0', borderTop: '1px solid var(--border-subtle)' }}>
+          <Avatar seed={props.userName || props.userEmail} tone="brand" size={24} />
+          <span
+            title={props.userEmail}
+            style={{ fontSize: 12.5, color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {props.userEmail}
+          </span>
+          <IconTile label="Toggle theme" onClick={props.onToggleTheme}>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+            </svg>
+          </IconTile>
+        </div>
+      </nav>
+
+      {/* Main column */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <header
+          style={{
+            height: 56,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 16,
+            padding: '0 24px',
+            borderBottom: '1px solid var(--border-default)',
+            background: 'color-mix(in srgb, var(--surface-card) 80%, transparent)',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, minWidth: 0 }}>
+            {props.crumbs.map((c, i) => {
+              const last = i === props.crumbs.length - 1;
+              return (
+                <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+                  {i > 0 && <span style={{ color: 'var(--text-placeholder)' }}>/</span>}
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      c.onClick?.();
+                    }}
+                    style={{ color: last ? 'var(--text-primary)' : 'var(--text-tertiary)', fontWeight: last ? 500 : 400, textDecoration: 'none' }}
+                  >
+                    {c.label}
+                  </a>
+                </span>
+              );
+            })}
+          </div>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={props.onOpenPalette}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              height: 32,
+              padding: '0 10px',
+              width: 220,
+              borderRadius: 6,
+              border: '1px solid var(--border-default)',
+              background: 'var(--surface-card)',
+              color: 'var(--text-placeholder)',
+              fontSize: 13,
+              flexShrink: 0,
+              cursor: 'pointer',
+            }}
+          >
+            <Ic name="search" size={14} />
+            <span style={{ flex: 1, textAlign: 'left' }}>Jump to app or action…</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, border: '1px solid var(--border-default)', borderRadius: 4, padding: '1px 4px', color: 'var(--text-tertiary)' }}>⌘K</span>
+          </button>
+          <IconTile label="Notifications" onClick={props.onOpenNotifications} size={28} badge={props.unread}>
+            <Ic name="bell" size={16} />
+          </IconTile>
+          <AccountPill
+            userName={props.userName}
+            userEmail={props.userEmail}
+            onSettings={() => props.onNav('settings')}
+            onToggleTheme={props.onToggleTheme}
+            onSignOut={props.onSignOut}
+          />
+        </header>
+        <main style={{ flex: 1, overflow: 'auto' }}>{props.children}</main>
+      </div>
+    </div>
+  );
+}
+
+const TONES: Record<string, { bg: string; fg: string }> = {
+  brand: { bg: 'var(--brand-100)', fg: 'var(--brand-700)' },
+  cyan: { bg: 'var(--cyan-100)', fg: 'var(--cyan-700)' },
+  amber: { bg: 'var(--amber-100)', fg: 'var(--amber-700)' },
+  muted: { bg: 'var(--surface-active)', fg: 'var(--text-tertiary)' },
+};
+
+/** A circular initials avatar. */
+export function Avatar({ seed, tone = 'brand', size = 26 }: { seed: string; tone?: keyof typeof TONES; size?: number }) {
+  const t = TONES[tone] ?? TONES.brand!;
+  return (
+    <span
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        background: t.bg,
+        color: t.fg,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: size <= 22 ? 10 : 11,
+        fontWeight: 600,
+        flexShrink: 0,
+      }}
+    >
+      {initials(seed)}
+    </span>
+  );
+}
+
+/** The top-right account pill + its dropdown menu (settings / theme / sign out). */
+function AccountPill({
+  userName,
+  userEmail,
+  onSettings,
+  onToggleTheme,
+  onSignOut,
+}: {
+  userName: string;
+  userEmail: string;
+  onSettings: () => void;
+  onToggleTheme: () => void;
+  onSignOut: () => void;
+}) {
+  // `?menu=1` opens it on load (a demo/screenshot aid, like `?theme=`).
+  const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('menu') === '1');
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Account"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          height: 28,
+          padding: '0 8px 0 4px',
+          borderRadius: 999,
+          border: '1px solid var(--border-default)',
+          background: open ? 'var(--surface-hover)' : 'var(--surface-card)',
+          cursor: 'pointer',
+        }}
+      >
+        <Avatar seed={userName || userEmail} tone="brand" size={20} />
+        <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{userName || 'Account'}</span>
+        <span style={{ display: 'inline-flex', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}>
+          <Ic name="chevronDown" size={12} color="var(--text-tertiary)" />
+        </span>
+      </button>
+      {open && (
+        <>
+          {/* click-away scrim */}
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div
+            role="menu"
+            style={{
+              position: 'absolute',
+              top: 36,
+              right: 0,
+              zIndex: 41,
+              width: 220,
+              background: 'var(--surface-card)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 10,
+              boxShadow: 'var(--shadow-popover)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{userName || 'Account'}</div>
+              <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userEmail}</div>
+            </div>
+            <MenuItem icon="settings" label="Account settings" onClick={() => { setOpen(false); onSettings(); }} />
+            <MenuItem icon="settings" label="Toggle theme" onClick={() => { setOpen(false); onToggleTheme(); }} moon />
+            <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+            <MenuItem icon="arrowLeft" label="Sign out" onClick={() => { setOpen(false); onSignOut(); }} danger />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ icon, label, onClick, danger, moon }: { icon: IconName; label: string; onClick: () => void; danger?: boolean; moon?: boolean }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        width: '100%',
+        height: 34,
+        padding: '0 12px',
+        border: 0,
+        background: hover ? 'var(--surface-hover)' : 'transparent',
+        color: danger ? 'var(--status-danger-fg)' : 'var(--text-secondary)',
+        fontSize: 13,
+        cursor: 'pointer',
+        textAlign: 'left',
+      }}
+    >
+      {moon ? (
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></svg>
+      ) : (
+        <Ic name={icon} size={15} />
+      )}
+      {label}
+    </button>
+  );
+}
+
+function IconTile({
+  label,
+  onClick,
+  children,
+  size = 24,
+  badge,
+}: {
+  label: string;
+  onClick?: () => void;
+  children: ReactNode;
+  size?: number;
+  badge?: boolean;
+}) {
+  const [hover, setHover] = useState(false);
+  const style: CSSProperties = {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: size,
+    height: size,
+    borderRadius: 6,
+    border: 0,
+    background: hover ? 'var(--surface-hover)' : 'transparent',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+    flexShrink: 0,
+  };
+  return (
+    <button type="button" aria-label={label} title={label} onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={style}>
+      {children}
+      {badge && (
+        <span style={{ position: 'absolute', top: 4, right: 5, width: 6, height: 6, borderRadius: '50%', background: 'var(--brand-500)', border: '1px solid var(--surface-card)' }} />
+      )}
+    </button>
+  );
+}
