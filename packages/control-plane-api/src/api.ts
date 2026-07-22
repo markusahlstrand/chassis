@@ -20,11 +20,14 @@ import {
 } from '@substrat-run/contracts';
 import type { PlatformActorId, ScopeId, TenantId } from '@substrat-run/contracts';
 import type { ScopeHost } from '@substrat-run/kernel';
+import { ulid } from '@substrat-run/kernel';
 import type { PlatformActorAuth } from './auth.js';
 import type { VerticalClient } from './vertical-client.js';
 import { ControlPlaneError } from './client.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { mapError } from './errors.js';
+import { assertSandboxContract, deployManifest, deploymentRefFor } from './deploy.js';
+import type { DeployVerticalFn } from './deploy.js';
 
 export interface ControlPlaneApiOptions {
   host: ScopeHost;
@@ -37,6 +40,13 @@ export interface ControlPlaneApiOptions {
    * the same Workers-for-Platforms swap later.
    */
   verticals?: Record<string, VerticalClient>;
+  /**
+   * Uploads a built vertical bundle to the platform runtime (a WfP dispatch
+   * namespace), injected by the host so this package holds no Cloudflare SDK and the
+   * builder never holds a Cloudflare credential (D-34). Absent ⇒ the deploy route
+   * 501s. See `deploy.ts`.
+   */
+  deployVertical?: DeployVerticalFn;
   /**
    * Resolves the platform actor from the request. No default: an unauthenticated
    * control plane is not a sensible fallback, and a package that shipped one
@@ -395,6 +405,71 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     // surface as a 4xx through mapError, not a 500.
     await admin.promoteVersion(c.get('actor'), slug, channel, versionId, acknowledge);
     return c.json((await admin.listChannels(c.get('actor'), slug)).find((ch) => ch.channel === channel));
+  });
+
+  // The deploy seam (self-serve-deploy.md): a `substrat push` uploads a built bundle
+  // here. The order is upload → record, deliberately: a failed record leaves an
+  // orphaned namespace script (invisible, GC'able) rather than a directory row
+  // pointing at a deployment that is not there. The version lands PENDING — a push
+  // is not a deploy; admission still gates serving.
+  app.post('/verticals/:slug/deploy', async (c) => {
+    if (!options.deployVertical) {
+      return c.json({ error: 'deploy is not configured on this control plane' }, 501);
+    }
+    const slug = c.req.param('slug');
+    const form = await c.req.formData();
+    const raw = form.get('manifest');
+    if (typeof raw !== 'string') return c.json({ error: 'missing manifest part' }, 400);
+    const manifest = deployManifest.parse(JSON.parse(raw));
+
+    // §4 sandbox contract, before anything reaches the namespace.
+    assertSandboxContract(manifest);
+
+    const modules: { name: string; content: Uint8Array; contentType: string }[] = [];
+    for (const [name, value] of form.entries()) {
+      if (name === 'manifest') continue;
+      if (value instanceof File) {
+        modules.push({
+          name,
+          content: new Uint8Array(await value.arrayBuffer()),
+          contentType: value.type || 'application/javascript+module',
+        });
+      }
+    }
+    if (!modules.some((m) => m.name === manifest.entry)) {
+      return c.json({ error: `entry module '${manifest.entry}' is not among the uploaded files` }, 400);
+    }
+
+    // Mint the version id first: the deploymentRef (the dispatch script name) is keyed
+    // on it, so it is CF-valid and unique per version.
+    const id = ulid();
+    const deploymentRef = deploymentRefFor(slug, id);
+    await options.deployVertical(deploymentRef, {
+      entry: manifest.entry,
+      compatibilityDate: manifest.compatibilityDate,
+      modules,
+      doClasses: manifest.doClasses,
+      bindings: manifest.bindings,
+    });
+
+    // Register-then-publish, both idempotent-ish below the seam: a first push of a
+    // slug registers it; publishVersion lands the version pending with deploymentRef.
+    await admin.registerVertical(c.get('actor'), {
+      slug,
+      name: manifest.name ?? slug,
+      source: 'cli',
+    });
+    await admin.publishVersion(c.get('actor'), {
+      id,
+      verticalSlug: slug,
+      version: manifest.version,
+      manifestDigest: manifest.digests.manifest,
+      permissionDigest: manifest.digests.permission,
+      migrationDigest: manifest.digests.migration,
+      deploymentRef,
+    });
+    const version = (await admin.listVersions(c.get('actor'), slug)).find((v) => v.id === id);
+    return c.json(version, 201);
   });
 
   // -- the hostname map (§4.7, K-26) -----------------------------------------
