@@ -395,7 +395,16 @@ interface ScopeStubRpc {
 
 export interface CloudflareScopeHostOptions {
   scope: DurableObjectNamespace;
-  controlPlane: DurableObjectNamespace;
+  /**
+   * The shared directory DO. Optional: a **CP-less** vertical (docs/design/scope-
+   * local-permissions.md, Phase 3) runs with no control plane — it evaluates
+   * permissions from its scopes' own storage, trusts the router-asserted node for
+   * lifecycle/tenancy, and treats entitlements as enforced upstream at provision.
+   * Its admin surface (createTenant, defineRole, tenant grants, …) is unavailable;
+   * such a vertical provisions via `provisionScopeLocal` and is served via
+   * `getScope`/`invoke`.
+   */
+  controlPlane?: DurableObjectNamespace;
   /**
    * Accepted for parity with the pure adapter's constructor. In milestone 1 the
    * ScopeDO owns permission evaluation (a checker function cannot cross the RPC
@@ -423,6 +432,40 @@ export interface CloudflareScopeHostOptions {
    * it for existing scopes wants a one-time `reconcileTenantProjection` back-fill.
    */
   scopeLocalPermissions?: boolean;
+}
+
+/**
+ * A control-plane stand-in for a CP-less vertical (scope-local-permissions.md Phase 3).
+ * The hot path a served scope actually touches becomes trust-the-upstream:
+ *   - `validateScopeAccess` / `setMigrationState` → no-op: the router already gated the
+ *     scope's lifecycle + tenancy from the shared directory, so the vertical trusts the
+ *     asserted node rather than re-reading a directory it does not have.
+ *   - `tenantHoldsEntitlement` → true: the SKU was enforced on the shared control plane
+ *     at provision (before `provisionInstance`), so a scope that EXISTS here was granted
+ *     it upstream — a single-vertical deployment holds its own entitlements by construction.
+ *   - `recordAdmin` / `recordAccess` → no-op: the shared control plane owns the audit spine.
+ * Every other method throws — the admin directory surface genuinely is unavailable.
+ */
+function nullControlPlane(): ControlPlaneStub {
+  const noop = async (): Promise<undefined> => undefined;
+  const passthrough: Record<string, (...a: unknown[]) => Promise<unknown>> = {
+    validateScopeAccess: noop,
+    setMigrationState: noop,
+    recordAdmin: noop,
+    recordAccess: noop,
+    tenantHoldsEntitlement: async () => true,
+  };
+  return new Proxy({} as ControlPlaneStub, {
+    get: (_t, prop) =>
+      typeof prop === 'string' && prop in passthrough
+        ? passthrough[prop]
+        : async () => {
+            throw new Error(
+              `control plane unavailable: '${String(prop)}' — this host is scope-local / CP-less ` +
+                `(docs/design/scope-local-permissions.md, Phase 3)`,
+            );
+          },
+  });
 }
 
 export class CloudflareScopeHost implements ScopeHost {
@@ -468,9 +511,9 @@ export class CloudflareScopeHost implements ScopeHost {
     this.fetchImpl = options.fetch ?? ((input, init) => (globalThis as unknown as { fetch: FetchLike }).fetch(input, init));
     this.scopeLocalPermissions = options.scopeLocalPermissions ?? false;
     this.scopeNs = options.scope;
-    this.cp = options.controlPlane.get(
-      options.controlPlane.idFromName('control-plane'),
-    ) as unknown as ControlPlaneStub;
+    this.cp = options.controlPlane
+      ? (options.controlPlane.get(options.controlPlane.idFromName('control-plane')) as unknown as ControlPlaneStub)
+      : nullControlPlane();
     this.admin = this.buildAdmin();
   }
 
@@ -1850,5 +1893,38 @@ export class CloudflareScopeHost implements ScopeHost {
    */
   async reconcileTenantProjection(tenantId: TenantId): Promise<void> {
     await this.fanOut(tenantId);
+  }
+
+  /**
+   * Provision a scope WITHOUT a control plane (scope-local-permissions.md Phase 3) —
+   * the entry a CP-less vertical's `/internal/provision` calls. The shared control
+   * plane already owns this scope's directory row + entitlements (the dashboard wrote
+   * them before calling the vertical); here the vertical sets up only the scope's OWN
+   * state: migrate its modules, project the vertical's role definitions locally, grant
+   * the owner a role at scope level, and make the scope evaluate permissions from its
+   * own storage. No tenant-level tuples, no control plane.
+   */
+  async provisionScopeLocal(input: {
+    tenantId: TenantId;
+    scopeId: ScopeId;
+    owner: PrincipalId;
+    /** The vertical's role definitions (projected so the local checker can expand them). */
+    roles: RoleDefinition[];
+    /** Which role the owner is assigned, at SCOPE level. */
+    ownerRoleKey: string;
+  }): Promise<void> {
+    const stub = this.scopeStub(input.scopeId);
+    await this.migrateAndRecord(input.scopeId); // create the module tables (setMigrationState no-ops on a null CP)
+    await stub.applyProjection(
+      input.tenantId,
+      input.roles.map((r) => ({ role_key: r.key, permissions: JSON.stringify(r.permissions), source: r.source })),
+      [], // no tenant-level tuples — a CP-less vertical grants at scope level only
+    );
+    await stub.writeTuple(
+      `principal:${input.owner}`,
+      `role:${input.ownerRoleKey}`,
+      `scope:${input.scopeId}`,
+      null,
+    );
   }
 }
