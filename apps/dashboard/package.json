@@ -16,8 +16,8 @@
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/engine-protocol": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
+    "@substrat-run/oidc-rp": "workspace:^",
     "hono": "^4.6.0",
-    "jose": "^5.9.6",
     "zod": "^4.4.3"
   },
   "devDependencies": {

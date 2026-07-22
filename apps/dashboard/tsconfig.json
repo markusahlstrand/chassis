@@ -9,7 +9,6 @@
     "test"
   ],
   "exclude": [
-    "src/worker.ts",
-    "src/oidc.ts"
+    "src/worker.ts"
   ]
 }

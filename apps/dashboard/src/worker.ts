@@ -11,23 +11,14 @@
  */
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { getCookie } from 'hono/cookie';
 import { principalId, scopeId, tenantId, platformActorId, z, type PermissionKey } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { protocolModule, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
+import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule } from './module.js';
 import { createApp, provisionDashboard, type DashboardNode } from './provision.js';
-import {
-  beginLogin,
-  completeLogin,
-  verifySession,
-  SESSION_COOKIE,
-  FLOW_COOKIE,
-  SESSION_MAXAGE,
-  FLOW_MAXAGE,
-  type OidcEnv,
-} from './oidc.js';
 import { PAGE } from './page.js';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
@@ -66,10 +57,6 @@ interface Env extends OidcEnv {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
 }
-
-const originOf = (req: Request): string => new URL(req.url).origin;
-/** Cookies are Secure on https deployments; plain http localhost keeps working in dev. */
-const secureCookies = (origin: string): boolean => origin.startsWith('https:');
 
 /** The coordinator is stateless — rebuilt per request; durable state lives in the DOs + D1. */
 function hostFor(env: Env): CloudflareScopeHost {
@@ -147,38 +134,8 @@ const app = new Hono<{ Bindings: Env }>();
 // The clickable app — sign in, pick a vertical, create an app, see your apps.
 app.get('/', (c) => c.html(PAGE));
 
-// --- OIDC relying party (AuthHero) -----------------------------------------
-// Redirect to AuthHero's authorize endpoint; the flow cookie carries PKCE/state.
-app.get('/api/auth/login', async (c) => {
-  const origin = originOf(c.req.raw);
-  const { location, flow } = await beginLogin(c.env, origin);
-  setCookie(c, FLOW_COOKIE, flow, {
-    httpOnly: true, secure: secureCookies(origin), sameSite: 'Lax', path: '/', maxAge: FLOW_MAXAGE,
-  });
-  return c.redirect(location);
-});
-
-// The redirect back from AuthHero: verify, exchange the code, set the session.
-app.get('/api/auth/callback', async (c) => {
-  const origin = originOf(c.req.raw);
-  const flow = getCookie(c, FLOW_COOKIE);
-  deleteCookie(c, FLOW_COOKIE, { path: '/' });
-  try {
-    const { session } = await completeLogin(c.env, origin, new URL(c.req.url), flow);
-    setCookie(c, SESSION_COOKIE, session, {
-      httpOnly: true, secure: secureCookies(origin), sameSite: 'Lax', path: '/', maxAge: SESSION_MAXAGE,
-    });
-    return c.redirect('/');
-  } catch {
-    return c.redirect('/?error=auth');
-  }
-});
-
-// Drop the session. (GET so a plain link works; the SPA uses it directly.)
-app.get('/api/auth/logout', (c) => {
-  deleteCookie(c, SESSION_COOKIE, { path: '/' });
-  return c.redirect('/');
-});
+// OIDC relying party (AuthHero): /api/auth/login → /callback → /logout.
+mountOidcRoutes(app);
 
 /** The catalog — the verticals you can instantiate, from the registry. */
 app.get('/api/catalog', async (c) => {

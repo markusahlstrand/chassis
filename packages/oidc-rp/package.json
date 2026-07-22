@@ -1,0 +1,34 @@
+{
+  "name": "@substrat-run/oidc-rp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Substrat platform OIDC relying party — Authorization-Code + PKCE against AuthHero, workerd-safe (jose + Web Crypto). Shared by the platform apps (console, dashboard).",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "peerDependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "hono": "^4.6.0",
+    "typescript": "^7.0.0"
+  }
+}

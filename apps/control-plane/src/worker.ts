@@ -1,10 +1,10 @@
 /**
  * The shared control plane as a deployable Cloudflare Worker — now the whole
  * **portal**: it serves the console SPA, the audited control-plane API, and staff
- * sign-in (Better Auth on D1), all from one origin (first-flow.md slices 1 + 3).
+ * sign-in (OIDC against AuthHero), all from one origin (first-flow.md slices 1 + 3).
  *
  * Routing (per request; the coordinator is stateless):
- *   - `/api/auth/*` → Better Auth (staff identity/sessions in D1)
+ *   - `/api/auth/*` → the OIDC relying party (login/callback/logout) + `/session`
  *   - `/api/*`      → the control-plane router, behind `sessionPlatformAuth` — a
  *                     request with no rostered staff session is refused
  *   - everything else → the console SPA (assets binding, SPA fallback)
@@ -14,7 +14,7 @@
  * live in the vertical's deployment.
  *
  * Deploy: `pnpm --filter @substrat-run/control-plane deploy` (builds the console,
- * then `wrangler deploy`; needs Workers Paid for DO SQLite + a D1 for staff auth).
+ * then `wrangler deploy`; needs Workers Paid for DO SQLite + a D1 for the roster).
  */
 import { Hono } from 'hono';
 import { platformActorId } from '@substrat-run/contracts';
@@ -32,22 +32,21 @@ import {
   type PlatformActorAuth,
 } from '@substrat-run/control-plane-api';
 import { VerticalClient } from '@substrat-run/control-plane-api';
-import { buildStaffAuth, staffSessionReader } from './staff-auth.js';
+import { mountOidcRoutes, type OidcEnv } from '@substrat-run/oidc-rp';
+import { oidcStaffSessionReader } from './staff-auth.js';
 import { d1StaffRoster } from './staff-roster.js';
 
 /** The placeholder scope-DO class: kernel only, no modules. */
 export const ScopeDO = defineScopeDO([], {});
 export { ControlPlaneDO };
 
-interface Env {
+interface Env extends OidcEnv {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
-  /** Better Auth's staff store. Absent in the workerd test (dev-actor path only). */
+  /** The staff roster's D1 store (#42). Absent in the workerd test (dev-actor path only). */
   AUTH_DB?: D1Database;
   /** The console SPA. Absent in the workerd test. */
   ASSETS?: Fetcher;
-  BETTER_AUTH_SECRET?: string;
-  BASE_URL?: string;
   /** Shared secret a connected vertical presents (x-service-token) to register. */
   SERVICE_TOKEN?: string;
   /** Local dev / test only: trust the `x-platform-actor` header. NEVER on a real deploy. */
@@ -100,18 +99,18 @@ function hostFor(env: Env): CloudflareScopeHost {
 }
 
 /**
- * Staff session (Better Auth) when a D1 is bound, plus the UNSAFE dev-actor
- * header when explicitly enabled (local/test only). Session first; neither → 401.
- * Secure by default: a real deploy binds AUTH_DB and never sets ALLOW_DEV_ACTOR.
+ * Staff session (OIDC, gated by the roster) when the roster D1 is bound, plus the
+ * UNSAFE dev-actor header when explicitly enabled (local/test only). Session first;
+ * neither → 401. Secure by default: a real deploy binds AUTH_DB and never sets
+ * ALLOW_DEV_ACTOR.
  */
-function authFor(env: Env, origin: string): PlatformActorAuth {
+function authFor(env: Env): PlatformActorAuth {
   const readers: PlatformActorAuth[] = [];
-  // Staff sign in (Better Auth session).
+  // Staff sign in: an OIDC session (AuthHero), gated by the D1 roster.
   if (env.AUTH_DB) {
-    const auth = buildStaffAuth(env as { AUTH_DB: D1Database }, origin);
     // The roster is DATA, not config (#42): one actor per human, revocable by a
     // timestamp rather than by editing a secret. migrations/0002_staff_roster.sql.
-    readers.push(sessionPlatformAuth(staffSessionReader(auth), d1StaffRoster(env.AUTH_DB)));
+    readers.push(sessionPlatformAuth(oidcStaffSessionReader(env), d1StaffRoster(env.AUTH_DB)));
   }
   // A connected vertical registers as a service (shared token), not staff.
   if (env.SERVICE_TOKEN) readers.push(serviceTokenAuth(env.SERVICE_TOKEN, SERVICE_ACTOR));
@@ -120,27 +119,27 @@ function authFor(env: Env, origin: string): PlatformActorAuth {
   return firstPlatformActorAuth(...readers);
 }
 
-const originOf = (req: Request): string => new URL(req.url).origin;
-
 export default {
   fetch(request: Request, env: Env): Response | Promise<Response> {
-    const origin = originOf(request);
     const app = new Hono<{ Bindings: Env }>();
 
-    // Better Auth owns /api/auth/* (only when a staff store is bound). Same-origin
-    // with the console, so Better Auth's default basePath (/api/auth) matches.
-    if (env.AUTH_DB) {
-      app.on(['GET', 'POST'], '/api/auth/*', (c) =>
-        buildStaffAuth(env as { AUTH_DB: D1Database }, origin).handler(c.req.raw),
-      );
-    }
+    // Staff sign-in: OIDC relying party (AuthHero) — /api/auth/login → /callback →
+    // /logout. Same-origin with the console, so the session cookie just carries.
+    // Registered before the /api router so these paths win over it.
+    mountOidcRoutes(app);
+
+    // Who is signed in — the console SPA polls this (null when there is no session).
+    app.get('/api/auth/session', async (c) => {
+      const staff = await oidcStaffSessionReader(c.env)(c.req.raw.headers);
+      return c.json({ user: staff ? { email: staff.email } : null });
+    });
 
     // The audited control-plane API under /api (the console's baseUrl).
     app.route(
       '/api',
       createControlPlaneApi({
         host: hostFor(env),
-        authenticate: authFor(env, origin),
+        authenticate: authFor(env),
         verticals: verticalsFor(env),
       }),
     );

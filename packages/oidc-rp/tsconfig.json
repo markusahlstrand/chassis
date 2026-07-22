@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    // Workerd runtime globals (fetch, crypto.subtle, URL, Headers, TextEncoder, btoa).
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src"]
+}

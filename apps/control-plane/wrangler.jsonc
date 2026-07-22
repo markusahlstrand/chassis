@@ -2,8 +2,14 @@
 	"name": "substrat-control-plane",
 	"main": "src/worker.ts",
 	"compatibility_date": "2025-01-01",
-	// Better Auth (staff sign-in) needs Node built-ins on workerd.
-	"compatibility_flags": ["nodejs_compat"],
+	// Staff sign-in is OIDC against AuthHero (jose + Web Crypto) — no Node built-ins.
+	// OIDC config is entirely secrets, nothing checked in (locally: .dev.vars):
+	//   wrangler secret put OIDC_ISSUER          # e.g. https://auth.substrat.run
+	//   wrangler secret put OIDC_CLIENT_ID
+	//   wrangler secret put OIDC_CLIENT_SECRET
+	//   wrangler secret put SESSION_SECRET       # random 32+ bytes; signs the cookies
+	// The AuthHero client must allow the redirect URI  https://console.substrat.net/api/auth/callback
+	// (and http://localhost:8787/api/auth/callback for dev).
 	// Serve the console + control-plane API on console.substrat.net. A Custom Domain
 	// (not a route): the worker fully owns this hostname, so wrangler provisions the
 	// DNS record and certificate on deploy. First-level subdomain — Universal SSL
@@ -31,9 +37,10 @@
 	// "create instance" flow reports no deployment bound, rather than dangling a
 	// binding to a service that does not exist.
 
-	// Better Auth's staff store (identity, credentials, sessions), separate from the
-	// directory DO. Apply migrations/0001+0002 to it before deploy (the deploy script
-	// gates on it). This id is the substrat.net production account's D1 (region WEUR).
+	// The staff roster's store (staff_actor, #42) — who has platform access and under
+	// which actor id, separate from the directory DO. No longer a credential store:
+	// identity is AuthHero now, this D1 holds only the roster. Apply migrations before
+	// deploy (the deploy script gates on it). Production account's D1 (region WEUR).
 	"d1_databases": [
 		{
 			"binding": "AUTH_DB",

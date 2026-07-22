@@ -1,27 +1,31 @@
 /**
- * The Dashboard's authentication: an OpenID Connect **relying party** against an
- * existing AuthHero instance (the platform's Auth0-compatible OIDC authority).
+ * The Substrat platform's OpenID Connect **relying party** — shared by the
+ * platform apps (console, dashboard) so the security-critical verifier is written
+ * once, not copied per app.
  *
- * This replaces the per-app Better Auth credential store. There is no auth
- * database here anymore — identity lives in AuthHero, and the kernel keeps
- * authorization (roles/grants/tenancy). The `sub` of the ID token is the stable
- * external identity the control-plane identity pool maps to a tenant + owner
- * (`provider: 'authhero'`); see `worker.ts#resolveAccount`.
+ * It authenticates against the platform's AuthHero instance (the Auth0-compatible
+ * OIDC authority). The kernel keeps authorization (roles/grants/tenancy); this
+ * package only proves *who* the caller is — the ID token `sub` (and `email`).
  *
  * Standard Authorization-Code + PKCE, discovery-driven so nothing but the issuer
- * URL is hard-wired: endpoints and signing keys come from
+ * URL is wired in: endpoints and signing keys come from
  * `{issuer}/.well-known/openid-configuration`. Confidential client (server-side
- * code exchange with the client secret), and the ID token is still signature-
- * verified against the issuer JWKS.
+ * code exchange with the client secret), and the ID token is signature-verified
+ * against the issuer JWKS.
  *
- * Stateless: no KV, no D1. The short-lived PKCE/state/nonce is carried in a signed
- * "flow" cookie; the session is a signed JWT cookie. Both are HMAC-signed with
+ * Stateless: no KV, no D1. The short-lived PKCE/state/nonce rides a signed "flow"
+ * cookie; the session is a signed JWT cookie. Both are HMAC-signed with
  * `SESSION_SECRET`. workerd-safe — Web Crypto + `jose` only, no `node:*`.
+ *
+ * Config is entirely runtime (secrets), never checked in:
+ *   OIDC_ISSUER · OIDC_CLIENT_ID · OIDC_CLIENT_SECRET · SESSION_SECRET
  */
 import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
+import type { Hono } from 'hono';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 
 export interface OidcEnv {
-  /** The AuthHero issuer, e.g. https://auth.example.com — the only wired-in value. */
+  /** The AuthHero issuer, e.g. https://auth.substrat.run — the only wired-in value. */
   OIDC_ISSUER: string;
   OIDC_CLIENT_ID: string;
   /** Secret (wrangler secret put OIDC_CLIENT_SECRET). */
@@ -46,8 +50,8 @@ interface Discovery {
   end_session_endpoint?: string;
 }
 
-export const SESSION_COOKIE = 'sb_dash_session';
-export const FLOW_COOKIE = 'sb_dash_flow';
+export const SESSION_COOKIE = 'sb_session';
+export const FLOW_COOKIE = 'sb_oidc_flow';
 /** Session lifetime; the flow (login round-trip) is deliberately short. */
 export const SESSION_MAXAGE = 60 * 60 * 24 * 7; // 7 days
 export const FLOW_MAXAGE = 60 * 10; // 10 minutes
@@ -175,11 +179,7 @@ export async function completeLogin(
   });
   if (payload.nonce !== flow.n) throw new Error('nonce mismatch');
 
-  const user: SessionUser = {
-    id: String(payload.sub),
-    email: typeof payload.email === 'string' ? payload.email : undefined,
-    name: typeof payload.name === 'string' ? payload.name : undefined,
-  };
+  const user = userFromClaims(payload);
   const session = await new SignJWT({ email: user.email, name: user.name })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(user.id)
@@ -189,7 +189,15 @@ export async function completeLogin(
   return { user, session };
 }
 
-/** Verify the session cookie. `null` for no/invalid/expired session. */
+function userFromClaims(payload: { sub?: unknown; email?: unknown; name?: unknown }): SessionUser {
+  return {
+    id: String(payload.sub),
+    email: typeof payload.email === 'string' ? payload.email : undefined,
+    name: typeof payload.name === 'string' ? payload.name : undefined,
+  };
+}
+
+/** Verify the session cookie value. `null` for no/invalid/expired session. */
 export async function verifySession(
   env: OidcEnv,
   token: string | undefined,
@@ -198,12 +206,76 @@ export async function verifySession(
   try {
     const { payload } = await jwtVerify(token, signingKey(env));
     if (!payload.sub) return null;
-    return {
-      id: String(payload.sub),
-      email: typeof payload.email === 'string' ? payload.email : undefined,
-      name: typeof payload.name === 'string' ? payload.name : undefined,
-    };
+    return userFromClaims(payload);
   } catch {
     return null;
   }
+}
+
+/** Read one cookie value out of a raw `Cookie` header. */
+export function readCookie(cookieHeader: string | null | undefined, name: string): string | undefined {
+  if (!cookieHeader) return undefined;
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return undefined;
+}
+
+/** Convenience: the session behind a request's `Cookie` header (framework-agnostic). */
+export function sessionFromHeaders(env: OidcEnv, headers: Headers): Promise<SessionUser | null> {
+  return verifySession(env, readCookie(headers.get('cookie'), SESSION_COOKIE));
+}
+
+const cookieOpts = (origin: string, maxAge: number) => ({
+  httpOnly: true,
+  secure: origin.startsWith('https:'),
+  sameSite: 'Lax' as const,
+  path: '/',
+  maxAge,
+});
+
+export interface MountOptions {
+  /** Where to send the browser after a successful login (default '/'). */
+  onSuccess?: string;
+  /** Where to send after a failed login (default '/?error=auth'). */
+  onError?: string;
+}
+
+/**
+ * Mount `/api/auth/login`, `/api/auth/callback`, `/api/auth/logout` on a Hono app.
+ * Both platform apps wire the routes identically — cookie flags, redirects and the
+ * PKCE round-trip — so the only per-app difference is what happens *after* the
+ * session exists (JIT tenant bootstrap vs. staff-roster lookup), which stays in the
+ * app.
+ */
+export function mountOidcRoutes<B extends OidcEnv>(app: Hono<{ Bindings: B }>, opts: MountOptions = {}): void {
+  const onSuccess = opts.onSuccess ?? '/';
+  const onError = opts.onError ?? '/?error=auth';
+
+  app.get('/api/auth/login', async (c) => {
+    const origin = new URL(c.req.url).origin;
+    const { location, flow } = await beginLogin(c.env, origin);
+    setCookie(c, FLOW_COOKIE, flow, cookieOpts(origin, FLOW_MAXAGE));
+    return c.redirect(location);
+  });
+
+  app.get('/api/auth/callback', async (c) => {
+    const origin = new URL(c.req.url).origin;
+    const flow = getCookie(c, FLOW_COOKIE);
+    deleteCookie(c, FLOW_COOKIE, { path: '/' });
+    try {
+      const { session } = await completeLogin(c.env, origin, new URL(c.req.url), flow);
+      setCookie(c, SESSION_COOKIE, session, cookieOpts(origin, SESSION_MAXAGE));
+      return c.redirect(onSuccess);
+    } catch {
+      return c.redirect(onError);
+    }
+  });
+
+  app.get('/api/auth/logout', (c) => {
+    deleteCookie(c, SESSION_COOKIE, { path: '/' });
+    return c.redirect(onSuccess);
+  });
 }

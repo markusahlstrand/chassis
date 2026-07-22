@@ -13,17 +13,15 @@
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"] }
-	],
+	]
 	// Authentication is OIDC against the platform's AuthHero instance — no auth
-	// database here. These two are public config (safe to commit). The secrets are
-	// Wrangler secrets, never config:
+	// database here, and NOTHING environment-specific is checked in. All four
+	// values are Wrangler secrets (locally: apps/dashboard/.dev.vars, gitignored):
+	//   wrangler secret put OIDC_ISSUER          # e.g. https://auth.substrat.run
+	//   wrangler secret put OIDC_CLIENT_ID
 	//   wrangler secret put OIDC_CLIENT_SECRET
-	//   wrangler secret put SESSION_SECRET
+	//   wrangler secret put SESSION_SECRET       # random 32+ bytes; signs the cookies
 	// The AuthHero client must allow the redirect URI  <origin>/api/auth/callback
 	// (e.g. https://dashboard.substrat.run/api/auth/callback and, for dev,
 	// http://localhost:8890/api/auth/callback).
-	"vars": {
-		"OIDC_ISSUER": "https://REPLACE-ME.authhero.example",
-		"OIDC_CLIENT_ID": "REPLACE-ME"
-	}
 }

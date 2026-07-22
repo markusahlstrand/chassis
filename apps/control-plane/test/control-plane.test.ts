@@ -144,69 +144,18 @@ describe('staff roster', () => {
   });
 });
 
-// Mirrors migrations/0001_better_auth.sql. Inlined because workerd has no fs.
-const BETTER_AUTH_DDL = `
-CREATE TABLE IF NOT EXISTS user (
-  id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
-  email_verified INTEGER NOT NULL DEFAULT 0, image TEXT,
-  created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS session (
-  id TEXT PRIMARY KEY NOT NULL, expires_at INTEGER NOT NULL, token TEXT NOT NULL UNIQUE,
-  created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
-  ip_address TEXT, user_agent TEXT, user_id TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS account (
-  id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, provider_id TEXT NOT NULL,
-  user_id TEXT NOT NULL, access_token TEXT, refresh_token TEXT, id_token TEXT,
-  access_token_expires_at INTEGER, refresh_token_expires_at INTEGER, scope TEXT,
-  password TEXT, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS verification (
-  id TEXT PRIMARY KEY NOT NULL, identifier TEXT NOT NULL, value TEXT NOT NULL,
-  expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL DEFAULT 0)`;
-
-describe('staff signup (#47)', () => {
-  beforeAll(async () => {
-    // Better Auth's tables, so a signup attempt exercises the real path rather
-    // than failing on missing schema (which reads as "refused" but is not).
-    for (const stmt of BETTER_AUTH_DDL.split(';')) {
-      const s = stmt.trim();
-      if (s) await env.AUTH_DB.exec(s.replace(/\n/g, ' '));
-    }
-  });
-
-  const signUp = (email: string) =>
-    SELF.fetch('https://cp.test/api/auth/sign-up/email', {
+describe('no public account surface (OIDC)', () => {
+  // Identity is AuthHero now (an OIDC relying party), so the control plane has no
+  // signup or password endpoint at all — the old "Better Auth public signup, gated
+  // by the roster" hole (#47) cannot exist because there is nothing to gate.
+  // Authorization is still the roster (see 'staff roster' above); this guards that
+  // no credential-creation route creeps back onto the deployed origin.
+  it('exposes no sign-up endpoint', async () => {
+    const res = await SELF.fetch('https://cp.test/api/auth/sign-up/email', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email, password: 'hunter2hunter2', name: 'Someone' }),
+      body: JSON.stringify({ email: 'stranger@example.com', password: 'hunter2hunter2' }),
     });
-
-  const userRow = (email: string) =>
-    env.AUTH_DB.prepare('SELECT email FROM user WHERE email = ?').bind(email).first();
-
-  it('refuses an account for an email not on the staff roster', async () => {
-    // The hole this closes: Better Auth's sign-up endpoint is public by default
-    // and was mounted on the deployed origin, so anyone reaching the control
-    // plane could create an account in the staff store.
-    const res = await signUp('stranger@example.com');
     expect(res.ok).toBe(false);
-    expect(await userRow('stranger@example.com')).toBeNull();
-  });
-
-  it('refuses an account for a REVOKED roster entry', async () => {
-    // Revocation has to close this door too, or a departed operator could simply
-    // re-register and be back in the store.
-    const res = await signUp('gone@substrat.run');
-    expect(res.ok).toBe(false);
-    expect(await userRow('gone@substrat.run')).toBeNull();
-  });
-
-  it('lets a rostered operator set up their own account', async () => {
-    // The roster is the deliberate act; the password is self-serve. Gating here
-    // rather than disabling signup entirely is what avoids minting password
-    // hashes out of band.
-    const res = await signUp('ada@substrat.run');
-    expect(res.ok).toBe(true);
-    expect(await userRow('ada@substrat.run')).not.toBeNull();
   });
 });

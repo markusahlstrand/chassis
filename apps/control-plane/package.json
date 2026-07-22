@@ -17,8 +17,7 @@
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/control-plane-api": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
-    "better-auth": "^1.6.23",
-    "drizzle-orm": "^0.45.2",
+    "@substrat-run/oidc-rp": "workspace:^",
     "hono": "^4.6.0"
   },
   "devDependencies": {
