@@ -10,7 +10,6 @@
   ],
   "exclude": [
     "src/worker.ts",
-    "src/auth.ts",
-    "src/auth-schema.ts"
+    "src/oidc.ts"
   ]
 }

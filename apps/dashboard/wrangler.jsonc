@@ -2,8 +2,6 @@
 	"name": "substrat-dashboard",
 	"main": "src/worker.ts",
 	"compatibility_date": "2025-01-01",
-	// Better Auth (customer sign-in) needs Node built-ins on workerd.
-	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"durable_objects": {
 		"bindings": [
@@ -16,14 +14,16 @@
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"] }
 	],
-	// Customer identity/credentials/sessions (Better Auth). Apply before deploy:
-	//   wrangler d1 migrations apply substrat-dashboard-auth   (--local for dev)
-	"d1_databases": [
-		{
-			"binding": "AUTH_DB",
-			"database_name": "substrat-dashboard-auth",
-			"database_id": "00000000-0000-0000-0000-000000000000",
-			"migrations_dir": "migrations"
-		}
-	]
+	// Authentication is OIDC against the platform's AuthHero instance — no auth
+	// database here. These two are public config (safe to commit). The secrets are
+	// Wrangler secrets, never config:
+	//   wrangler secret put OIDC_CLIENT_SECRET
+	//   wrangler secret put SESSION_SECRET
+	// The AuthHero client must allow the redirect URI  <origin>/api/auth/callback
+	// (e.g. https://dashboard.substrat.run/api/auth/callback and, for dev,
+	// http://localhost:8890/api/auth/callback).
+	"vars": {
+		"OIDC_ISSUER": "https://REPLACE-ME.authhero.example",
+		"OIDC_CLIENT_ID": "REPLACE-ME"
+	}
 }
