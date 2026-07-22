@@ -269,7 +269,12 @@ export function mountOidcRoutes<B extends OidcEnv>(app: Hono<{ Bindings: B }>, o
       const { session } = await completeLogin(c.env, origin, new URL(c.req.url), flow);
       setCookie(c, SESSION_COOKIE, session, cookieOpts(origin, SESSION_MAXAGE));
       return c.redirect(onSuccess);
-    } catch {
+    } catch (err) {
+      // Never swallow silently: a failing login round-trip is undiagnosable in prod
+      // otherwise. The reason (token-exchange status, state/nonce mismatch, JWKS
+      // verify) goes to Workers Logs; the browser still gets the opaque onError
+      // redirect so nothing leaks to the caller.
+      console.error('oidc.callback.failed', { reason: err instanceof Error ? err.message : String(err) });
       return c.redirect(onError);
     }
   });

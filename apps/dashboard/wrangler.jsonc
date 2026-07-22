@@ -19,7 +19,11 @@
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"] }
-	]
+	],
+	// Workers Logs: persisted, queryable console.* + uncaught exceptions. The floor
+	// of prod debuggability — `wrangler tail` and the dashboard's Logs view. Without
+	// it the OIDC callback's failure reason (now logged) would go nowhere.
+	"observability": { "enabled": true },
 	// Authentication is OIDC against the platform's AuthHero instance — no auth
 	// database here, and NOTHING environment-specific is checked in. All four
 	// values are Wrangler secrets (locally: apps/dashboard/.dev.vars, gitignored):
