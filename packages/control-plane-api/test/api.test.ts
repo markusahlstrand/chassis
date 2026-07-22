@@ -454,3 +454,121 @@ describe('control-plane API', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/**
+ * The vertical + version registry surface (#31; orchestration.md §5.6). Drives the
+ * built HostAdmin methods over HTTP: register → publish (pending) → admit → promote
+ * through the digest-diff checkpoint → bind a scope. The interesting property is that
+ * the two human checkpoints fire at promotion, and a non-admitted version is unbindable.
+ */
+describe('control-plane API — vertical registry', () => {
+  let dir: string;
+  let host: SqliteScopeHost;
+  let app: ReturnType<typeof createControlPlaneApi>;
+
+  const staff = platformActorId.parse(ulid());
+  const t1 = tenantId.parse(ulid());
+  const sc = scopeId.parse(ulid());
+  const auth = { [DEV_ACTOR_HEADER]: staff, 'content-type': 'application/json' };
+  const json = (path: string, method: string, body?: unknown) =>
+    app.request(path, { method, headers: auth, body: body === undefined ? undefined : JSON.stringify(body) });
+  const get = (path: string) => app.request(path, { headers: auth });
+
+  // Two versions of one vertical: v2 changes the permission surface, v1 does not.
+  const v1 = ulid();
+  const v2 = ulid();
+  const version = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    verticalSlug: 'fsm',
+    version: id.slice(-6),
+    manifestDigest: 'man-1',
+    permissionDigest: 'perm-1',
+    migrationDigest: 'mig-1',
+    deploymentRef: null,
+    ...over,
+  });
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'cp-reg-'));
+    host = new SqliteScopeHost({ dir });
+    app = createControlPlaneApi({ host, authenticate: UNSAFE_devPlatformActorAuth() });
+    await json('/tenants', 'POST', { id: t1, slug: 'acme', name: 'Acme' });
+    await json('/scopes', 'POST', { tenantId: t1, scopeId: sc, slug: 'main', vertical: 'fsm' });
+  });
+
+  afterAll(async () => {
+    await host.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('registers a vertical and lists it', async () => {
+    const res = await json('/verticals', 'POST', { slug: 'fsm', name: 'Field Service', source: 'builtin' });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ slug: 'fsm', name: 'Field Service', source: 'builtin' });
+    expect(await (await get('/verticals')).json()).toEqual([
+      expect.objectContaining({ slug: 'fsm' }),
+    ]);
+  });
+
+  it('publishes a version pending — a push is not a deploy', async () => {
+    const res = await json('/verticals/fsm/versions', 'POST', version(v1));
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ id: v1, admission: 'pending', deploymentRef: null });
+  });
+
+  it('refuses a version whose body slug contradicts the path', async () => {
+    const res = await json('/verticals/other/versions', 'POST', version(ulid()));
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses to publish under an unregistered vertical (404)', async () => {
+    const res = await json('/verticals/ghost/versions', 'POST', version(ulid(), { verticalSlug: 'ghost' }));
+    expect(res.status).toBe(404);
+  });
+
+  it('admits a version', async () => {
+    const res = await json(`/verticals/fsm/versions/${v1}/admit`, 'POST');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: v1, admission: 'admitted' });
+  });
+
+  it('promotes the first version to prod with no acknowledgement needed', async () => {
+    // Nothing to diff against on a first promotion — the gate is about change.
+    const res = await json('/verticals/fsm/channels/prod/promote', 'POST', { versionId: v1 });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ channel: 'prod', versionId: v1 });
+  });
+
+  it('refuses a non-admitted version at both bind and promote', async () => {
+    await json('/verticals/fsm/versions', 'POST', version(v2, { permissionDigest: 'perm-2' }));
+    // v2 is still pending.
+    expect((await json('/verticals/fsm/channels/prod/promote', 'POST', { versionId: v2 })).status).toBe(409);
+    expect((await json(`/tenants/${t1}/scopes/${sc}/version`, 'POST', { versionId: v2 })).status).toBe(409);
+  });
+
+  it('fires the permission checkpoint: promotion refuses a changed digest without acknowledgement', async () => {
+    await json(`/verticals/fsm/versions/${v2}/admit`, 'POST');
+    // v2's permission digest differs from v1 (the current prod version) → refused.
+    expect((await json('/verticals/fsm/channels/prod/promote', 'POST', { versionId: v2 })).status).toBe(409);
+    // Acknowledged → promotes.
+    const ok = await json('/verticals/fsm/channels/prod/promote', 'POST', {
+      versionId: v2,
+      acknowledge: { permissionChange: true },
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ channel: 'prod', versionId: v2 });
+  });
+
+  it('binds an admitted version to a scope', async () => {
+    const res = await json(`/tenants/${t1}/scopes/${sc}/version`, 'POST', { versionId: v2 });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: sc, verticalVersionId: v2 });
+  });
+
+  it('rejects a fresh pending version, and admitting it afterward conflicts', async () => {
+    const v3 = ulid();
+    await json('/verticals/fsm/versions', 'POST', version(v3));
+    expect((await json(`/verticals/fsm/versions/${v3}/reject`, 'POST', { note: 'no' })).status).toBe(200);
+    expect((await json(`/verticals/fsm/versions/${v3}/admit`, 'POST')).status).toBe(409);
+  });
+});

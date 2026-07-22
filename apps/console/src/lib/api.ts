@@ -1,8 +1,10 @@
 import type {
   AdminAction,
   AdminLogEntry,
+  ChannelName,
   HostnameBinding,
   HostnameStatus,
+  PromotionAcknowledgement,
   Scope,
   ScopeId,
   ScopeStatus,
@@ -10,6 +12,10 @@ import type {
   TenantId,
   TenantRole,
   TenantStatus,
+  Vertical,
+  VerticalChannel,
+  VerticalSource,
+  VerticalVersion,
 } from '@substrat-run/contracts';
 
 /**
@@ -169,6 +175,31 @@ export function createApi(actor: string | null, baseUrl = '/api') {
     ),
 
     adminLog: (q: AuditLogQuery = {}) => call<AdminLogPage>(`/admin-log${query({ ...q })}`),
+
+    // -- vertical + version registry (orchestration.md §5.6) ----------------
+    // The staff surface for the two human checkpoints: admit/reject a version,
+    // and promote a channel — which refuses a changed permission/migration digest
+    // unless acknowledged. Register is a producer action; publishing a version
+    // (with digests from a build) is CI/CLI, not hand-entry.
+    listVerticals: () => call<Vertical[]>('/verticals'),
+    registerVertical: (input: { slug: string; name: string; source: VerticalSource }) =>
+      post<Vertical>('/verticals', input),
+    listVersions: (slug: string) => call<VerticalVersion[]>(`/verticals/${encodeURIComponent(slug)}/versions`),
+    admitVersion: (slug: string, id: string) =>
+      post<VerticalVersion>(`/verticals/${encodeURIComponent(slug)}/versions/${id}/admit`),
+    rejectVersion: (slug: string, id: string, note: string) =>
+      post<VerticalVersion>(`/verticals/${encodeURIComponent(slug)}/versions/${id}/reject`, { note }),
+    listChannels: (slug: string) => call<VerticalChannel[]>(`/verticals/${encodeURIComponent(slug)}/channels`),
+    promoteVersion: (
+      slug: string,
+      channel: ChannelName,
+      versionId: string,
+      acknowledge?: PromotionAcknowledgement,
+    ) =>
+      post<VerticalChannel>(`/verticals/${encodeURIComponent(slug)}/channels/${channel}/promote`, {
+        versionId,
+        acknowledge,
+      }),
   };
 }
 
