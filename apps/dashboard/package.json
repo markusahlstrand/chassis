@@ -1,0 +1,31 @@
+{
+  "name": "@substrat-run/dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "The Dashboard — Substrat’s tenant-facing self-service surface (the platform vertical). See docs/design/dashboard.md.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "test": "vitest run",
+    "cf:dev": "wrangler dev --var STANDALONE:true",
+    "cf:deploy": "node ../../tools/preflight-migrations.mjs && wrangler deploy"
+  },
+  "dependencies": {
+    "@substrat-run/adapter-cloudflare": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/engine-protocol": "workspace:^",
+    "@substrat-run/kernel": "workspace:^",
+    "better-auth": "^1.6.23",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.6.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@substrat-run/adapter-sqlite": "workspace:^",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.110.0"
+  }
+}

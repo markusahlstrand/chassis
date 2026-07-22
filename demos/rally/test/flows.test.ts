@@ -34,6 +34,10 @@ describe('RallyPoint flows (through the HTTP surface)', () => {
   const soon = (plusDays = 10): string => {
     const d = new Date();
     d.setUTCDate(d.getUTCDate() + plusDays);
+    // The club keeps weekday hours (07:00–23:00); weekends open later and close
+    // earlier (08:00–22:00). The fixed times below assume weekday hours, so roll
+    // off Sat/Sun — otherwise the suite fails whenever today+N lands on a weekend.
+    while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
     return d.toISOString().slice(0, 10);
   };
   const DATE = soon();

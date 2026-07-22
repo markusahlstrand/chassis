@@ -108,7 +108,9 @@ const HTTP_CLIENTS = new Set(['undici', 'node-fetch', 'axios', 'got', 'ky']);
  * ModuleRegistration. auth*.ts wires an authentication adapter (Better Auth,
  * OIDC, …) at the server edge — legitimately node/DB-touching. worker.ts is the
  * Cloudflare deployment entry (the composition root that mounts the adapter +
- * engines onto a Worker) — the workerd analogue of server.ts.
+ * engines onto a Worker) — the workerd analogue of server.ts. page.ts is a
+ * served SPA (an HTML/JS string the worker returns) — its `fetch` is browser
+ * code, not module code, the same edge-wiring class as worker.ts/routes.ts.
  */
 export const DEFAULT_HARNESS = [
   'seed.ts',
@@ -119,6 +121,7 @@ export const DEFAULT_HARNESS = [
   'auth-adapters.ts',
   'worker.ts',
   'routes.ts',
+  'page.ts',
 ];
 
 const SOURCE_FILE = /\.(ts|tsx|js|mjs)$/;
@@ -342,6 +345,25 @@ function discoverMonorepo(root: string, harness: string[]): PackageSpec[] {
         harness: group === 'engines' ? [] : harness,
       });
     }
+  }
+  // Platform verticals living in apps/ — e.g. apps/dashboard, the platform
+  // vertical (a real vertical, not a demo). Only those with a `src/module.ts`
+  // (the vertical marker); the other apps (console, control-plane, router, docs)
+  // are not module code and are not scanned.
+  try {
+    for (const pkg of readdirSync(join(root, 'apps'))) {
+      const srcDir = join(root, 'apps', pkg, 'src');
+      if (!existsSync(join(srcDir, 'module.ts'))) continue;
+      let name: string;
+      try {
+        name = JSON.parse(readFileSync(join(root, 'apps', pkg, 'package.json'), 'utf8')).name;
+      } catch {
+        continue;
+      }
+      if (name) specs.push({ name, dir: srcDir, lint: true, engine: false, harness });
+    }
+  } catch {
+    /* no apps/ */
   }
   return specs;
 }

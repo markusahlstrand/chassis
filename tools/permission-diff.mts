@@ -175,24 +175,41 @@ function render(name: string, pkg: string, src: VerticalSource): string {
   return out.join('\n');
 }
 
-const demosDir = join(root, 'demos');
-const names = readdirSync(demosDir)
-  .filter((n) => statSync(join(demosDir, n)).isDirectory() && existsSync(join(demosDir, n, 'src/seed.ts')))
-  .sort();
+// Verticals live in demos/ (demo verticals) AND apps/ (real platform verticals —
+// e.g. apps/dashboard, the platform vertical). A vertical is any package with a
+// src/seed.ts; both trees are scanned so a real vertical outside demos/ still
+// enters the checkpoint.
+const verticals: { rel: string; dir: string }[] = [];
+for (const group of ['demos', 'apps']) {
+  const groupDir = join(root, group);
+  let entries: string[];
+  try {
+    entries = readdirSync(groupDir);
+  } catch {
+    continue;
+  }
+  for (const n of entries) {
+    const dir = join(groupDir, n);
+    if (statSync(dir).isDirectory() && existsSync(join(dir, 'src/seed.ts'))) {
+      verticals.push({ rel: `${group}/${n}`, dir });
+    }
+  }
+}
+verticals.sort((a, b) => a.rel.localeCompare(b.rel));
 
-if (names.length === 0) cannot(`no demo vertical has a src/seed.ts under ${demosDir}.`);
+if (verticals.length === 0) cannot(`no vertical has a src/seed.ts under demos/ or apps/.`);
 
 const drifted: string[] = [];
-for (const name of names) {
-  const pkgPath = join(demosDir, name, 'package.json');
-  const pkg = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string }).name ?? `demos/${name}`;
+for (const { rel, dir } of verticals) {
+  const name = rel.slice(rel.indexOf('/') + 1);
+  const pkg = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string }).name ?? rel;
 
-  const mod = (await import(pathToFileURL(join(demosDir, name, 'src/seed.ts')).href)) as VerticalSource;
+  const mod = (await import(pathToFileURL(join(dir, 'src/seed.ts')).href)) as VerticalSource;
   // The vacuity plug: a vertical that exports neither would be silently skipped,
   // and CI would go green over a permission surface nobody reviewed.
   if (!mod.MODULES || !mod.ROLES) {
     cannot(
-      `demos/${name}/src/seed.ts exports ${!mod.MODULES ? 'no MODULES' : 'no ROLES'}.\n` +
+      `${rel}/src/seed.ts exports ${!mod.MODULES ? 'no MODULES' : 'no ROLES'}.\n` +
         `  Without it this vertical is skipped and CI goes green over a permission surface\n` +
         `  nobody reviewed — worse than having no checkpoint at all.\n` +
         `  Remedy: export the array buildHost registers as MODULES, and the role table\n` +
@@ -201,7 +218,7 @@ for (const name of names) {
   }
 
   const content = render(name, pkg, mod);
-  const artifact = join(demosDir, name, 'PERMISSIONS.md');
+  const artifact = join(dir, 'PERMISSIONS.md');
 
   if (!check) {
     writeFileSync(artifact, content);
@@ -209,17 +226,17 @@ for (const name of names) {
   }
   if (!existsSync(artifact)) {
     cannot(
-      `demos/${name}/PERMISSIONS.md does not exist.\n` +
+      `${rel}/PERMISSIONS.md does not exist.\n` +
         `  A missing artifact is a broken setup, not drift.\n` +
-        `  Remedy: pnpm lint:permissions && git add demos/${name}/PERMISSIONS.md`,
+        `  Remedy: pnpm lint:permissions && git add ${rel}/PERMISSIONS.md`,
     );
   }
-  if (readFileSync(artifact, 'utf8') !== content) drifted.push(name);
+  if (readFileSync(artifact, 'utf8') !== content) drifted.push(rel);
 }
 
 if (drifted.length) {
   console.error(`permission-diff: ${drifted.length} snapshot(s) out of date\n`);
-  for (const n of drifted) console.error(`  ✗ demos/${n}/PERMISSIONS.md`);
+  for (const rel of drifted) console.error(`  ✗ ${rel}/PERMISSIONS.md`);
   console.error(
     `\n  The permission surface changed and the checkpoint was not regenerated.\n` +
       `  Run: pnpm lint:permissions — then READ the diff. Someone must approve it.\n`,
@@ -229,6 +246,6 @@ if (drifted.length) {
 
 console.log(
   check
-    ? `permission-diff: ${names.length} snapshot(s) match`
-    : `permission-diff: wrote ${names.length} snapshot(s)`,
+    ? `permission-diff: ${verticals.length} snapshot(s) match`
+    : `permission-diff: wrote ${verticals.length} snapshot(s)`,
 );
