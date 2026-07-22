@@ -36,10 +36,21 @@ const STATUS_PATTERNS: readonly [RegExp, ContentfulStatusCode][] = [
   [/illegal scope transition/, 409],
   [/non-active tenant/, 409],
   [/not active \(status:/, 409],
+  // Registry (#31): well-formed, but conflicts with a version's admission state or
+  // ownership, or needs an unacknowledged change acknowledged (the two checkpoints).
+  [/is already registered/, 409],
+  [/was rejected — publish a new one/, 409],
+  [/is already admitted/, 409],
+  [/belongs to '/, 409],
+  [/not admitted/, 409],
+  [/acknowledge it explicitly to promote/, 409],
   // The ADDRESSED resource does not exist — including the K-3 fail-closed case
   // where it exists under a DIFFERENT tenant and must read as absent.
   [/unknown tenant:/, 404],
   [/unknown scope for tenant/, 404],
+  [/unknown scope /, 404],
+  [/unknown vertical /, 404],
+  [/unknown version /, 404],
   [/scope has no tenant record/, 404],
 ];
 

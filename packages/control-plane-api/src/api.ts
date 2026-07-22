@@ -1,11 +1,15 @@
 import { Hono } from 'hono';
 import {
   adminAction,
+  channelName,
   createTenantInput,
   hostname as hostnameSchema,
   hostnameRegion,
   hostnameStatus,
+  promotionAcknowledgement,
   provisionableJurisdiction,
+  publishVersionInput,
+  registerVerticalInput,
   scopeId as scopeIdSchema,
   scopeStatus,
   storageShape,
@@ -100,6 +104,24 @@ const listScopesQuery = z.object({
   status: z.array(scopeStatus).optional(),
   vertical: z.string().optional(),
 });
+
+// -- vertical + version registry bodies (#31; orchestration.md §5.6) --------
+// Each route below is a thin pass-through to a built `HostAdmin` method — the
+// registry data model, admission and the digest-diff promotion gate already exist
+// (registry.ts + both adapters). This surface exposes them; it adds no policy of its
+// own. The `deploy` route (the uploader) is deliberately absent — that is Phase 2.
+
+const rejectVersionBody = z.object({ note: z.string().min(1) });
+
+const promoteVersionBody = z.object({
+  versionId: z.string().min(1),
+  // The two human checkpoints: promotion refuses a changed permission/migration
+  // digest unless the matching flag is set. Optional because an unchanged digest
+  // needs no acknowledgement.
+  acknowledge: promotionAcknowledgement.optional(),
+});
+
+const bindScopeVersionBody = z.object({ versionId: z.string().min(1) });
 
 const listRolesQuery = z.object({
   tenantId: tenantIdSchema.optional(),
@@ -263,6 +285,17 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     });
   }
 
+  // Pin a scope to a vertical version (#31; orchestration.md §4). Refuses a
+  // non-admitted version below the seam — that refusal is the registry's reason to
+  // exist. A scope operation, so it keeps the scope route shape.
+  app.post('/tenants/:tenantId/scopes/:scopeId/version', async (c) => {
+    const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
+    const scopeId = scopeIdSchema.parse(c.req.param('scopeId'));
+    const { versionId } = bindScopeVersionBody.parse(await c.req.json());
+    await admin.bindScopeVersion(c.get('actor'), tenantId, scopeId, versionId);
+    return c.json(await admin.getScopeRecord(c.get('actor'), tenantId, scopeId));
+  });
+
   // -- instances (K-31) -------------------------------------------------------
   // The one place this surface calls OUT rather than sitting over `HostAdmin`, and
   // it is unavoidable: only the vertical can create a usable scope DO, because the
@@ -296,6 +329,72 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       }
       throw e;
     }
+  });
+
+  // -- vertical + version registry (#31; orchestration.md §5.6) --------------
+  // Thin pass-throughs to `HostAdmin`. Register a vertical, publish a version
+  // (lands PENDING — a push is not a deploy), admit/reject at the checkpoints,
+  // promote a channel through the digest-diff gate, pin a scope to a version. The
+  // uploader that sets `deploymentRef` (the `deploy` route) is Phase 2, not here.
+
+  app.get('/verticals', async (c) => c.json(await admin.listVerticals(c.get('actor'))));
+
+  app.post('/verticals', async (c) => {
+    const input = registerVerticalInput.parse(await c.req.json());
+    await admin.registerVertical(c.get('actor'), input);
+    // Idempotent on the slug (a conflicting re-register throws below the seam), so
+    // read back rather than echo the request.
+    const registered = (await admin.listVerticals(c.get('actor'))).find((v) => v.slug === input.slug);
+    return c.json(registered, 201);
+  });
+
+  app.get('/verticals/:slug/versions', async (c) =>
+    c.json(await admin.listVersions(c.get('actor'), c.req.param('slug'))),
+  );
+
+  app.post('/verticals/:slug/versions', async (c) => {
+    const input = publishVersionInput.parse(await c.req.json());
+    // The slug is in the path AND the body; they must agree, the same fail-closed
+    // cross-check `(tenantId, scopeId)` makes (K-3) — a mismatch is a client bug, not
+    // a silent publish under the wrong vertical.
+    if (input.verticalSlug !== c.req.param('slug')) {
+      return c.json({ error: 'verticalSlug does not match the path' }, 400);
+    }
+    await admin.publishVersion(c.get('actor'), input);
+    const version = (await admin.listVersions(c.get('actor'), input.verticalSlug)).find(
+      (v) => v.id === input.id,
+    );
+    return c.json(version, 201);
+  });
+
+  app.post('/verticals/:slug/versions/:id/admit', async (c) => {
+    const slug = c.req.param('slug');
+    const id = c.req.param('id');
+    await admin.admitVersion(c.get('actor'), id);
+    return c.json((await admin.listVersions(c.get('actor'), slug)).find((v) => v.id === id));
+  });
+
+  app.post('/verticals/:slug/versions/:id/reject', async (c) => {
+    const slug = c.req.param('slug');
+    const id = c.req.param('id');
+    const { note } = rejectVersionBody.parse(await c.req.json());
+    await admin.rejectVersion(c.get('actor'), id, note);
+    return c.json((await admin.listVersions(c.get('actor'), slug)).find((v) => v.id === id));
+  });
+
+  app.get('/verticals/:slug/channels', async (c) =>
+    c.json(await admin.listChannels(c.get('actor'), c.req.param('slug'))),
+  );
+
+  app.post('/verticals/:slug/channels/:channel/promote', async (c) => {
+    const slug = c.req.param('slug');
+    const channel = channelName.parse(c.req.param('channel'));
+    const { versionId, acknowledge } = promoteVersionBody.parse(await c.req.json());
+    // The blast-radius moment: refuses a changed digest without the acknowledgement,
+    // and refuses a non-admitted version. Both are enforced below the seam and
+    // surface as a 4xx through mapError, not a 500.
+    await admin.promoteVersion(c.get('actor'), slug, channel, versionId, acknowledge);
+    return c.json((await admin.listChannels(c.get('actor'), slug)).find((ch) => ch.channel === channel));
   });
 
   // -- the hostname map (§4.7, K-26) -----------------------------------------
