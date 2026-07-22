@@ -35,7 +35,16 @@
 	// to provision an instance (orchestration.md §5.4). A `substrat push` also uploads
 	// into this namespace via CF_API_TOKEN. `wrangler secret put PLATFORM_SECRET`
 	// (matching each vertical's own) is still required for provisioning.
+	// Verticals are reached dynamically through the WfP dispatch namespace:
+	// `resolveVertical` maps a slug → its prod version → env.DISPATCH.get(deploymentRef)
+	// (orchestration.md §5.4). No static `VERTICAL_<SLUG>` service bindings — those were
+	// a bring-up stopgap; with WfP enabled, a pushed + promoted vertical is reached with
+	// no per-vertical binding and no redeploy (see docs/design/scope-local-permissions.md).
 	"dispatch_namespaces": [{ "binding": "DISPATCH", "namespace": "substrat-verticals" }],
+
+	// SERVICE_TOKEN authenticates machine callers (the Dashboard's provisioning seam)
+	// as the control plane's service actor — set it equal to the dashboard's CP_SERVICE_TOKEN:
+	//   wrangler secret put SERVICE_TOKEN
 
 	// The staff roster's store (staff_actor, #42) — who has platform access and under
 	// which actor id, separate from the directory DO. No longer a credential store:

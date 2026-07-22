@@ -9,6 +9,7 @@ import {
 } from '@substrat-run/contracts';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { DASHBOARD_PERM, dashboardModule, type DashboardAppRow } from './module.js';
+import { TenantNarrowedControlPlane } from './authority.js';
 
 /** This vertical's slug and the DO/entitlement key it registers under. */
 export const VERTICAL = 'dashboard';
@@ -105,9 +106,21 @@ export async function createApp(
      * hostname is `<slug>.<jurisdiction>.substrat.run` (K-30); overridable for tests.
      */
     baseDomain?: string;
+    /**
+     * CONNECTED mode (production). When present, the app is provisioned on the
+     * SHARED control plane through this tenant-narrowed seam (§4) — a directory
+     * row + a real vertical instance + a hostname the router can resolve — instead
+     * of into this deployment's own DOs. Absent ⇒ the M0 embedded path (tests,
+     * standalone), which runs the app in this deployment and binds locally.
+     */
+    controlPlane?: TenantNarrowedControlPlane;
+    /** Display name for the tenant when it is first registered on the shared plane. */
+    tenantName?: string;
   },
 ): Promise<DashboardAppRow> {
-  // 1. Authorize + record, as the caller, in their own dashboard scope.
+  // 1. Authorize + record, as the caller, in their own dashboard scope. This is the
+  //    "can they?" half of §4 — the kernel's permission check, in the caller's scope
+  //    — and it runs the same in both modes, before any effect.
   const scope = await host.getScope(input.node.principal, input.node.tenantId, input.node.scopeId);
   await scope.invoke('dashboard/provision-app', {
     appScopeId: input.appScopeId,
@@ -115,20 +128,72 @@ export async function createApp(
     name: input.name,
   });
 
-  // 2. Effect: provision the app scope IN THE CALLER'S OWN TENANT (node.tenantId,
-  //    ambient — never an argument the caller supplied).
+  // 2. Effect the app scope IN THE CALLER'S OWN TENANT (node.tenantId, ambient —
+  //    never a request argument). Connected: on the shared plane, tenant-narrowed.
+  //    Embedded: in this deployment's own host.
+  const hostname = input.controlPlane
+    ? await provisionOnSharedPlane(input.controlPlane, input)
+    : await provisionEmbedded(host, input);
+
+  // 3. Flip the account's record to active, recording the hostname if one bound.
+  return scope.invoke('dashboard/mark-app-active', {
+    appScopeId: input.appScopeId,
+    ...(hostname ? { hostname } : {}),
+  });
+}
+
+type CreateAppInput = Parameters<typeof createApp>[1];
+
+/**
+ * CONNECTED mode: provision through the shared control plane, tenant-narrowed —
+ * the production path (dashboard.md §6). Mirrors the operator console's proven
+ * create-instance sequence (apps/console/src/lib/create-instance.ts): a directory
+ * row (`provisionScope`), the vertical instance (`provisionInstance` → the vertical
+ * grants entitlements + assigns the owner its role), activation, then a bound
+ * default hostname the router resolves. No `bindScopeVersion`: with WfP off the
+ * router dispatches on a static `VERTICAL_<slug>` binding, which needs no version.
+ */
+async function provisionOnSharedPlane(cp: TenantNarrowedControlPlane, input: CreateAppInput): Promise<string | null> {
+  const slug = slugify(input.name);
+  const tenantSlug = `t-${cp.tenantId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-10)}`;
+  await cp.ensureTenant(tenantSlug, input.tenantName ?? 'Workspace');
+  // Belt-and-braces: the vertical grants these too, but an idempotent grant here
+  // keeps the shared directory's entitlement view complete regardless.
+  for (const key of input.appEntitlements ?? [input.verticalSlug]) await cp.grantEntitlement(key);
+  await cp.provisionScope({ scopeId: input.appScopeId, slug, name: input.name, vertical: input.verticalSlug, jurisdiction: 'global' });
+  await cp.provisionInstance(input.verticalSlug, { scopeId: input.appScopeId, owner: input.node.principal, slug, name: input.name });
+  await cp.activateScope(input.appScopeId);
+
+  // Pin the scope to the vertical's prod version so the router dispatches on it once
+  // Workers-for-Platforms is enabled (D-35). No promoted version today ⇒ this is a
+  // no-op and the router serves via the static `VERTICAL_<slug>` binding. It is the
+  // ONLY thing that differs between the static bring-up and dynamic dispatch, so the
+  // dashboard needs NO change when WfP flips on — only the deploy mechanism does.
+  const prod = (await cp.listChannels(input.verticalSlug)).find((ch) => ch.channel === 'prod');
+  if (prod) await cp.bindScopeVersion(input.appScopeId, prod.versionId);
+
+  const base = input.baseDomain ?? 'substrat.run';
+  const tail = input.appScopeId.toLowerCase().slice(-4);
+  for (const hostname of [`${slug}.global.${base}`, `${slug}-${tail}.global.${base}`]) {
+    try {
+      await cp.bindHostname({ hostname, scopeId: input.appScopeId, surface: 'app', canonical: true });
+      await cp.setHostnameStatus(hostname, 'active');
+      return hostname;
+    } catch {
+      // Global-uniqueness collision or transient — try the next candidate.
+    }
+  }
+  return null;
+}
+
+/** EMBEDDED mode (M0 / tests): provision into this deployment's own host + directory. */
+async function provisionEmbedded(host: ScopeHost, input: CreateAppInput): Promise<string | null> {
   const staff = platformActorId.parse(ulid());
   const tenantId = input.node.tenantId;
   for (const key of input.appEntitlements ?? [input.verticalSlug]) {
     await host.admin.grantEntitlement(staff, tenantId, key);
   }
-  const jurisdiction = 'global' as const;
-  await host.provisionScope(staff, {
-    tenantId,
-    scopeId: input.appScopeId,
-    jurisdiction,
-    vertical: input.verticalSlug,
-  });
+  await host.provisionScope(staff, { tenantId, scopeId: input.appScopeId, jurisdiction: 'global', vertical: input.verticalSlug });
   await host.admin.activateScope(staff, tenantId, input.appScopeId);
   for (const permission of input.appOwnerGrants ?? []) {
     await host.admin.grant(staff, {
@@ -138,25 +203,13 @@ export async function createApp(
       grantedBy: input.node.principal,
     });
   }
-
-  // 3. Bind a default hostname `<slug>.<jurisdiction>.substrat.run` (K-30). This
-  //    records the URL in the directory; it does NOT resolve until the router +
-  //    DNS + ACM are in place (dashboard.md §6 steps beyond M0). Best-effort: a
-  //    global-uniqueness collision must not fail an otherwise-good provision, so
-  //    fall back to a scope-tailed slug, then to no hostname.
-  const hostname = await bindDefaultHostname(host, {
+  return bindDefaultHostname(host, {
     staff,
     tenantId,
     scopeId: input.appScopeId,
     name: input.name,
-    jurisdiction,
+    jurisdiction: 'global',
     baseDomain: input.baseDomain ?? 'substrat.run',
-  });
-
-  // 4. Flip the account's record to active, recording the hostname if one bound.
-  return scope.invoke('dashboard/mark-app-active', {
-    appScopeId: input.appScopeId,
-    ...(hostname ? { hostname } : {}),
   });
 }
 
