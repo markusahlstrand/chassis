@@ -169,7 +169,13 @@ export async function completeLogin(
       code_verifier: flow.v,
     }),
   });
-  if (!res.ok) throw new Error(`token exchange failed (${res.status})`);
+  if (!res.ok) {
+    // Surface the authority's own error body — this is the non-2xx path, so it is an
+    // error payload, never the token response, and nothing secret leaks. Capped and
+    // logged server-side (Workers Logs) only; the browser still gets the opaque redirect.
+    const detail = await res.text().catch(() => '');
+    throw new Error(`token exchange failed (${res.status})${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+  }
   const tokens = (await res.json()) as { id_token?: string };
   if (!tokens.id_token) throw new Error('no id_token in token response');
 
