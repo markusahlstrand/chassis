@@ -17,6 +17,7 @@ interface Row {
   surface: string;
   region: string | null;
   status: string;
+  deployment_ref?: string | null;
 }
 
 const row = (over: Partial<Row> = {}): Row => ({
@@ -183,6 +184,45 @@ describe('router', () => {
 
     await worker.fetch(get('https://admin.shop.example.com/'), env);
     expect(shop.seen().headers.get('x-substrat-surface')).toBe('back-office');
+  });
+
+  // -- dispatch on the bound version (orchestration.md §5.4) -----------------
+
+  it('dispatches on the scope bound version through the namespace', async () => {
+    let dispatched: string | undefined;
+    const fsm = spyVertical();
+    const DISPATCH = {
+      get: (name: string) => {
+        dispatched = name;
+        return fsm.binding;
+      },
+    };
+    const env = {
+      CONTROL_PLANE: directory({ 'acme.example.com': row({ deployment_ref: 'fsm-01ky535a' }) }),
+      DISPATCH,
+    } as unknown as Env;
+
+    const res = await worker.fetch(get('https://acme.example.com/api/x'), env);
+    expect(res.status).toBe(200);
+    // It dispatched on the deploymentRef, not the slug.
+    expect(dispatched).toBe('fsm-01ky535a');
+    expect(fsm.seen().headers.get('x-substrat-tenant')).toBe(T);
+    expect(fsm.seen().headers.get('x-substrat-scope')).toBe(S);
+  });
+
+  it('falls back to the static binding when the scope has no bound version', async () => {
+    const fsm = spyVertical();
+    const DISPATCH = {
+      get: () => {
+        throw new Error('should not dispatch a route with no version');
+      },
+    };
+    const env = {
+      CONTROL_PLANE: directory({ 'acme.example.com': row() }), // no deployment_ref
+      DISPATCH,
+      VERTICAL_FSM: fsm.binding,
+    } as unknown as Env;
+    expect((await worker.fetch(get('https://acme.example.com/'), env)).status).toBe(200);
   });
 
   it('maps a dashed slug to its binding name', async () => {

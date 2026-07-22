@@ -38,15 +38,23 @@ export interface Env {
    */
   ROUTER_SECRET?: string;
   /**
-   * Service bindings to vertical workers, keyed `VERTICAL_<SLUG>` with the slug
-   * upper-cased and dashes as underscores (`bike-shop` → `VERTICAL_BIKE_SHOP`).
-   *
-   * A static binding per vertical is the milestone-one shape and deliberately so:
-   * it works for the demos we ship, and it does not pretend to be the thing that
-   * replaces it. Customer-pushed verticals need a Workers-for-Platforms dispatch
-   * namespace (#31 blocker 1), which swaps this lookup and nothing else.
+   * The Workers-for-Platforms dispatch namespace holding every pushed vertical
+   * (orchestration.md §5.4). The router dispatches on the scope's bound version's
+   * `deploymentRef`: `env.DISPATCH.get(deploymentRef)`. Absent ⇒ the router falls
+   * back to the static `VERTICAL_<SLUG>` service bindings below.
+   */
+  DISPATCH?: DispatchNamespace;
+  /**
+   * Legacy static service bindings, keyed `VERTICAL_<SLUG>` (slug upper-cased, dashes
+   * as underscores). The milestone-one shape, kept as a fallback while the dispatch
+   * namespace takes over — used only when a route has no `deploymentRef`.
    */
   [binding: string]: unknown;
+}
+
+/** Minimal shape of a WfP dispatch namespace binding. */
+interface DispatchNamespace {
+  get(name: string): Fetcher;
 }
 
 /** Headers the router asserts. Any inbound copy is stripped before these are set. */
@@ -56,6 +64,14 @@ const bindingNameFor = (slug: string): string =>
   `VERTICAL_${slug.toUpperCase().replace(/-/g, '_')}`;
 
 function verticalFor(env: Env, target: RouteTarget): Fetcher | undefined {
+  // Dispatch on the scope's bound version, if the namespace is bound and the scope
+  // has one (orchestration.md §5.4). `get` returns a stub unconditionally; a script
+  // that is not there (or not yet propagated, K-29) surfaces as `Worker not found.`
+  // at fetch time, which the bounded retry below handles.
+  if (target.deploymentRef && env.DISPATCH) {
+    return env.DISPATCH.get(target.deploymentRef);
+  }
+  // Fallback: the milestone-one static service binding, for a route with no version.
   if (!target.verticalSlug) return undefined;
   const binding = env[bindingNameFor(target.verticalSlug)];
   // A Fetcher is an object with .fetch; anything else in this slot is misconfiguration.
