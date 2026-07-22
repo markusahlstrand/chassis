@@ -270,7 +270,9 @@ does not relax it — it makes the digest that proves it a promotion gate.
 
 ## 9. Non-goals (explicitly deferred)
 
-- **Untrusted-author deploy** (generated-verticals §1) — trusted, platform-owned only.
+- **Untrusted-author deploy** (generated-verticals §1) — trusted, platform-owned only. The
+  self-serve extension (a builder deploying their own vertical via `substrat push`) is designed
+  separately in [self-serve-deploy](self-serve-deploy.md); its foundation is this layer's Phase 2.
 - **The trigger ergonomics** — a git-hook or a `substrat push` CLI are sugar over the
   `deploy` route; this layer builds the route, not the ergonomics.
 - **Per-jurisdiction dispatch namespaces** — until eu/us open (K-32) + Regional Services.
