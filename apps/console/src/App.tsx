@@ -13,6 +13,7 @@ import { Permissions } from './views/Permissions';
 import { Scopes } from './views/Scopes';
 import { TenantDetail } from './views/TenantDetail';
 import { Tenants } from './views/Tenants';
+import { Verticals } from './views/Verticals';
 
 /**
  * The dev actor. Read from a query param, localStorage, or a build-time default
@@ -47,7 +48,7 @@ interface Toast {
   status: 'success' | 'danger';
 }
 
-const VIEWS: ViewKey[] = ['tenants', 'scopes', 'domains', 'admin-log', 'permissions'];
+const VIEWS: ViewKey[] = ['tenants', 'scopes', 'domains', 'verticals', 'admin-log', 'permissions'];
 
 /**
  * Navigation lives in the URL — which view, and any drilled-into tenant — so a
@@ -272,6 +273,7 @@ export function App() {
           onToast={notify}
         />
       )}
+      {view === 'verticals' && <Verticals api={api} onToast={notify} />}
       {view === 'admin-log' && <AdminLog api={api} tenants={tenantMap} />}
       {view === 'permissions' && <Permissions api={api} tenants={tenantMap} />}
 

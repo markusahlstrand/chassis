@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Breadcrumbs, IconButton, SideNav, SubIcon, SubIcons } from './components';
 import type { BreadcrumbItem } from './components';
 
-export type ViewKey = 'tenants' | 'scopes' | 'domains' | 'admin-log' | 'permissions';
+export type ViewKey = 'tenants' | 'scopes' | 'domains' | 'verticals' | 'admin-log' | 'permissions';
 
 /**
  * The nav items with nothing behind them, rendered dead on purpose.
@@ -15,7 +15,6 @@ export type ViewKey = 'tenants' | 'scopes' | 'domains' | 'admin-log' | 'permissi
  */
 const PLANNED = [
   { label: 'Members', icon: SubIcons.users, dep: 'Needs principal & grant enumeration — permission writes are one-way today' },
-  { label: 'Engines', icon: SubIcons.box, dep: 'Needs a per-vertical deployment/version registry' },
 ] as const;
 
 export interface ConsoleShellProps {
@@ -78,6 +77,7 @@ export function ConsoleShell({
               { value: 'tenants', label: 'Tenants', icon: <SubIcon d={SubIcons.users} />, count: tenantCount },
               { value: 'scopes', label: 'Scopes', icon: <SubIcon d={SubIcons.layers} />, count: scopeCount },
               { value: 'domains', label: 'Domains', icon: <SubIcon d={SubIcons.globe} />, count: hostnameCount },
+              { value: 'verticals', label: 'Verticals', icon: <SubIcon d={SubIcons.box} /> },
               { value: 'admin-log', label: 'Admin log', icon: <SubIcon d={SubIcons.scroll} /> },
               { value: 'permissions', label: 'Permissions', icon: <SubIcon d={SubIcons.cog} /> },
             ],
