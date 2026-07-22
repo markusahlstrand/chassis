@@ -49,6 +49,47 @@ export interface DoCheckerDeps {
   controlPlane: ControlPlaneReader;
 }
 
+/**
+ * A `ControlPlaneReader` backed by the ScopeDO's OWN storage — the read side of
+ * scope-local permissions (docs/design/scope-local-permissions.md). It reads the
+ * tenant-level tuples + role definitions that were **projected** into this scope
+ * (`_substrat_tenant_tuples`, `_substrat_roles`), so the checker never has to call
+ * the shared control-plane DO on the request path.
+ *
+ * It returns exactly what the RPC reader returns — rows (including tombstoned ones,
+ * which the checker's own `live()` filter drops), and a role or `undefined`. An
+ * empty projection therefore yields `[]` / `undefined`, i.e. **deny** — fail closed.
+ * A revoked role definition is treated as absent (returns `undefined`), so a removed
+ * role stops granting the moment its tombstone is projected.
+ */
+export function createLocalControlPlaneReader(sql: SqlStorage): ControlPlaneReader {
+  return {
+    async tenantTuples(tenantId, subject, relationPrefix): Promise<TupleRow[]> {
+      return sql
+        .exec(
+          `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tenant_tuples
+           WHERE tenant_id = ? AND subject = ? AND relation LIKE ?`,
+          tenantId,
+          subject,
+          `${relationPrefix}%`,
+        )
+        .toArray() as unknown as TupleRow[];
+    },
+    async getRole(tenantId, key): Promise<RoleDefinition | undefined> {
+      const row = sql
+        .exec(
+          `SELECT role_key, permissions, source FROM _substrat_roles
+           WHERE tenant_id = ? AND role_key = ? AND revoked_at IS NULL`,
+          tenantId,
+          key,
+        )
+        .toArray()[0] as { role_key: string; permissions: string; source: string } | undefined;
+      if (!row) return undefined;
+      return { key: row.role_key, permissions: JSON.parse(row.permissions), source: row.source } as RoleDefinition;
+    },
+  };
+}
+
 const t = (subject: string, relation: string, object: string): RelationTuple => ({
   subject: objectRef.parse(subject),
   relation,

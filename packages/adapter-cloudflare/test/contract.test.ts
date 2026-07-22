@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
+import { permissionKey, platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
 import { ulid, UNSAFE_allowAllChecker, webCryptoSecretBox } from '@substrat-run/kernel';
 import {
   connectorTestFetch,
@@ -92,5 +92,78 @@ describe('migration failure is recorded in the directory', () => {
   it('projects the count that actually landed, not the pre-attempt value', async () => {
     const record = await host.admin.getScopeRecord(staff, t, s);
     expect(record?.schemaVersion).toBe('1');
+  });
+});
+
+/**
+ * Scope-local permissions, Phase 1 (docs/design/scope-local-permissions.md): the
+ * ScopeDO can evaluate a tenant-level role from its OWN projected storage instead
+ * of the control-plane DO. This proves the local reader is parity with RPC, that a
+ * tombstoned projection stops granting, and — the load-bearing safety property —
+ * that flipping a scope to 'local' WITHOUT projecting denies (fail closed), even
+ * where the RPC path would have allowed. Lives in this file for the same
+ * single-worker reason as the block above.
+ */
+describe('scope-local permissions — the projected local reader (Phase 1)', () => {
+  const staff = platformActorId.parse(ulid());
+  const t = tenantId.parse(ulid());
+  const sProj = scopeId.parse(ulid()); // projected → local
+  const sEmpty = scopeId.parse(ulid()); // flipped to local with nothing projected
+  const alice = principalId.parse(ulid());
+  const PERM_ADMIN = permissionKey.parse('perm:admin');
+  let host: CloudflareScopeHost;
+
+  const probe = async (scope: typeof sProj): Promise<boolean> =>
+    (await (await host.getScope(alice, t, scope)).invoke<{ allowed: boolean }>('perm/probe', { permission: PERM_ADMIN }))
+      .allowed;
+
+  interface ProjectionRpc {
+    projectRole(tenantId: string, role: { key: string; permissions: string[]; source: string }): Promise<void>;
+    projectTenantTuple(tenantId: string, subject: string, relation: string, object: string, expiresAt: string | null, revokedAt?: string | null): Promise<void>;
+    revokeProjectedRole(tenantId: string, key: string, revokedAt: string): Promise<void>;
+    setPermissionSource(source: 'local' | 'control-plane'): Promise<void>;
+  }
+  const projection = (scope: string): ProjectionRpc =>
+    env.SCOPE.get(env.SCOPE.idFromName(scope)) as unknown as ProjectionRpc;
+
+  beforeAll(async () => {
+    host = new CloudflareScopeHost({
+      scope: env.SCOPE,
+      controlPlane: env.CONTROL_PLANE,
+      secretBox: webCryptoSecretBox('test-key', new Uint8Array(32).fill(7)),
+    });
+    await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+    await host.admin.grantEntitlement(staff, t, 'perm'); // default-deny (§4.3)
+    for (const s of [sProj, sEmpty]) {
+      await host.provisionScope(staff, { tenantId: t, scopeId: s, vertical: 'perm-vertical' });
+      await host.admin.activateScope(staff, t, s);
+    }
+    // A tenant-level role — lands in the control plane, so it resolves for BOTH
+    // scopes over RPC until one is flipped to local.
+    await host.admin.defineRole(staff, t, { key: 'admin', permissions: [PERM_ADMIN], source: 'vertical' });
+    await host.admin.assignRole(staff, { principalId: alice, roleKey: 'admin', node: { tenantId: t, scopeId: null } });
+  });
+
+  afterAll(async () => host.close());
+
+  it('resolves via RPC by default, then identically via the local projection', async () => {
+    expect(await probe(sProj)).toBe(true); // RPC baseline
+
+    const p = projection(sProj);
+    await p.projectRole(t, { key: 'admin', permissions: [PERM_ADMIN], source: 'vertical' });
+    await p.projectTenantTuple(t, `principal:${alice}`, 'role:admin', `tenant:${t}`, null);
+    await p.setPermissionSource('local');
+    expect(await probe(sProj)).toBe(true); // now resolved locally — parity
+  });
+
+  it('a tombstoned projected role stops granting (K-21)', async () => {
+    await projection(sProj).revokeProjectedRole(t, 'admin', new Date().toISOString());
+    expect(await probe(sProj)).toBe(false);
+  });
+
+  it('fails closed: local source with nothing projected denies, though RPC would allow', async () => {
+    expect(await probe(sEmpty)).toBe(true); // RPC still allows — the role is in the control plane
+    await projection(sEmpty).setPermissionSource('local'); // flip WITHOUT projecting
+    expect(await probe(sEmpty)).toBe(false); // empty projection ⇒ deny
   });
 });
