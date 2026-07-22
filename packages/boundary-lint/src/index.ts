@@ -108,7 +108,9 @@ const HTTP_CLIENTS = new Set(['undici', 'node-fetch', 'axios', 'got', 'ky']);
  * ModuleRegistration. auth*.ts wires an authentication adapter (Better Auth,
  * OIDC, …) at the server edge — legitimately node/DB-touching. worker.ts is the
  * Cloudflare deployment entry (the composition root that mounts the adapter +
- * engines onto a Worker) — the workerd analogue of server.ts.
+ * engines onto a Worker) — the workerd analogue of server.ts. page.ts is a
+ * served SPA (an HTML/JS string the worker returns) — its `fetch` is browser
+ * code, not module code, the same edge-wiring class as worker.ts/routes.ts.
  */
 export const DEFAULT_HARNESS = [
   'seed.ts',
@@ -119,6 +121,7 @@ export const DEFAULT_HARNESS = [
   'auth-adapters.ts',
   'worker.ts',
   'routes.ts',
+  'page.ts',
 ];
 
 const SOURCE_FILE = /\.(ts|tsx|js|mjs)$/;
