@@ -71,6 +71,10 @@ for (const t of world) {
       tenantId: tid, scopeId: sid, slug: s.slug, kind: s.kind, name: s.name,
       vertical: s.vertical, jurisdiction: 'eu',
     });
+    // A provisioned scope lands `provisioning` (K-31); the fake fleet wants live
+    // scopes, so activate before any suspend/archive — those transitions are
+    // illegal from `provisioning`.
+    await host.admin.activateScope(staff, tid, sid);
     if (s.status === 'suspended') await host.admin.suspendScope(staff, tid, sid);
     if (s.status === 'archived') await host.admin.archiveScope(staff, tid, sid);
   }
@@ -82,7 +86,7 @@ for (const t of world) {
 // permission checkpoint. `defineRole` captures before/after, so the second call
 // is what the console's "Needs review" tab renders as a real diff: site-manager
 // silently gaining invoice:read is exactly the change a human is meant to catch.
-const [firstTenant] = await host.admin.listTenants();
+const [firstTenant] = await host.admin.listTenants(staff);
 if (firstTenant) {
   await host.admin.defineRole(staff, firstTenant.id, {
     key: 'site-manager',
