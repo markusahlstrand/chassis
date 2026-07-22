@@ -30,6 +30,7 @@ export const INSTANCE_STEPS = [
   { key: 'scope', label: 'Record the scope' },
   { key: 'instance', label: 'Provision instance in the vertical' },
   { key: 'activateScope', label: 'Activate the scope' },
+  { key: 'bindVersion', label: 'Pin the scope to the prod version' },
   { key: 'hostname', label: 'Bind the hostname' },
   { key: 'activate', label: 'Activate' },
 ] as const;
@@ -112,6 +113,15 @@ export async function createInstance(
     api.provisionInstance(verticalSlug, { tenantId, scopeId, owner, slug, name }),
   );
   await step('activateScope', () => api.activateScope(tenantId, scopeId));
+
+  // Pin the scope to the vertical's prod version, so the router dispatches on it
+  // (orchestration.md §5.4). A vertical with no promoted version — a static-binding
+  // one, or one not yet promoted — has nothing to pin; the scope then serves via the
+  // router's static-binding fallback, so this is a no-op rather than an error.
+  await step('bindVersion', async () => {
+    const prod = (await api.listChannels(verticalSlug)).find((c) => c.channel === 'prod');
+    if (prod) await api.bindScopeVersion(tenantId, scopeId, prod.versionId);
+  });
 
   if (!hostname) return { tenantId, scopeId, url: null };
 

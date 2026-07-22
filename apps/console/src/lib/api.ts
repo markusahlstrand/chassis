@@ -200,6 +200,10 @@ export function createApi(actor: string | null, baseUrl = '/api') {
         versionId,
         acknowledge,
       }),
+    // Pin a scope to a version — what the router dispatches on (orchestration.md §5.4).
+    // Refuses a non-admitted version below the seam.
+    bindScopeVersion: (tenantId: TenantId, scopeId: ScopeId, versionId: string) =>
+      post<Scope>(`/tenants/${tenantId}/scopes/${scopeId}/version`, { versionId }),
   };
 }
 

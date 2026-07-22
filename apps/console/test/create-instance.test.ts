@@ -30,6 +30,9 @@ function fakeApi(overrides: Partial<Record<keyof Api, unknown>> = {}) {
     activateScope: rec('activateScope'),
     provisionInstance: rec('provisionInstance'),
     provisionScope: rec('provisionScope'),
+    // Default: no promoted version, so bindVersion resolves nothing (a static vertical).
+    listChannels: rec('listChannels', []),
+    bindScopeVersion: rec('bindScopeVersion'),
     bindHostname: rec('bindHostname'),
     setHostnameStatus: rec('setHostnameStatus'),
   } as unknown as Api;
@@ -48,7 +51,24 @@ describe('createInstance', () => {
       'provisionScope',
       'provisionInstance',
       'activateScope',
+      // bindVersion resolves the prod channel; nothing promoted here, so no bind.
+      'listChannels',
     ]);
+  });
+
+  it('pins the scope to the prod version when the vertical has one', async () => {
+    // A pushed vertical with a promoted prod version: the scope is bound to it, so the
+    // router dispatches on that version (orchestration.md §5.4).
+    const bind = vi.fn(async () => ({}));
+    const { api, calls } = fakeApi({
+      listChannels: async () => [
+        { channel: 'prod', versionId: '01JZVERSION', verticalSlug: 'fsm', updatedAt: '' },
+      ],
+      bindScopeVersion: bind,
+    });
+    await createInstance(api, { ...ids, verticalSlug: 'fsm', slug: 'acme', name: 'Acme' });
+    expect(calls).toContain('bindScopeVersion');
+    expect(bind).toHaveBeenCalledWith(ids.tenantId, ids.scopeId, '01JZVERSION');
   });
 
   it('does not activate the scope when the vertical failed', async () => {
@@ -80,6 +100,7 @@ describe('createInstance', () => {
       'provisionScope',
       'provisionInstance',
       'activateScope',
+      'listChannels',
       'bindHostname',
       'setHostnameStatus',
     ]);
