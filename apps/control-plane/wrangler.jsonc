@@ -30,12 +30,12 @@
 			"new_sqlite_classes": ["ControlPlaneDO", "ScopeDO"]
 		}
 	],
-	// No vertical service bindings yet: this is a platform-only deploy (console +
-	// directory + staff auth). A vertical is added here as VERTICAL_<SLUG> once its
-	// worker exists (K-31), together with `wrangler secret put PLATFORM_SECRET`
-	// matching that vertical's own. Until then `verticalsFor` is empty and the
-	// "create instance" flow reports no deployment bound, rather than dangling a
-	// binding to a service that does not exist.
+	// Pushed verticals are reached through the WfP dispatch namespace, not static
+	// bindings: `resolveVertical` maps a slug → its prod version → env.DISPATCH.get()
+	// to provision an instance (orchestration.md §5.4). A `substrat push` also uploads
+	// into this namespace via CF_API_TOKEN. `wrangler secret put PLATFORM_SECRET`
+	// (matching each vertical's own) is still required for provisioning.
+	"dispatch_namespaces": [{ "binding": "DISPATCH", "namespace": "substrat-verticals" }],
 
 	// The staff roster's store (staff_actor, #42) — who has platform access and under
 	// which actor id, separate from the directory DO. No longer a credential store:

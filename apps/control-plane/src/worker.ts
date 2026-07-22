@@ -18,6 +18,7 @@
  */
 import { Hono } from 'hono';
 import { platformActorId } from '@substrat-run/contracts';
+import type { PlatformActorId } from '@substrat-run/contracts';
 import {
   CloudflareScopeHost,
   ControlPlaneDO,
@@ -68,11 +69,21 @@ interface Env extends OidcEnv {
   CF_ACCOUNT_ID?: string;
   DISPATCH_NAMESPACE?: string;
   /**
+   * The WfP dispatch namespace holding pushed verticals — the control plane reaches one
+   * to provision an instance of it (orchestration.md §5.4), the mirror of the router.
+   */
+  DISPATCH?: DispatchNamespace;
+  /**
    * Service bindings to vertical deployments, `VERTICAL_<SLUG>` with dashes as
    * underscores — the same convention and the same static-map shape the router
    * carries, with the same Workers-for-Platforms swap later.
    */
   [binding: string]: unknown;
+}
+
+/** Minimal shape of a WfP dispatch namespace binding. */
+interface DispatchNamespace {
+  get(name: string): Fetcher;
 }
 
 /** The WfP uploader, when the platform's CF credential is configured (self-serve-deploy.md). */
@@ -83,6 +94,28 @@ function deployVerticalFor(env: Env): DeployVerticalFn | undefined {
     namespace: env.DISPATCH_NAMESPACE ?? 'substrat-verticals',
     apiToken: env.CF_API_TOKEN,
   });
+}
+
+/**
+ * Resolve a pushed vertical for provisioning: slug → its `prod` channel version →
+ * `env.DISPATCH.get(deploymentRef)` (orchestration.md §5.4). The mirror of the router's
+ * verticalFor. Absent DISPATCH or PLATFORM_SECRET ⇒ only static VERTICAL_ bindings work.
+ */
+function resolveVerticalFor(
+  env: Env,
+): ((slug: string, actor: PlatformActorId) => Promise<VerticalClient | undefined>) | undefined {
+  const dispatch = env.DISPATCH;
+  const secret = env.PLATFORM_SECRET;
+  if (!dispatch || !secret) return undefined;
+  return async (slug, actor) => {
+    const host = hostFor(env);
+    const prod = (await host.admin.listChannels(actor, slug)).find((c) => c.channel === 'prod');
+    if (!prod) return undefined;
+    const version = (await host.admin.listVersions(actor, slug)).find((v) => v.id === prod.versionId);
+    if (!version?.deploymentRef) return undefined;
+    const fetcher = dispatch.get(version.deploymentRef);
+    return new VerticalClient({ fetch: fetcher.fetch.bind(fetcher), platformSecret: secret });
+  };
 }
 
 // The actor a connected vertical acts as when it registers (a service, not staff).
@@ -161,6 +194,7 @@ export default {
         host: hostFor(env),
         authenticate: authFor(env),
         verticals: verticalsFor(env),
+        resolveVertical: resolveVerticalFor(env),
         deployVertical: deployVerticalFor(env),
       }),
     );

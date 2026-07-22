@@ -415,6 +415,66 @@ describe('control-plane API', () => {
     expect(new URL(seen!.url).pathname).toBe('/internal/provision');
   });
 
+  it('falls through to resolveVertical for a pushed vertical (dispatch swap)', async () => {
+    let seen: Request | undefined;
+    let resolvedSlug: string | undefined;
+    const pushed = new VerticalClient({
+      platformSecret: 'shhh',
+      fetch: (async (url: string, init: RequestInit) => {
+        seen = new Request(url, init);
+        return new Response(
+          JSON.stringify({ tenantId: t1, scopeId: s1, owner: '01JZ00000000000000000000OW' }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        );
+      }) as unknown as typeof fetch,
+    });
+    const withResolver = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      // No static binding — only the dispatch resolver, as a deployed control plane has.
+      resolveVertical: async (slug) => {
+        resolvedSlug = slug;
+        return slug === 'pushed' ? pushed : undefined;
+      },
+    });
+
+    const res = await withResolver.request('/verticals/pushed/instances', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        tenantId: t1,
+        scopeId: s1,
+        owner: '01JZ00000000000000000000OW',
+        slug: 'acme',
+        name: 'Acme AB',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(resolvedSlug).toBe('pushed');
+    expect(seen?.headers.get('x-substrat-platform')).toBe('shhh');
+  });
+
+  it('501s when neither a static binding nor resolveVertical yields a vertical', async () => {
+    const withResolver = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      resolveVertical: async () => undefined,
+    });
+    const res = await withResolver.request('/verticals/ghost/instances', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        tenantId: t1,
+        scopeId: s1,
+        owner: '01JZ00000000000000000000OW',
+        slug: 'x',
+        name: 'X',
+      }),
+    });
+    expect(res.status).toBe(501);
+  });
+
   it('surfaces a refusal from the vertical rather than swallowing it', async () => {
     // A 403 here means the secrets do not match — a deployment error someone must
     // see, not a transient failure to paper over.

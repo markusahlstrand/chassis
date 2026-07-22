@@ -41,6 +41,14 @@ export interface ControlPlaneApiOptions {
    */
   verticals?: Record<string, VerticalClient>;
   /**
+   * Resolves a vertical dynamically — the dispatch swap for provisioning (orchestration.md
+   * §5.4), the mirror of the router's `verticalFor`. Given a slug, the host looks up the
+   * vertical's `prod` channel version and returns a `VerticalClient` over
+   * `env.DISPATCH.get(deploymentRef)`. Tried after the static `verticals` map, so a
+   * pushed vertical is provisionable with no redeploy. Absent ⇒ only static bindings.
+   */
+  resolveVertical?: (slug: string, actor: PlatformActorId) => Promise<VerticalClient | undefined>;
+  /**
    * Uploads a built vertical bundle to the platform runtime (a WfP dispatch
    * namespace), injected by the host so this package holds no Cloudflare SDK and the
    * builder never holds a Cloudflare credential (D-34). Absent ⇒ the deploy route
@@ -319,7 +327,10 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
 
   app.post('/verticals/:slug/instances', async (c) => {
     const slug = c.req.param('slug');
-    const vertical = options.verticals?.[slug];
+    // Static binding first (milestone-one shape), then the dispatch resolver for a
+    // pushed vertical — the provisioning mirror of the router's verticalFor.
+    const vertical =
+      options.verticals?.[slug] ?? (await options.resolveVertical?.(slug, c.get('actor')));
     if (!vertical) {
       return c.json({ error: `no deployment is bound for vertical '${slug}'` }, 501);
     }

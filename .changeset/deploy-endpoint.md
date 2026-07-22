@@ -25,3 +25,7 @@ A push is not a deploy; admission still gates serving.
   `FormData`, so it runs in a Worker or node). Wired into `apps/control-plane` (behind the
   `CF_API_TOKEN`/`CF_ACCOUNT_ID` env) and the dev server. The `tools/substrat-push.mjs` CLI
   builds a vertical and pushes it to `/verticals/:slug/deploy`.
+- New `resolveVertical?: (slug, actor) => Promise<VerticalClient | undefined>` option — the
+  provisioning dispatch swap (orchestration.md §5.4), tried after the static `verticals` map.
+  `apps/control-plane` resolves a pushed vertical's `prod` version → `env.DISPATCH.get(ref)`,
+  so `POST /verticals/:slug/instances` reaches a pushed vertical with no redeploy.
