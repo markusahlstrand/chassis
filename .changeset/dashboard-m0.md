@@ -24,5 +24,6 @@ refused; cross-tenant refused even by forging the node), and the full HTTP flow 
 (sign up → account bootstrapped → create a running app → list), including isolation — a second
 customer gets their own tenant and sees none of the first's apps. In the permission checkpoint.
 
-**Remaining (M0.3+):** surface the version registry as a real catalog, a small SPA, members,
-domains, and the production topology (each app a separate vertical deployment via the control plane).
+**M0.3 — a registry-backed catalog** (`GET /api/catalog` from `listVerticals`; `ensureCatalog` seeds `registerVertical` — the same registry the operator console will use) **and a clickable SPA** (a dependency-free page: sign in → pick a vertical → create → see your apps), verified on workerd.
+
+**Remaining (beyond M0):** members, custom domains, connections; and the production topology — each app a separate vertical deployment provisioned via the control plane (M0 runs them in one deployment).

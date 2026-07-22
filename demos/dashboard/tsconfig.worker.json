@@ -5,7 +5,16 @@
     "declaration": false,
     "declarationMap": false,
     "rootDir": ".",
-    "types": ["@cloudflare/workers-types"]
+    "types": [
+      "@cloudflare/workers-types"
+    ]
   },
-  "include": ["src/worker.ts", "src/provision.ts", "src/module.ts", "src/auth.ts", "src/auth-schema.ts"]
+  "include": [
+    "src/worker.ts",
+    "src/provision.ts",
+    "src/module.ts",
+    "src/auth.ts",
+    "src/auth-schema.ts",
+    "src/page.ts"
+  ]
 }

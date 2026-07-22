@@ -18,6 +18,7 @@ import { protocolModule, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
 import { dashboardModule } from './module.js';
 import { createApp, provisionDashboard, type DashboardNode } from './provision.js';
 import { buildAuth, type Auth } from './auth.js';
+import { PAGE } from './page.js';
 
 // The app binary: the Dashboard vertical + the verticals an app can run (M0: protocol).
 const MODULES = [dashboardModule, protocolModule];
@@ -27,15 +28,26 @@ export { ControlPlaneDO };
 const STAFF = platformActorId.parse('01JZ000000000000000000DAS1');
 
 /**
- * The catalog: which verticals a customer can instantiate, and what the owner is
- * granted inside a fresh app. M0 stub — later this is fed by the version registry.
+ * The catalog: the verticals a customer can instantiate. The LIST is served from
+ * the version registry (`registerVertical`/`listVerticals`) — the same registry
+ * the operator console will use; `ensureCatalog` seeds it. This map adds the
+ * provisioning specifics the registry does not carry (the SKU the app loads under
+ * and what the owner is granted inside a fresh app).
  */
-const CATALOG: Record<string, { entitlement: string; ownerGrants: PermissionKey[] }> = {
+const CATALOG: Record<string, { name: string; entitlement: string; ownerGrants: PermissionKey[] }> = {
   protocol: {
+    name: 'Documents',
     entitlement: 'protocol',
     ownerGrants: [PROTOCOL_PERM.create, PROTOCOL_PERM.read] as PermissionKey[],
   },
 };
+
+/** Seed the registry from the catalog (idempotent) — what `GET /api/catalog` lists. */
+async function ensureCatalog(host: ScopeHost): Promise<void> {
+  for (const [slug, e] of Object.entries(CATALOG)) {
+    await host.admin.registerVertical(STAFF, { slug, name: e.name, source: 'builtin' });
+  }
+}
 
 interface Env {
   SCOPE: DurableObjectNamespace;
@@ -117,8 +129,19 @@ const createAppBody = z.object({
 
 const app = new Hono<{ Bindings: Env }>();
 
+// The clickable app — sign in, pick a vertical, create an app, see your apps.
+app.get('/', (c) => c.html(PAGE));
+
 // Better Auth owns identity/credentials/sessions in D1.
 app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env, originOf(c.req.raw)).handler(c.req.raw));
+
+/** The catalog — the verticals you can instantiate, from the registry. */
+app.get('/api/catalog', async (c) => {
+  const host = hostFor(c.env);
+  await ensureCatalog(host);
+  const verticals = await host.admin.listVerticals(STAFF);
+  return c.json(verticals.filter((v) => CATALOG[v.slug]).map((v) => ({ slug: v.slug, name: v.name })));
+});
 
 /** Who am I — and, on first call, bootstraps my account. */
 app.get('/api/me', async (c) => {
