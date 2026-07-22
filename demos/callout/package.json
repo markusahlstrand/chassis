@@ -15,7 +15,7 @@
     "server": "tsx src/server.ts",
     "dev": "concurrently -n api,web -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\"",
     "demo": "pnpm run dev",
-    "cf:dev": "pnpm --dir app build && wrangler dev --var STANDALONE:true",
+    "cf:dev": "pnpm --dir app build && wrangler dev --var ALLOW_DEV_HEADER:true",
     "cf:deploy": "node ../../tools/preflight-migrations.mjs && pnpm --dir app build && wrangler deploy",
     "cf:dry-run": "pnpm --dir app build && wrangler deploy --dry-run --outdir dist-worker"
   },

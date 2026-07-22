@@ -24,6 +24,7 @@ import { buildAuthNode, migrateAuth } from './auth-node.js';
 import { mountApi } from './routes.js';
 import {
   betterAuthAdapter,
+  cpIdentityDirectory,
   devHeaderAdapter,
   resolvePrincipal,
   type AuthAdapter,
@@ -126,9 +127,12 @@ await seedPersonaLogins();
 // The `x-principal` dev-header adapter is an impersonation bypass by design, so
 // it is mounted ONLY when ALLOW_DEV_HEADER=true (parity with the worker) —
 // secure by default, off unless explicitly opted in.
-const adapters: AuthAdapter[] = [betterAuthAdapter(auth, host, { tenantId: world.t1, scopeId: world.s1 })];
+const nodeNode = { tenantId: world.t1, scopeId: world.s1 };
+const adapters: AuthAdapter[] = [
+  betterAuthAdapter(auth, host, nodeNode, cpIdentityDirectory(host, nodeNode)),
+];
 if (process.env.ALLOW_DEV_HEADER === 'true') {
-  adapters.push(devHeaderAdapter({ tenantId: world.t1, scopeId: world.s1 }));
+  adapters.push(devHeaderAdapter(nodeNode));
 }
 
 const app = new Hono();
