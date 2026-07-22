@@ -19,6 +19,7 @@ import { ulid } from '@substrat-run/kernel';
 import { platformActorId, scopeId, tenantId } from '@substrat-run/contracts';
 import {
   createControlPlaneApi,
+  createWfpUploader,
   DEV_ACTOR_HEADER,
   sessionPlatformAuth,
   staffAllowlist,
@@ -150,7 +151,19 @@ if (process.env.CP_UNSAFE_AUTH !== '1') {
 
 // One outer app: Better Auth owns /auth/*, the control-plane router owns the rest
 // (behind `authenticate`). The console reaches /auth/* via its proxy's /api strip.
-const cpApp = createControlPlaneApi({ host, authenticate });
+// Real WfP uploader when CF creds are in the env, so `substrat push` can be driven
+// end-to-end against a real dispatch namespace locally. Absent ⇒ the deploy route 501s.
+const cfToken = process.env.CF_API_TOKEN;
+const cfAccount = process.env.CF_ACCOUNT_ID;
+const deployVertical =
+  cfToken && cfAccount
+    ? createWfpUploader({
+        accountId: cfAccount,
+        namespace: process.env.DISPATCH_NAMESPACE ?? 'substrat-verticals',
+        apiToken: cfToken,
+      })
+    : undefined;
+const cpApp = createControlPlaneApi({ host, authenticate, deployVertical });
 const app = new Hono();
 if (staffAuth) app.on(['GET', 'POST'], '/auth/*', (c) => staffAuth!.handler(c.req.raw));
 app.route('/', cpApp);

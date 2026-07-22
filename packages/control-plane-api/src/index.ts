@@ -25,3 +25,5 @@ export type {
 } from './vertical-client.js';
 export { assertSandboxContract, deployManifest, deploymentRefFor } from './deploy.js';
 export type { DeployVerticalFn, VerticalBundle, DeclaredBinding, DeployManifest } from './deploy.js';
+export { createWfpUploader } from './wfp.js';
+export type { WfpUploaderOptions } from './wfp.js';
