@@ -9,6 +9,15 @@
 	// privileged platform session is cookie/origin-isolated from tenant code. A
 	// Custom Domain (wrangler provisions DNS + cert); first-level, Universal SSL.
 	"routes": [{ "pattern": "app.substrat.net", "custom_domain": true }],
+	// The Dashboard SPA (apps/dashboard/web) is served as Workers static assets.
+	// `run_worker_first` is scoped to `/api/*` so only the API + OIDC routes hit
+	// the worker; every other path is served from the built assets, falling back
+	// to index.html (single-page-application) so client-router deep links resolve.
+	"assets": {
+		"directory": "./web/dist",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*"]
+	},
 	"durable_objects": {
 		"bindings": [
 			// The Dashboard runs its customers' dashboard scopes AND (M0, single

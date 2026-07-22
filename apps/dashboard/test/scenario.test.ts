@@ -6,6 +6,9 @@ import { platformActorId, principalId, scopeId, tenantId, type PermissionKey } f
 import { ulid } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { protocolModule, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
+import { workorderModule } from '@substrat-run/engine-workorder';
+import { invoicingModule } from '@substrat-run/engine-invoicing';
+import { calloutModule } from '@substrat-run/demo-callout/module';
 import {
   MODULES,
   provisionDashboard,
@@ -32,8 +35,11 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'substrat-dashboard-'));
     host = new SqliteScopeHost({ dir });
-    for (const m of MODULES) host.registerModule(m);
-    host.registerModule(protocolModule); // the vertical an app runs, in-process
+    for (const m of MODULES) host.registerModule(m); // the dashboard vertical
+    // The verticals an app can run, bundled in-process (M0), mirroring worker.ts.
+    for (const m of [protocolModule, workorderModule, invoicingModule, calloutModule]) {
+      host.registerModule(m);
+    }
     staff = platformActorId.parse(ulid());
   });
 
@@ -64,10 +70,12 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
       appScopeId,
       verticalSlug: 'protocol',
       name: 'Onboarding',
-      appEntitlementKey: 'protocol',
+      appEntitlements: ['protocol'],
       appOwnerGrants: [PROTOCOL_PERM.create, PROTOCOL_PERM.read] as PermissionKey[],
     });
     expect(app.status).toBe('active');
+    // A default hostname is bound + recorded: `<slug>.<jurisdiction>.substrat.run` (K-30).
+    expect(app.hostname).toBe('onboarding.global.substrat.run');
 
     // The app scope lives in ACME's tenant...
     expect(await scopeIds(acme.tenantId)).toContain(appScopeId);
@@ -87,6 +95,35 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     expect(apps[0]!.status).toBe('active');
   });
 
+  it('an owner provisions a real Callout app — a live multi-engine scope with a default hostname', async () => {
+    const acme = await bootstrap('acme-callout');
+    const appScopeId = scopeId.parse(ulid());
+
+    const app = await createApp(host, {
+      node: acme,
+      appScopeId,
+      verticalSlug: 'callout',
+      name: 'Callout',
+      // Callout composes three engines, so its SKU is three entitlement flags.
+      appEntitlements: ['workorder', 'invoicing', 'protocol', 'callout'],
+      appOwnerGrants: [PROTOCOL_PERM.create, PROTOCOL_PERM.read] as PermissionKey[],
+    });
+    expect(app.status).toBe('active');
+    expect(app.vertical_slug).toBe('callout');
+    expect(app.hostname).toBe('callout.global.substrat.run');
+    expect(await scopeIds(acme.tenantId)).toContain(appScopeId);
+
+    // It's a LIVE scope running the Callout bundle — a real engine op resolves
+    // (protocol is one of the engines Callout composes, and the owner holds its keys).
+    const appScope = await host.getScope(acme.principal, acme.tenantId, appScopeId);
+    await appScope.invoke('protocol/define-template', {
+      key: 'welcome',
+      title: 'Welcome',
+      content: { kind: 'document', documentType: 'welcome', hashRecipe: 'sha256 over the terms' },
+    });
+    expect(await appScope.invoke('protocol/list-templates', {})).toHaveLength(1);
+  });
+
   it('a principal without dashboard:provision-app is refused — before anything is provisioned', async () => {
     const acme = await bootstrap('acme2');
     const stranger = principalId.parse(ulid()); // holds no role in acme
@@ -98,7 +135,7 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
         appScopeId,
         verticalSlug: 'protocol',
         name: 'X',
-        appEntitlementKey: 'protocol',
+        appEntitlements: ['protocol'],
       }),
     ).rejects.toThrow();
 
@@ -120,7 +157,7 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
         appScopeId,
         verticalSlug: 'protocol',
         name: 'X',
-        appEntitlementKey: 'protocol',
+        appEntitlements: ['protocol'],
       }),
     ).rejects.toThrow();
 
@@ -133,7 +170,7 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
       appScopeId: own,
       verticalSlug: 'protocol',
       name: 'A',
-      appEntitlementKey: 'protocol',
+      appEntitlements: ['protocol'],
     });
     expect(await scopeIds(acme.tenantId)).toContain(own);
     expect(await scopeIds(other.tenantId)).not.toContain(own);

@@ -8,13 +8,17 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "vitest run",
-    "cf:dev": "wrangler dev --var STANDALONE:true",
-    "cf:deploy": "node ../../tools/preflight-migrations.mjs && wrangler deploy"
+    "build:web": "pnpm --filter @substrat-run/dashboard-web build",
+    "cf:dev": "wrangler dev --var STANDALONE:true --port 8890",
+    "cf:deploy": "pnpm run build:web && node ../../tools/preflight-migrations.mjs && wrangler deploy"
   },
   "dependencies": {
     "@substrat-run/adapter-cloudflare": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
+    "@substrat-run/demo-callout": "workspace:^",
+    "@substrat-run/engine-invoicing": "workspace:^",
     "@substrat-run/engine-protocol": "workspace:^",
+    "@substrat-run/engine-workorder": "workspace:^",
     "@substrat-run/kernel": "workspace:^",
     "@substrat-run/oidc-rp": "workspace:^",
     "hono": "^4.6.0",

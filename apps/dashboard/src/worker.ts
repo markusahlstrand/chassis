@@ -15,17 +15,26 @@ import { getCookie } from 'hono/cookie';
 import { principalId, scopeId, tenantId, platformActorId, z, type PermissionKey } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
-import { protocolModule, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
+import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
+import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
+import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+// The worker-safe subpath: the Callout domain module + perms only, never the demo's
+// seed/auth (node + better-auth). M0 bundles the vertical here as a stand-in; the
+// production model deploys Callout separately (dashboard.md §6) and — per master-plan
+// D-33 — a demo is a template that is COPIED, not imported. This import is the M0 seam.
+import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule } from './module.js';
 import { createApp, provisionDashboard, type DashboardNode } from './provision.js';
-import { PAGE } from './page.js';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
 const PROVIDER = 'authhero';
 
-// The app binary: the Dashboard vertical + the verticals an app can run (M0: protocol).
-const MODULES = [dashboardModule, protocolModule];
+// The app binary: the Dashboard vertical + the verticals an app can run. M0 bundles
+// the app verticals into this deployment's ScopeDO (see the file header), so every
+// module a catalog entry needs must be here: Documents (protocol) and Callout —
+// the field-service vertical composing workorder + invoicing + protocol.
+const MODULES = [dashboardModule, protocolModule, workorderModule, invoicingModule, calloutModule];
 export const ScopeDO = defineScopeDO(MODULES, {});
 export { ControlPlaneDO };
 
@@ -38,11 +47,25 @@ const STAFF = platformActorId.parse('01JZ000000000000000000DAS1');
  * provisioning specifics the registry does not carry (the SKU the app loads under
  * and what the owner is granted inside a fresh app).
  */
-const CATALOG: Record<string, { name: string; entitlement: string; ownerGrants: PermissionKey[] }> = {
+const CATALOG: Record<string, { name: string; entitlements: string[]; ownerGrants: PermissionKey[] }> = {
   protocol: {
     name: 'Documents',
-    entitlement: 'protocol',
-    ownerGrants: [PROTOCOL_PERM.create, PROTOCOL_PERM.read] as PermissionKey[],
+    entitlements: ['protocol'],
+    ownerGrants: [PROTO.create, PROTO.read] as PermissionKey[],
+  },
+  // Callout composes three engines, so its SKU is three entitlement flags, and its
+  // owner receives the `office-admin` permission set (demos/callout provision.ts)
+  // as a flat grant — the Dashboard grants perms per-principal rather than defining
+  // roles in the app scope.
+  callout: {
+    name: 'Callout',
+    entitlements: ['workorder', 'invoicing', 'protocol', 'callout'],
+    ownerGrants: [
+      SC_PERM.customerManage, SC_PERM.facilityManage,
+      WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
+      INV.read, INV.export,
+      PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
+    ] as PermissionKey[],
   },
 };
 
@@ -135,8 +158,11 @@ const createAppBody = z.object({
 
 const app = new Hono<{ Bindings: Env }>();
 
-// The clickable app — sign in, pick a vertical, create an app, see your apps.
-app.get('/', (c) => c.html(PAGE));
+// The Dashboard SPA (apps/dashboard/web) is served by the Workers Assets binding
+// configured in wrangler.jsonc: asset requests are answered before this worker
+// runs, and its `single-page-application` not-found handling serves index.html
+// for any non-asset, non-`/api` path so the client router can take over. This
+// worker owns only `/api/*` (below).
 
 // OIDC relying party (AuthHero): /api/auth/login → /callback → /logout.
 mountOidcRoutes(app);
@@ -151,9 +177,19 @@ app.get('/api/catalog', async (c) => {
 
 /** Who am I — and, on first call, bootstraps my account. */
 app.get('/api/me', async (c) => {
-  const node = await resolveAccount(hostFor(c.env), c.env, getCookie(c, SESSION_COOKIE));
+  const token = getCookie(c, SESSION_COOKIE);
+  const node = await resolveAccount(hostFor(c.env), c.env, token);
   if (!node) return c.json({ error: 'unauthorized' }, 401);
-  return c.json({ principal: node.principal, tenant: node.tenantId, dashboardScope: node.scopeId });
+  // The dashboard scope carries no display identity — the Dashboard shell shows
+  // the signed-in email/name, which live on the OIDC session, so surface them.
+  const user = await verifySession(c.env, token);
+  return c.json({
+    principal: node.principal,
+    tenant: node.tenantId,
+    dashboardScope: node.scopeId,
+    email: user?.email ?? null,
+    name: user?.name ?? null,
+  });
 });
 
 /** My apps. */
@@ -178,7 +214,7 @@ app.post('/api/apps', async (c) => {
     appScopeId: scopeId.parse(ulid()),
     verticalSlug: body.verticalSlug,
     name: body.name,
-    appEntitlementKey: entry.entitlement,
+    appEntitlements: entry.entitlements,
     appOwnerGrants: entry.ownerGrants,
   });
   return c.json(appRow, 201);

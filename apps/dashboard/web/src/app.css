@@ -1,0 +1,40 @@
+/* App-global resets + the keyframes the design uses (pulsing dots, the setup
+   glyph, the spinner). Everything else is inline styles against the shared
+   @substrat-run/ui tokens — no per-theme overrides. */
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--surface-page);
+  font-family: var(--font-sans), 'Geist', system-ui, sans-serif;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: var(--text-link);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--text-link-hover);
+}
+
+@keyframes sub-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes sub-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

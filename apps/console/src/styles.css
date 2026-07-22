@@ -1,5 +1,3 @@
-@import "./tokens/fonts.css";
-@import "./tokens/colors.css";
-@import "./tokens/typography.css";
-@import "./tokens/spacing.css";
-@import "./tokens/effects.css";
+/* Design tokens live in the shared @substrat-run/ui package (fonts, colors,
+   typography, spacing, effects — light + dark). */
+@import "@substrat-run/ui/styles.css";
