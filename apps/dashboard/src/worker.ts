@@ -70,7 +70,11 @@ function slugFor(email: string | null | undefined, userId: string): string {
   const base =
     (email?.split('@')[0] ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') ||
     'account';
-  return `${base}-${userId.slice(0, 6).toLowerCase()}`;
+  // OIDC subjects carry a provider prefix + separator (e.g. `auth0|46906645…`), so the
+  // raw id is not slug-safe. Strip to [a-z0-9] and take the unique tail — the leading
+  // provider prefix is constant across users; the tail is what disambiguates.
+  const suffix = userId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-6) || 'x';
+  return `${base}-${suffix}`;
 }
 
 /**
