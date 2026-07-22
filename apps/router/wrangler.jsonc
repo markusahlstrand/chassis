@@ -45,10 +45,13 @@
 	// nothing to forward to, there is no secret to match.
 	"dispatch_namespaces": [{ "binding": "DISPATCH", "namespace": "substrat-verticals" }],
 
-	// Tenant hostnames (`*.<jurisdiction>.substrat.run`) are not attached yet: the
-	// two-level wildcard needs Advanced Certificate Manager (K-30/D-35), not bought.
-	// Until then the router is deployed and ready but reachable only on workers.dev,
-	// where it answers 404 to every hostname the directory does not know.
+	// Tenant hostnames route here: `<slug>.<jurisdiction>.substrat.run`. The wildcard
+	// is one route per jurisdiction (a route wildcard matches one level), backed by the
+	// ACM advanced cert + a proxied `*.<jurisdiction>` DNS record (K-30/D-35). Only
+	// `global` is live today — `eu`/`us` attach when those jurisdictions open (K-32).
+	"routes": [{ "pattern": "*.global.substrat.run/*", "zone_name": "substrat.run" }],
+	// workers_dev stays on during bring-up (a stable URL to reach the router before any
+	// tenant hostname resolves); the router holds no data, so its exposure is a 404 surface.
 	"workers_dev": true,
 
 	"observability": { "enabled": true }
