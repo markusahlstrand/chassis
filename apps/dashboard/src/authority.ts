@@ -125,4 +125,30 @@ export class TenantNarrowedControlPlane {
       body: JSON.stringify({ status, note }),
     });
   }
+
+  /**
+   * The vertical's release channels. Empty when it has no registered/promoted
+   * versions — a static-binding vertical (like platform-owned Callout today), in
+   * which case there is nothing to pin. `[]` on any non-200 so callers can treat
+   * "no version" and "not registered" the same.
+   */
+  async listChannels(verticalSlug: string): Promise<Array<{ channel: string; versionId: string }>> {
+    try {
+      return (await this.call(`/verticals/${encodeURIComponent(verticalSlug)}/channels`)) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Pin the scope to a vertical version, so the router dispatches on its
+   * `deploymentRef` (orchestration.md §5.4). This is the ONE call that differs
+   * between the static-binding bring-up and dynamic WfP dispatch — a scope with no
+   * pinned version serves via the router's static `VERTICAL_<slug>` fallback, so
+   * calling this only when a `prod` version exists keeps the dashboard identical
+   * for both. Not tenant-narrowed in the wire shape beyond the pinned tenant path.
+   */
+  bindScopeVersion(scopeId: ScopeId, versionId: string): Promise<void> {
+    return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/version`, { versionId });
+  }
 }

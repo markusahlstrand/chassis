@@ -164,6 +164,14 @@ async function provisionOnSharedPlane(cp: TenantNarrowedControlPlane, input: Cre
   await cp.provisionInstance(input.verticalSlug, { scopeId: input.appScopeId, owner: input.node.principal, slug, name: input.name });
   await cp.activateScope(input.appScopeId);
 
+  // Pin the scope to the vertical's prod version so the router dispatches on it once
+  // Workers-for-Platforms is enabled (D-35). No promoted version today ⇒ this is a
+  // no-op and the router serves via the static `VERTICAL_<slug>` binding. It is the
+  // ONLY thing that differs between the static bring-up and dynamic dispatch, so the
+  // dashboard needs NO change when WfP flips on — only the deploy mechanism does.
+  const prod = (await cp.listChannels(input.verticalSlug)).find((ch) => ch.channel === 'prod');
+  if (prod) await cp.bindScopeVersion(input.appScopeId, prod.versionId);
+
   const base = input.baseDomain ?? 'substrat.run';
   const tail = input.appScopeId.toLowerCase().slice(-4);
   for (const hostname of [`${slug}.global.${base}`, `${slug}-${tail}.global.${base}`]) {

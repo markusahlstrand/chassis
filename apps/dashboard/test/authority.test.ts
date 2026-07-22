@@ -100,4 +100,16 @@ describe('TenantNarrowedControlPlane — the tenant-narrowed authority seam', ()
     const { cp } = harness(500, { error: 'boom' });
     await expect(cp.provisionScope({ scopeId: S, slug: 'x', name: 'X', vertical: 'callout', jurisdiction: 'global' })).rejects.toBeInstanceOf(ControlPlaneError);
   });
+
+  it('listChannels returns [] for a static-binding vertical (no versions) instead of throwing', async () => {
+    const { cp } = harness(404, { error: 'not found' });
+    await expect(cp.listChannels('callout')).resolves.toEqual([]);
+  });
+
+  it('bindScopeVersion pins the scope under the pinned tenant', async () => {
+    const { cp, calls } = harness();
+    await cp.bindScopeVersion(S, '01JVERSION');
+    expect(calls[0]!.url).toBe(`https://cp/api/tenants/${T}/scopes/${S}/version`);
+    expect((calls[0]!.body as { versionId: string }).versionId).toBe('01JVERSION');
+  });
 });
