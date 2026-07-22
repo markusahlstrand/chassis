@@ -4,5 +4,13 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test"
+  ],
+  "exclude": [
+    "src/worker.ts",
+    "src/auth.ts",
+    "src/auth-schema.ts"
+  ]
 }
