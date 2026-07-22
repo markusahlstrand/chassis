@@ -231,11 +231,13 @@ version of this seam, deferred with Slice 3.
   N-deployments ([generated-verticals](generated-verticals.md) §6.3) is untouched.
 - **The deploy *trigger*.** `wrangler deploy` by hand is the trigger for this milestone.
   Still true, with the target now named: D-34 puts the orchestration layer — *we* deploy,
-  with *our* credentials, against the ordinary Workers upload API — as the next step, and
-  Workers for Platforms as the later swap rather than the prerequisite.
-  Git-hook-on-branch and a `substrat` CLI push are ergonomics layered on a proven loop,
-  and the earlier analysis rules out an *untrusted* zip/CLI path regardless
-  ([generated-verticals](generated-verticals.md) §1).
+  with *our* credentials — as the next step. That layer is now designed in its own RFC,
+  [orchestration](orchestration.md), which commits to **Workers for Platforms dispatch
+  namespaces** as the reach mechanism (K-28) rather than the ordinary-upload path, because
+  the ordinary path leaves the router's reach on static bindings and so redeploys the
+  platform on every push. Git-hook-on-branch and a `substrat` CLI push are ergonomics
+  layered on that route, and the earlier analysis rules out an *untrusted* zip/CLI path
+  regardless ([generated-verticals](generated-verticals.md) §1).
 - ~~**Custom hostnames.**~~ **Built** (K-26/K-27, control-plane.md §4.7). The map is
   `hostname → (tenant, scope, vertical, surface, region)` — `surface` because one scope
   fronts more than one app, which §5.5's original tuple could not say — and a single
