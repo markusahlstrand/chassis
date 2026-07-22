@@ -26,6 +26,11 @@ export const user = sqliteTable("user", {
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
+  // NOT a Better Auth field: the CP-less vertical's own identity binding — the
+  // kernel PrincipalId this login resolves to (worker.ts `d1IdentityDirectory`).
+  // With no control plane to hold the id→principal map, the user row does. Set on
+  // first login, nullable until then. Migration: migrations/0002_principal_binding.sql.
+  principalId: text("principal_id"),
 });
 
 export const session = sqliteTable(

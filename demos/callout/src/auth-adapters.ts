@@ -55,10 +55,10 @@ export interface DemoNode {
 }
 
 /**
- * Pre-defined logins seeded into Better Auth so you can sign in as each persona.
- * Each links to an existing seeded principal (bound in /api/seed), so logging in
- * *is* that principal — the kernel enforces exactly its permissions. `role` is a
- * UI hint for nav; new self-service signups default to 'technician'.
+ * The demo persona emails and the UI role hint each maps to. The node demo seeds
+ * these as Better Auth logins bound to seeded principals (server.ts); the hint drives
+ * nav only — the kernel still enforces the real permissions. Any email not listed
+ * (a self-service signup) defaults to 'technician'.
  */
 export const PERSONAS = [
   { email: 'anna@elmontage.se', password: 'demo1234', name: 'Anna (kontor)', role: 'office-admin', key: 'anna' },
@@ -102,17 +102,72 @@ export function devHeaderAdapter(node: DemoNode): AuthAdapter {
   };
 }
 
-/** Better Auth: session cookie → external user → principal (via the kernel seam). */
-export function betterAuthAdapter(auth: SessionAuth, host: ScopeHost, node: DemoNode): AuthAdapter {
+/**
+ * The identity binding an external (Better Auth) user id resolves to. WHERE this
+ * mapping lives is the one thing that differs between the two deployments, so it is
+ * injected — the adapter itself is store-agnostic:
+ *
+ *   - Node (a real control plane): the CP identity directory (`cpIdentityDirectory`),
+ *     via `resolveIdentity`/`linkIdentity`. Unchanged behaviour.
+ *   - The CP-less worker: the vertical's OWN Better Auth user row, keyed by user id
+ *     (see `worker.ts`). No control plane to bind into — the identity store the
+ *     sessions already live in doubles as the id→principal directory.
+ */
+export interface IdentityDirectory {
+  /** The principal (+ its scope, if the binding pins one) this external id maps to, or null if unseen. */
+  resolve(externalId: string): Promise<{ principal: PrincipalId; scopeId: ScopeId | null } | null>;
+  /** Bind a freshly-minted principal to this external id (first login). */
+  bind(externalId: string, principal: PrincipalId, node: DemoNode): Promise<void>;
+}
+
+/**
+ * The CP-backed identity directory: the control plane's identity table is the
+ * id→principal map. This is the node demo's directory — the shared-control-plane
+ * behaviour, kept exactly as it was.
+ */
+export function cpIdentityDirectory(host: ScopeHost, node: DemoNode): IdentityDirectory {
+  return {
+    resolve: async (externalId) =>
+      (await host.admin.resolveIdentity(node.tenantId, 'better-auth', externalId)) ?? null,
+    async bind(externalId, principal, node) {
+      await host.admin.linkIdentity(platformActorId.parse(ulid()), {
+        provider: 'better-auth',
+        externalId,
+        principal,
+        tenantId: node.tenantId,
+        scopeId: node.scopeId,
+      });
+    },
+  };
+}
+
+/** Better Auth: session cookie → external user → principal (via the injected directory). */
+export function betterAuthAdapter(
+  auth: SessionAuth,
+  host: ScopeHost,
+  node: DemoNode,
+  directory: IdentityDirectory,
+): AuthAdapter {
   return {
     id: 'better-auth',
     async resolve(headers) {
       const session = await auth.api.getSession({ headers });
       if (!session?.user) return null;
       const user = session.user;
-      const mapped =
-        (await host.admin.resolveIdentity(node.tenantId, 'better-auth', user.id)) ??
-        (await provisionTechnician(host, node, user));
+      let mapped = await directory.resolve(user.id);
+      if (!mapped) {
+        // First login of a user we haven't seen: mint a principal, give it the
+        // low-privilege `technician` role in the scope (a scope-level assignment —
+        // it works with or without a control plane), and bind it in the directory.
+        const principal = principalId.parse(ulid());
+        await host.admin.assignRole(platformActorId.parse(ulid()), {
+          principalId: principal,
+          roleKey: 'technician',
+          node: { tenantId: node.tenantId, scopeId: node.scopeId },
+        });
+        await directory.bind(user.id, principal, node);
+        mapped = { principal, scopeId: node.scopeId };
+      }
       return {
         principal: mapped.principal,
         tenantId: node.tenantId,
@@ -123,36 +178,6 @@ export function betterAuthAdapter(auth: SessionAuth, host: ScopeHost, node: Demo
       };
     },
   };
-}
-
-/**
- * First login of a Better-Auth user we haven't seen (the plan's identity sync).
- * Mint a principal, give it the low-privilege `technician` role in the demo
- * scope, and bind the identity in the control-plane directory. A real self-service
- * signup then resolves to a real, least-privilege principal the kernel enforces.
- */
-async function provisionTechnician(
-  host: ScopeHost,
-  node: DemoNode,
-  user: { id: string; email?: string | null; name?: string | null },
-): Promise<{ principal: PrincipalId; scopeId: ScopeId | null }> {
-  const staff = platformActorId.parse(ulid());
-  const principal = principalId.parse(ulid());
-
-  await host.admin.assignRole(staff, {
-    principalId: principal,
-    roleKey: 'technician',
-    node: { tenantId: node.tenantId, scopeId: node.scopeId },
-  });
-  await host.admin.linkIdentity(staff, {
-    provider: 'better-auth',
-    externalId: user.id,
-    principal,
-    tenantId: node.tenantId,
-    scopeId: node.scopeId,
-  });
-
-  return { principal, scopeId: node.scopeId };
 }
 
 /** Resolve a request to a principal across all mounted adapters; null if none match. */
