@@ -37,6 +37,19 @@
 	// (matching each vertical's own) is still required for provisioning.
 	"dispatch_namespaces": [{ "binding": "DISPATCH", "namespace": "substrat-verticals" }],
 
+	// Platform-owned verticals are reached by a static `VERTICAL_<SLUG>` service
+	// binding (D-35: WfP is off, and platform-owned deploys use the ordinary Workers
+	// API). `verticalsFor` maps this to slug `callout`, so `provisionInstance('callout')`
+	// forwards to the Callout deployment. `wrangler secret put PLATFORM_SECRET` must
+	// match substrat-fsm's own. Deploy substrat-fsm BEFORE this binding resolves.
+	"services": [
+		{ "binding": "VERTICAL_CALLOUT", "service": "substrat-fsm" }
+	],
+
+	// SERVICE_TOKEN authenticates machine callers (the Dashboard's provisioning seam)
+	// as the control plane's service actor — set it equal to the dashboard's CP_SERVICE_TOKEN:
+	//   wrangler secret put SERVICE_TOKEN
+
 	// The staff roster's store (staff_actor, #42) — who has platform access and under
 	// which actor id, separate from the directory DO. No longer a credential store:
 	// identity is AuthHero now, this D1 holds only the roster. Apply migrations before

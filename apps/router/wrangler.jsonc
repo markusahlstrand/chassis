@@ -45,6 +45,14 @@
 	// nothing to forward to, there is no secret to match.
 	"dispatch_namespaces": [{ "binding": "DISPATCH", "namespace": "substrat-verticals" }],
 
+	// The static-binding fallback (verticalFor): a route whose scope has no bound
+	// version dispatches on `VERTICAL_<SLUG>`. Platform-owned Callout has no WfP
+	// version (D-35), so the router forwards `callout.global.substrat.run` → substrat-fsm
+	// through this binding. Deploy substrat-fsm before this resolves.
+	"services": [
+		{ "binding": "VERTICAL_CALLOUT", "service": "substrat-fsm" }
+	],
+
 	// Tenant hostnames route here: `<slug>.<jurisdiction>.substrat.run`. The wildcard
 	// is one route per jurisdiction (a route wildcard matches one level), backed by the
 	// ACM advanced cert + a proxied `*.<jurisdiction>` DNS record (K-30/D-35). Only

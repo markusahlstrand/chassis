@@ -26,6 +26,7 @@ import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule } from './module.js';
 import { createApp, provisionDashboard, type DashboardNode } from './provision.js';
+import { TenantNarrowedControlPlane } from './authority.js';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
 const PROVIDER = 'authhero';
@@ -79,6 +80,36 @@ async function ensureCatalog(host: ScopeHost): Promise<void> {
 interface Env extends OidcEnv {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
+  /**
+   * CONNECTED mode (production): a service binding to `substrat-control-plane` — the
+   * shared directory the router reads. When bound (with a service token), apps are
+   * provisioned there through the tenant-narrowed seam (§4) so they are REACHABLE,
+   * rather than into this deployment's own DOs. Absent ⇒ the M0 embedded path.
+   */
+  CONTROL_PLANE_SVC?: Fetcher;
+  /** Shared service credential the control plane resolves to its service actor. */
+  CP_SERVICE_TOKEN?: string;
+  /** The platform actor id stamped on shared-plane writes (a fixed dashboard actor). */
+  CP_ACTOR?: string;
+}
+
+const DASHBOARD_CP_ACTOR = platformActorId.parse('01JZ000000000000000000DASH');
+
+/**
+ * The tenant-narrowed control-plane seam for a caller (§4), or `null` in embedded
+ * mode. The tenant is pinned to the caller's own — read from their dashboard node,
+ * never a request argument — so provisioning cannot escape their tenant.
+ */
+function controlPlaneFor(env: Env, tenantId: DashboardNode['tenantId']): TenantNarrowedControlPlane | null {
+  if (!env.CONTROL_PLANE_SVC || !env.CP_SERVICE_TOKEN) return null;
+  return new TenantNarrowedControlPlane({
+    // Host is ignored over a service binding; the control-plane API mounts at `/api`.
+    baseUrl: 'https://control-plane/api',
+    actor: env.CP_ACTOR ?? DASHBOARD_CP_ACTOR,
+    serviceToken: env.CP_SERVICE_TOKEN,
+    tenantId,
+    fetch: env.CONTROL_PLANE_SVC.fetch.bind(env.CONTROL_PLANE_SVC),
+  });
 }
 
 /** The coordinator is stateless — rebuilt per request; durable state lives in the DOs + D1. */
@@ -209,6 +240,9 @@ app.post('/api/apps', async (c) => {
   const body = createAppBody.parse(await c.req.json());
   const entry = CATALOG[body.verticalSlug];
   if (!entry) throw new HTTPException(400, { message: `unknown vertical '${body.verticalSlug}'` });
+  // Connected (prod): provision on the shared control plane through the tenant-narrowed
+  // seam so the app is reachable via the router. Absent the binding: the M0 embedded path.
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
   const appRow = await createApp(host, {
     node,
     appScopeId: scopeId.parse(ulid()),
@@ -216,6 +250,8 @@ app.post('/api/apps', async (c) => {
     name: body.name,
     appEntitlements: entry.entitlements,
     appOwnerGrants: entry.ownerGrants,
+    controlPlane: controlPlaneFor(c.env, node.tenantId) ?? undefined,
+    tenantName: user?.name ?? user?.email ?? 'Workspace',
   });
   return c.json(appRow, 201);
 });

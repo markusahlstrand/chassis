@@ -1,0 +1,128 @@
+import type { PrincipalId, ScopeId, TenantId } from '@substrat-run/contracts';
+
+/**
+ * The tenant-narrowed platform authority — the crux of docs/design/dashboard.md §4.
+ *
+ * A customer's tenant-admin must be able to provision an app on the SHARED control
+ * plane (the directory the router reads), but only ever inside THEIR OWN tenant.
+ * This client is that seam: it wraps the control-plane API over an injected `fetch`
+ * (a Worker service binding to `substrat-control-plane`) and **pins `tenantId`**.
+ *
+ * The tenant is fixed at construction from the caller's dashboard node — it is NOT
+ * a parameter any method takes. So operation code physically cannot name another
+ * tenant: cross-tenant is impossible by construction, the same move the #97
+ * connector-authority seam makes ("authority is inherited, not re-declared").
+ *
+ * Auth is a shared service credential (`x-service-token`) that the control plane
+ * resolves to its fixed SERVICE_ACTOR — machine-to-machine, distinct from staff
+ * sign-in (control-plane-api/auth.ts). The audit subject on the shared plane is
+ * therefore the service actor today; attributing each write to the customer's own
+ * principal (the §4 ideal) waits on a per-principal control-plane credential.
+ */
+export interface TenantNarrowedControlPlaneOptions {
+  /** Base URL of the control-plane API, e.g. `https://cp/api`. Host is ignored over a service binding. */
+  baseUrl: string;
+  /** The platform actor id stamped as `x-platform-actor` (prod resolves the real subject from the token). */
+  actor: string;
+  /** The shared service credential proving the caller is an authorized platform vertical. */
+  serviceToken: string;
+  /** The ONE tenant every call is pinned to — the caller's own, ambient from their session. */
+  tenantId: TenantId;
+  /** A Worker service-binding's `fetch` (bound to `substrat-control-plane`). Defaults to global fetch. */
+  fetch?: typeof globalThis.fetch;
+}
+
+export class ControlPlaneError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ControlPlaneError';
+  }
+}
+
+export class TenantNarrowedControlPlane {
+  private readonly baseUrl: string;
+  private readonly actor: string;
+  private readonly serviceToken: string;
+  private readonly fetchImpl: typeof globalThis.fetch;
+  /** Read-only: the pinned tenant. Every write below silently injects it. */
+  readonly tenantId: TenantId;
+
+  constructor(opts: TenantNarrowedControlPlaneOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/$/, '');
+    this.actor = opts.actor;
+    this.serviceToken = opts.serviceToken;
+    this.tenantId = opts.tenantId;
+    // Bind to globalThis: workerd throws "Illegal invocation" if a service-binding
+    // fetch is called with the wrong `this`. An injected fetch is used as-is.
+    this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  private async call<T>(path: string, init: RequestInit & { idempotent?: boolean } = {}): Promise<T> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          'content-type': 'application/json',
+          'x-platform-actor': this.actor,
+          'x-service-token': this.serviceToken,
+          ...(init.headers as Record<string, string> | undefined),
+        },
+      });
+    } catch (e) {
+      throw new ControlPlaneError(0, `control plane unreachable: ${(e as Error).message}`);
+    }
+    if (!res.ok) {
+      // A tenant/entitlement that already exists is fine on an idempotent step
+      // (re-provisioning, a retried create) — the directory already reflects it.
+      if (init.idempotent && (res.status === 409 || res.status === 422)) return undefined as T;
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new ControlPlaneError(res.status, body?.error ?? `${res.status} ${res.statusText}`);
+    }
+    return res.status === 204 ? (undefined as T) : ((await res.json().catch(() => undefined)) as T);
+  }
+
+  private post<T>(path: string, body?: unknown, idempotent = false): Promise<T> {
+    return this.call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body), idempotent });
+  }
+
+  /** Ensure the caller's tenant exists in the shared directory (idempotent). */
+  ensureTenant(slug: string, name: string): Promise<void> {
+    return this.post('/tenants', { id: this.tenantId, slug, name }, true);
+  }
+
+  /** Grant a SKU flag on the pinned tenant (idempotent). */
+  grantEntitlement(key: string): Promise<void> {
+    return this.call(`/tenants/${this.tenantId}/entitlements/${encodeURIComponent(key)}`, { method: 'PUT', idempotent: true });
+  }
+
+  /** Write the directory row for a new scope (`provisioning`) in the pinned tenant. */
+  provisionScope(input: { scopeId: ScopeId; slug: string; name: string; vertical: string; jurisdiction: 'global' }): Promise<void> {
+    return this.post('/scopes', { tenantId: this.tenantId, ...input });
+  }
+
+  /** Have the control plane call the vertical (K-31) to create the scope's data. */
+  provisionInstance(verticalSlug: string, input: { scopeId: ScopeId; owner: PrincipalId; slug: string; name: string }): Promise<void> {
+    return this.post(`/verticals/${encodeURIComponent(verticalSlug)}/instances`, { tenantId: this.tenantId, ...input });
+  }
+
+  /** provisioning → active, once the vertical has confirmed the scope exists. */
+  activateScope(scopeId: ScopeId): Promise<void> {
+    return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/activate`);
+  }
+
+  /** Bind the default hostname so the router (reading this directory) can resolve it. */
+  bindHostname(input: { hostname: string; scopeId: ScopeId; surface: string; canonical: boolean }): Promise<void> {
+    return this.post('/hostnames', { tenantId: this.tenantId, region: null, ...input });
+  }
+
+  setHostnameStatus(hostname: string, status: 'active' | 'pending' | 'failed', note?: string): Promise<void> {
+    return this.call(`/hostnames/${encodeURIComponent(hostname)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, note }),
+    });
+  }
+}
