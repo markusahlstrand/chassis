@@ -5,5 +5,5 @@
     "rootDir": "."
   },
   "include": ["src", "test", "vitest.config.ts"],
-  "exclude": ["src/worker.ts", "src/auth.ts", "src/auth-schema.ts"]
+  "exclude": ["src/worker.ts", "src/auth.ts", "src/auth-schema.ts", "src/assets.ts", "src/assets.generated.ts"]
 }

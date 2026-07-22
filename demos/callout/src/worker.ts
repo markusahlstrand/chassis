@@ -34,6 +34,7 @@ import { invoicingModule } from '@substrat-run/engine-invoicing';
 import { protocolModule } from '@substrat-run/engine-protocol';
 import { calloutModule } from './module.js';
 import { buildAuth, type Auth } from './auth.js';
+import { serveAsset } from './assets.js';
 import { mountApi } from './routes.js';
 import {
   betterAuthAdapter,
@@ -64,8 +65,6 @@ interface Env {
   // binding to a platform worker — assertSandboxContract refuses those.
   SCOPE: DurableObjectNamespace;
   AUTH_DB: D1Database;
-  /** Static-asset server for the built SPA (./app/dist), bound in wrangler.jsonc. */
-  ASSETS: Fetcher;
   BETTER_AUTH_SECRET?: string;
   BASE_URL?: string;
   /** Local dev only: when 'true', trust the `x-principal` header. NEVER set in prod. */
@@ -262,11 +261,12 @@ app.get('/api/me', async (c) => {
 // authenticates via Better Auth on the Durable-Object adapter.
 mountApi(app, stub);
 
-// Serve the built SPA (./app/dist) for everything that isn't an /api/* route.
-// This MUST come after all API routes so Hono handles /api/* (especially
-// /api/auth/*) first; the catch-all then delegates to the ASSETS binding, which
-// returns index.html for unknown client routes (SPA fallback). Single origin →
+// Serve the built SPA for everything that isn't an /api/* route. This MUST come
+// after all API routes so Hono handles /api/* (especially /api/auth/*) first; the
+// catch-all then serves the inlined SPA (src/assets.ts), returning index.html for
+// unknown client routes (SPA fallback). A pushed sandbox-clean vertical has no
+// ASSETS binding — the SPA is bundled into the worker itself. Single origin →
 // Better Auth's session cookie is same-origin, no CORS.
-app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
+app.all('*', (c) => serveAsset(new URL(c.req.url)));
 
 export default app;
