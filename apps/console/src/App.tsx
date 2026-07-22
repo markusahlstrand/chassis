@@ -176,7 +176,7 @@ export function App() {
     return <div style={{ height: '100vh', background: 'var(--surface-page)' }} />;
   }
   if (!devMode && session === null) {
-    return <Login onSignedIn={() => { setSession(undefined); void getSession().then(setSession); }} />;
+    return <Login />;
   }
 
   // Dev mode with no actor yet: paste one (the quick co-located path).
@@ -226,9 +226,7 @@ export function App() {
       scopeCount={scopes.length}
       hostnameCount={hostnames.length}
       identityLabel={devMode ? undefined : session?.email}
-      onSignOut={
-        devMode ? undefined : () => void signOut().then(() => setSession(null))
-      }
+      onSignOut={devMode ? undefined : () => signOut()}
     >
       {error && (
         <Card style={{ marginBottom: 16 }}>

@@ -46,11 +46,6 @@ export async function provisionDashboard(
 ): Promise<DashboardNode> {
   const staff = platformActorId.parse(ulid());
   await host.admin.createTenant(staff, { id: input.tenantId, slug: input.slug, name: input.name });
-  await host.admin.registerIdentityPool(staff, {
-    provider: 'better-auth',
-    topology: 'central',
-    tenantId: null,
-  });
   await host.admin.grantEntitlement(staff, input.tenantId, VERTICAL);
   await host.provisionScope(staff, {
     tenantId: input.tenantId,

@@ -21,3 +21,5 @@ demos/callout/wrangler.jsonc
 
 # demo runtime data (seeded on every server start)
 demos/rally/.data/
+.env
+**/.env

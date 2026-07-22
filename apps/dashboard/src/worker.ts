@@ -11,14 +11,18 @@
  */
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { getCookie } from 'hono/cookie';
 import { principalId, scopeId, tenantId, platformActorId, z, type PermissionKey } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { protocolModule, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
+import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule } from './module.js';
 import { createApp, provisionDashboard, type DashboardNode } from './provision.js';
-import { buildAuth, type Auth } from './auth.js';
 import { PAGE } from './page.js';
+
+/** The identity provider: the platform's AuthHero instance, via the identity pool. */
+const PROVIDER = 'authhero';
 
 // The app binary: the Dashboard vertical + the verticals an app can run (M0: protocol).
 const MODULES = [dashboardModule, protocolModule];
@@ -49,16 +53,10 @@ async function ensureCatalog(host: ScopeHost): Promise<void> {
   }
 }
 
-interface Env {
+interface Env extends OidcEnv {
   SCOPE: DurableObjectNamespace;
   CONTROL_PLANE: DurableObjectNamespace;
-  /** Better Auth's edge store — customer identity/credentials/sessions. */
-  AUTH_DB: D1Database;
-  BETTER_AUTH_SECRET?: string;
-  BASE_URL?: string;
 }
-
-const originOf = (req: Request): string => new URL(req.url).origin;
 
 /** The coordinator is stateless — rebuilt per request; durable state lives in the DOs + D1. */
 function hostFor(env: Env): CloudflareScopeHost {
@@ -72,30 +70,38 @@ function slugFor(email: string | null | undefined, userId: string): string {
   const base =
     (email?.split('@')[0] ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') ||
     'account';
-  return `${base}-${userId.slice(0, 6).toLowerCase()}`;
+  // OIDC subjects carry a provider prefix + separator (e.g. `auth0|46906645…`), so the
+  // raw id is not slug-safe. Strip to [a-z0-9] and take the unique tail — the leading
+  // provider prefix is constant across users; the tail is what disambiguates.
+  const suffix = userId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-6) || 'x';
+  return `${base}-${suffix}`;
 }
 
 /**
  * The authenticated customer's account node — the tenant, their dashboard scope,
- * and their owner principal. Derived from the Better Auth session, NOT the URL.
+ * and their owner principal. Derived from the OIDC session (the ID token `sub`),
+ * NOT the URL.
  *
  * First login **bootstraps the account** (their own tenant + dashboard scope +
  * owner, linked) — self-service sign-up. Returning logins resolve to it. `null`
  * when there is no session.
  */
-async function resolveAccount(host: ScopeHost, env: Env, req: Request): Promise<DashboardNode | null> {
-  const auth: Auth = buildAuth(env, originOf(req));
-  const session = await auth.api.getSession({ headers: req.headers });
-  if (!session?.user) return null;
-  const userId = session.user.id;
+async function resolveAccount(
+  host: ScopeHost,
+  env: Env,
+  sessionToken: string | undefined,
+): Promise<DashboardNode | null> {
+  const user = await verifySession(env, sessionToken);
+  if (!user) return null;
+  const userId = user.id;
 
   // The pool must exist before we can ask which tenants a login is in (central topology).
-  await host.admin.registerIdentityPool(STAFF, { provider: 'better-auth', topology: 'central', tenantId: null });
-  const tenants = await host.admin.listIdentityTenants(STAFF, 'better-auth', userId);
+  await host.admin.registerIdentityPool(STAFF, { provider: PROVIDER, topology: 'central', tenantId: null });
+  const tenants = await host.admin.listIdentityTenants(STAFF, PROVIDER, userId);
 
   if (tenants.length > 0) {
     const t = tenants[0]!;
-    const mapped = await host.admin.resolveIdentity(t, 'better-auth', userId);
+    const mapped = await host.admin.resolveIdentity(t, PROVIDER, userId);
     const dash = (await host.admin.listScopes(STAFF, { tenantId: t, vertical: 'dashboard' }))[0];
     if (!mapped || !dash) return null;
     return { tenantId: t, scopeId: dash.id, principal: mapped.principal };
@@ -109,11 +115,11 @@ async function resolveAccount(host: ScopeHost, env: Env, req: Request): Promise<
     tenantId: t,
     scopeId: s,
     owner,
-    slug: slugFor(session.user.email, userId),
-    name: session.user.name ?? session.user.email ?? 'Account',
+    slug: slugFor(user.email, userId),
+    name: user.name ?? user.email ?? 'Account',
   });
   await host.admin.linkIdentity(STAFF, {
-    provider: 'better-auth',
+    provider: PROVIDER,
     externalId: userId,
     principal: owner,
     tenantId: t,
@@ -132,8 +138,8 @@ const app = new Hono<{ Bindings: Env }>();
 // The clickable app — sign in, pick a vertical, create an app, see your apps.
 app.get('/', (c) => c.html(PAGE));
 
-// Better Auth owns identity/credentials/sessions in D1.
-app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env, originOf(c.req.raw)).handler(c.req.raw));
+// OIDC relying party (AuthHero): /api/auth/login → /callback → /logout.
+mountOidcRoutes(app);
 
 /** The catalog — the verticals you can instantiate, from the registry. */
 app.get('/api/catalog', async (c) => {
@@ -145,7 +151,7 @@ app.get('/api/catalog', async (c) => {
 
 /** Who am I — and, on first call, bootstraps my account. */
 app.get('/api/me', async (c) => {
-  const node = await resolveAccount(hostFor(c.env), c.env, c.req.raw);
+  const node = await resolveAccount(hostFor(c.env), c.env, getCookie(c, SESSION_COOKIE));
   if (!node) return c.json({ error: 'unauthorized' }, 401);
   return c.json({ principal: node.principal, tenant: node.tenantId, dashboardScope: node.scopeId });
 });
@@ -153,7 +159,7 @@ app.get('/api/me', async (c) => {
 /** My apps. */
 app.get('/api/apps', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, c.req.raw);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
   return c.json(await dash.invoke('dashboard/list-apps', {}));
@@ -162,7 +168,7 @@ app.get('/api/apps', async (c) => {
 /** Create an app — provisioned into MY tenant (from the session), authorized in-scope. */
 app.post('/api/apps', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, c.req.raw);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const body = createAppBody.parse(await c.req.json());
   const entry = CATALOG[body.verticalSlug];

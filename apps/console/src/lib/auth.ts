@@ -1,36 +1,27 @@
 /**
- * Console staff auth (first-flow.md slice 3). Thin fetch calls to the control
- * plane's Better Auth routes, reached through the Vite proxy (`/api/auth/*` →
- * `/auth/*`). No client library — the same dependency-light approach the demo
- * app uses. When the provider changes (AuthHero), only these URLs/shapes move.
- *
- * The session cookie is same-origin (the proxy makes the console and the API
- * share an origin), so `credentials: 'include'` is all that carries it.
+ * Console staff auth. Sign-in is an OIDC redirect to the control plane's relying
+ * party (AuthHero); the session is a same-origin cookie the control plane sets, so
+ * `credentials: 'include'` carries it. `getSession` asks the control plane for the
+ * current staff email; sign-in and sign-out are full-page redirects — the OIDC
+ * round-trip needs a real navigation, not a fetch.
  */
 export interface StaffSession {
   email: string;
 }
 
 export async function getSession(): Promise<StaffSession | null> {
-  const res = await fetch('/api/auth/get-session', { credentials: 'include' });
+  const res = await fetch('/api/auth/session', { credentials: 'include' });
   if (!res.ok) return null;
-  const data = (await res.json().catch(() => null)) as { user?: { email?: string } } | null;
+  const data = (await res.json().catch(() => null)) as { user?: { email?: string } | null } | null;
   return data?.user?.email ? { email: data.user.email } : null;
 }
 
-export async function signIn(email: string, password: string): Promise<void> {
-  const res = await fetch('/api/auth/sign-in/email', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? `sign-in failed (${res.status})`);
-  }
+/** Redirect into the OIDC login flow; the browser comes back to the console signed in. */
+export function signIn(): void {
+  window.location.href = '/api/auth/login';
 }
 
-export async function signOut(): Promise<void> {
-  await fetch('/api/auth/sign-out', { method: 'POST', credentials: 'include' });
+/** Drop the session and return to the console. */
+export function signOut(): void {
+  window.location.href = '/api/auth/logout';
 }

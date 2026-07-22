@@ -2,9 +2,13 @@
 	"name": "substrat-dashboard",
 	"main": "src/worker.ts",
 	"compatibility_date": "2025-01-01",
-	// Better Auth (customer sign-in) needs Node built-ins on workerd.
-	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
+	// The tenant self-service Dashboard is FIRST-PARTY: it lives on substrat.net,
+	// never substrat.run. substrat.run is the tenant-app domain (a wildcard router +
+	// provisioned instances) — a different registrable domain, so the Dashboard's
+	// privileged platform session is cookie/origin-isolated from tenant code. A
+	// Custom Domain (wrangler provisions DNS + cert); first-level, Universal SSL.
+	"routes": [{ "pattern": "app.substrat.net", "custom_domain": true }],
 	"durable_objects": {
 		"bindings": [
 			// The Dashboard runs its customers' dashboard scopes AND (M0, single
@@ -16,14 +20,17 @@
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"] }
 	],
-	// Customer identity/credentials/sessions (Better Auth). Apply before deploy:
-	//   wrangler d1 migrations apply substrat-dashboard-auth   (--local for dev)
-	"d1_databases": [
-		{
-			"binding": "AUTH_DB",
-			"database_name": "substrat-dashboard-auth",
-			"database_id": "00000000-0000-0000-0000-000000000000",
-			"migrations_dir": "migrations"
-		}
-	]
+	// Workers Logs: persisted, queryable console.* + uncaught exceptions. The floor
+	// of prod debuggability — `wrangler tail` and the dashboard's Logs view. Without
+	// it the OIDC callback's failure reason (now logged) would go nowhere.
+	"observability": { "enabled": true },
+	// Authentication is OIDC against the platform's AuthHero instance — no auth
+	// database here, and NOTHING environment-specific is checked in. All four
+	// values are Wrangler secrets (locally: apps/dashboard/.dev.vars, gitignored):
+	//   wrangler secret put OIDC_ISSUER          # e.g. https://auth.substrat.run
+	//   wrangler secret put OIDC_CLIENT_ID
+	//   wrangler secret put OIDC_CLIENT_SECRET
+	//   wrangler secret put SESSION_SECRET       # random 32+ bytes; signs the cookies
+	// The AuthHero client must allow the redirect URI
+	//   https://app.substrat.net/api/auth/callback   (and http://localhost:8890/api/auth/callback for dev).
 }

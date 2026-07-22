@@ -1,8 +1,8 @@
 /**
  * The Dashboard SPA — a single, dependency-free page so the vertical is clickable
- * in a browser without a separate build. It drives the same API the tests do:
- * Better Auth for sign-in, then `/api/catalog`, `/api/apps`. Vanilla JS on
- * purpose; a real build (Vite) is a later step.
+ * in a browser without a separate build. Sign-in is an OIDC redirect to the
+ * platform's AuthHero instance (`/api/auth/login`); then `/api/catalog`,
+ * `/api/apps`. Vanilla JS on purpose; a real build (Vite) is a later step.
  */
 export const PAGE = /* html */ `<!doctype html>
 <html lang="en">
@@ -35,18 +35,19 @@ export const PAGE = /* html */ `<!doctype html>
 </style>
 </head>
 <body>
-<header><b>◆ Substrat Dashboard</b><span class="who" id="who"></span></header>
+<header>
+  <b>◆ Substrat Dashboard</b>
+  <span style="display:flex; gap:14px; align-items:center;">
+    <span class="who" id="who"></span>
+    <button class="link" id="signout" hidden>Sign out</button>
+  </span>
+</header>
 <main>
   <section id="auth" hidden>
-    <h2 id="authTitle">Sign in</h2>
+    <h2>Sign in</h2>
     <div class="card">
-      <label>Name (sign-up only)</label><input id="name" placeholder="Acme Founder" />
-      <label>Email</label><input id="email" type="email" placeholder="you@acme.se" />
-      <label>Password</label><input id="password" type="password" placeholder="min 8 chars" />
-      <div style="margin-top:14px; display:flex; gap:12px; align-items:center;">
-        <button id="go">Continue</button>
-        <button class="link" id="toggle">Need an account? Sign up</button>
-      </div>
+      <p style="margin:0 0 14px; color:var(--muted);">Sign in with your Substrat account to create and manage apps.</p>
+      <button id="signin">Sign in</button>
       <div class="err" id="authErr"></div>
     </div>
   </section>
@@ -67,7 +68,6 @@ export const PAGE = /* html */ `<!doctype html>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-let mode = 'signin';
 const api = (path, opts) => fetch(path, { headers: { 'content-type':'application/json' }, ...opts });
 
 function show(el, on){ el.hidden = !on; }
@@ -81,29 +81,21 @@ function renderApps(list){
 
 async function refresh(){
   const me = await api('/api/me');
-  if(me.status !== 200){ show($('auth'), true); show($('dash'), false); $('who').textContent=''; return; }
+  if(me.status !== 200){ show($('auth'), true); show($('dash'), false); show($('signout'), false); $('who').textContent=''; return; }
   const acct = await me.json();
   $('who').textContent = 'tenant ' + acct.tenant.slice(0,10) + '…';
-  show($('auth'), false); show($('dash'), true);
+  show($('auth'), false); show($('dash'), true); show($('signout'), true);
   const cats = await (await api('/api/catalog')).json();
   $('vertical').innerHTML = cats.map(c => \`<option value="\${c.slug}">\${c.name}</option>\`).join('');
   renderApps(await (await api('/api/apps')).json());
 }
 
-$('toggle').onclick = () => {
-  mode = mode === 'signin' ? 'signup' : 'signin';
-  $('authTitle').textContent = mode === 'signin' ? 'Sign in' : 'Sign up';
-  $('toggle').textContent = mode === 'signin' ? 'Need an account? Sign up' : 'Have an account? Sign in';
-};
-$('go').onclick = async () => {
-  $('authErr').textContent = '';
-  const body = { email: $('email').value, password: $('password').value };
-  const path = mode === 'signup' ? '/api/auth/sign-up/email' : '/api/auth/sign-in/email';
-  if(mode === 'signup') body.name = $('name').value || $('email').value;
-  const r = await api(path, { method:'POST', body: JSON.stringify(body) });
-  if(!r.ok){ $('authErr').textContent = 'Could not ' + (mode==='signup'?'sign up':'sign in') + ' (check the password — min 8).'; return; }
-  await refresh();
-};
+// Auth is an OIDC redirect to the platform's AuthHero instance — no password here.
+$('signin').onclick = () => { location.href = '/api/auth/login'; };
+$('signout').onclick = () => { location.href = '/api/auth/logout'; };
+if(new URLSearchParams(location.search).get('error') === 'auth'){
+  $('authErr').textContent = 'Sign-in did not complete. Please try again.';
+}
 $('create').onclick = async () => {
   $('createErr').textContent = '';
   const r = await api('/api/apps', { method:'POST', body: JSON.stringify({ verticalSlug: $('vertical').value, name: $('appName').value || 'Untitled' }) });

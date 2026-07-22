@@ -119,6 +119,7 @@ export const DEFAULT_HARNESS = [
   'auth.ts',
   'auth-node.ts',
   'auth-adapters.ts',
+  'oidc.ts',
   'worker.ts',
   'routes.ts',
   'page.ts',
