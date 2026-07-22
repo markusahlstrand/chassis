@@ -29,7 +29,7 @@ export const DASHBOARD_PERM = {
 };
 
 export const dashboardManifest = moduleManifest.parse({
-  id: '@substrat-run/demo-dashboard',
+  id: '@substrat-run/dashboard',
   version: '0.0.1',
   kernelContract: '^0.0.1',
   permissions: [

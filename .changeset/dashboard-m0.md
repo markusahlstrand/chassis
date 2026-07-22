@@ -1,5 +1,5 @@
 ---
-'@substrat-run/demo-dashboard': minor
+'@substrat-run/dashboard': minor
 ---
 
 **The Dashboard — M0 of the tenant-facing self-service surface (docs/design/dashboard.md).**

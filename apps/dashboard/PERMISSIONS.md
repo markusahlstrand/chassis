@@ -3,7 +3,7 @@
      HUMAN CHECKPOINT (CLAUDE.md): an agent may never self-approve a change to this
      file. Reviewer: §3 is the risk surface — a key gaining a role. -->
 
-# Permission snapshot — @substrat-run/demo-dashboard
+# Permission snapshot — @substrat-run/dashboard
 
 2 keys · 1 modules · 1 roles
 
@@ -11,8 +11,8 @@
 
 | Key | Description | Declared by |
 | --- | --- | --- |
-| `dashboard:provision-app` | Provision and manage apps (vertical instances) in this tenant — the tenant admin | `@substrat-run/demo-dashboard` |
-| `dashboard:read` | Read the tenant’s apps | `@substrat-run/demo-dashboard` |
+| `dashboard:provision-app` | Provision and manage apps (vertical instances) in this tenant — the tenant admin | `@substrat-run/dashboard` |
+| `dashboard:read` | Read the tenant’s apps | `@substrat-run/dashboard` |
 
 ## 2. Roles — as defined by this vertical's provisioning code
 

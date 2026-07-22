@@ -346,6 +346,25 @@ function discoverMonorepo(root: string, harness: string[]): PackageSpec[] {
       });
     }
   }
+  // Platform verticals living in apps/ — e.g. apps/dashboard, the platform
+  // vertical (a real vertical, not a demo). Only those with a `src/module.ts`
+  // (the vertical marker); the other apps (console, control-plane, router, docs)
+  // are not module code and are not scanned.
+  try {
+    for (const pkg of readdirSync(join(root, 'apps'))) {
+      const srcDir = join(root, 'apps', pkg, 'src');
+      if (!existsSync(join(srcDir, 'module.ts'))) continue;
+      let name: string;
+      try {
+        name = JSON.parse(readFileSync(join(root, 'apps', pkg, 'package.json'), 'utf8')).name;
+      } catch {
+        continue;
+      }
+      if (name) specs.push({ name, dir: srcDir, lint: true, engine: false, harness });
+    }
+  } catch {
+    /* no apps/ */
+  }
   return specs;
 }
 
