@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { permissionKey, platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
+import { orgId, permissionKey, platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
 import { ulid, UNSAFE_allowAllChecker, webCryptoSecretBox } from '@substrat-run/kernel';
 import {
   connectorTestFetch,
@@ -38,6 +38,7 @@ permissionContractSuite('adapter-cloudflare', async () => {
   });
   return { host, cleanup: async () => host.close() };
 });
+
 
 /**
  * The Cloudflare half of #32 — the same guarantee the pure adapter asserts, on the
@@ -165,5 +166,87 @@ describe('scope-local permissions — the projected local reader (Phase 1)', () 
     expect(await probe(sEmpty)).toBe(true); // RPC still allows — the role is in the control plane
     await projection(sEmpty).setPermissionSource('local'); // flip WITHOUT projecting
     expect(await probe(sEmpty)).toBe(false); // empty projection ⇒ deny
+  });
+});
+
+/**
+ * Scope-local permissions, Phase 2: with `scopeLocalPermissions` ON, the host
+ * PROJECTS a tenant's roles/tuples into its scopes on every tenant-level write and
+ * evaluates locally. This exercises the automatic fan-out end to end — including the
+ * subtle cases: a tenant role assigned AFTER its scopes exist must still reach them,
+ * a membership tombstone must fan out, and `reconcileTenantProjection` must repair a
+ * stale scope. (The full permission MODEL is already covered by the RPC contract
+ * suite above; this asserts the projection machinery, not the checker algebra.)
+ */
+describe('scope-local permissions — automatic fan-out on write (Phase 2)', () => {
+  let host: CloudflareScopeHost;
+  const staff = platformActorId.parse(ulid());
+  const t = tenantId.parse(ulid());
+  const s1 = scopeId.parse(ulid());
+  const s2 = scopeId.parse(ulid());
+  const alice = principalId.parse(ulid()); // tenant-level admin
+  const bob = principalId.parse(ulid()); // scope role at s1 only
+  const carol = principalId.parse(ulid()); // org member
+  const acme = orgId.parse(ulid());
+  const ADMIN = permissionKey.parse('perm:admin');
+  const READ = permissionKey.parse('perm:read');
+
+  const probe = async (who: typeof alice, scope: typeof s1, perm: typeof ADMIN): Promise<boolean> =>
+    (await (await host.getScope(who, t, scope)).invoke<{ allowed: boolean }>('perm/probe', { permission: perm })).allowed;
+
+  beforeAll(async () => {
+    host = new CloudflareScopeHost({
+      scope: env.SCOPE,
+      controlPlane: env.CONTROL_PLANE,
+      secretBox: webCryptoSecretBox('test-key', new Uint8Array(32).fill(7)),
+      scopeLocalPermissions: true,
+    });
+    await host.admin.createTenant(staff, { id: t, slug: `t-${t.toLowerCase()}`, name: 'T' });
+    await host.admin.grantEntitlement(staff, t, 'perm');
+    // Scopes exist FIRST — so the assignments below must fan OUT into them, the
+    // case a "project at provision" alone would miss.
+    for (const s of [s1, s2]) {
+      await host.provisionScope(staff, { tenantId: t, scopeId: s, vertical: 'perm-vertical' });
+      await host.admin.activateScope(staff, t, s);
+    }
+    await host.admin.defineRole(staff, t, { key: 'admin', permissions: [ADMIN, READ], source: 'vertical' });
+    await host.admin.defineRole(staff, t, { key: 'tech', permissions: [READ], source: 'vertical' });
+    await host.admin.assignRole(staff, { principalId: alice, roleKey: 'admin', node: { tenantId: t, scopeId: null } });
+    await host.admin.assignRole(staff, { principalId: bob, roleKey: 'tech', node: { tenantId: t, scopeId: s1 } });
+    await host.admin.createOrg(staff, { id: acme, tenantId: t, slug: 'acme', name: 'Acme' });
+    await host.admin.addMember(staff, t, carol, acme);
+    await host.admin.grantToOrg(staff, acme, READ, { tenantId: t, scopeId: null });
+  });
+
+  afterAll(async () => host.close());
+
+  it('a tenant role fans out to scopes that already existed when it was assigned', async () => {
+    expect(await probe(alice, s1, ADMIN)).toBe(true);
+    expect(await probe(alice, s2, ADMIN)).toBe(true);
+  });
+
+  it('a scope role stays confined to its scope', async () => {
+    expect(await probe(bob, s1, READ)).toBe(true);
+    expect(await probe(bob, s2, READ)).toBe(false);
+  });
+
+  it('org membership + an org grant fan out (rule 4)', async () => {
+    expect(await probe(carol, s1, READ)).toBe(true);
+  });
+
+  it('revoking a membership fans the tombstone out — access stops', async () => {
+    await host.admin.removeMember(staff, t, carol, acme);
+    expect(await probe(carol, s1, READ)).toBe(false);
+  });
+
+  it('reconcileTenantProjection repairs a scope whose projection drifted', async () => {
+    // Simulate a dropped fan-out by wiping s2's projection directly.
+    const stub = env.SCOPE.get(env.SCOPE.idFromName(s2)) as unknown as {
+      applyProjection(tenantId: string, roles: unknown[], tuples: unknown[]): Promise<void>;
+    };
+    await stub.applyProjection(t, [], []);
+    expect(await probe(alice, s2, ADMIN)).toBe(false); // stale → denies
+    await host.reconcileTenantProjection(t);
+    expect(await probe(alice, s2, ADMIN)).toBe(true); // repaired
   });
 });

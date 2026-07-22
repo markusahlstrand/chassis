@@ -1108,6 +1108,23 @@ export class ControlPlaneDO extends DurableObject {
       .toArray() as unknown as TupleRow[];
   }
 
+  /**
+   * ALL of a tenant's tenant-level tuples — the read behind scope-local projection
+   * (docs/design/scope-local-permissions.md). Includes tombstoned rows so the
+   * projection mirrors the directory exactly and the checker's own `live()` filter
+   * drops them identically. Not on the request hot path — this runs on the admin
+   * write path, projecting into a tenant's scopes.
+   */
+  dumpTenantTuples(tenantId: string): TupleRow[] {
+    return this.sql
+      .exec(
+        `SELECT subject, relation, object, expires_at, revoked_at FROM _substrat_tenant_tuples
+         WHERE tenant_id = ?`,
+        tenantId,
+      )
+      .toArray() as unknown as TupleRow[];
+  }
+
   // -- entitlements (control-plane.md §4.3) -----------------------------------
 
   /** INSERT OR IGNORE; return whether it changed (idempotent). */

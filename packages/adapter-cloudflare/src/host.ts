@@ -213,6 +213,10 @@ interface ControlPlaneStub {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  /** All of a tenant's tenant-level tuples (incl tombstones) — for scope-local projection. */
+  dumpTenantTuples(
+    tenantId: string,
+  ): Promise<{ subject: string; relation: string; object: string; expires_at: string | null; revoked_at: string | null }[]>;
   readHostname(hostname: string): Promise<HostnameRow | undefined>;
   demoteCanonical(scopeId: string, surface: string): Promise<void>;
   upsertHostname(h: {
@@ -381,6 +385,12 @@ interface ScopeStubRpc {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  /** Scope-local projection (scope-local-permissions.md): replace the tenant's roles + tuples and flip to local. */
+  applyProjection(
+    tenantId: string,
+    roles: { role_key: string; permissions: string; source: string }[],
+    tuples: { subject: string; relation: string; object: string; expires_at: string | null; revoked_at: string | null }[],
+  ): Promise<void>;
 }
 
 export interface CloudflareScopeHostOptions {
@@ -404,6 +414,15 @@ export interface CloudflareScopeHostOptions {
    * provider can be stood up in memory for tests and dev.
    */
   fetch?: FetchLike;
+  /**
+   * Scope-local permissions (docs/design/scope-local-permissions.md, Phase 2). When
+   * on, this host PROJECTS a tenant's roles + tenant-level tuples into its scopes on
+   * every tenant-level write, and flips those scopes to evaluate permissions from
+   * their own storage — taking the shared control-plane DO off the request hot path.
+   * Default off: the RPC path is used and behaviour is exactly as before. Enabling
+   * it for existing scopes wants a one-time `reconcileTenantProjection` back-fill.
+   */
+  scopeLocalPermissions?: boolean;
 }
 
 export class CloudflareScopeHost implements ScopeHost {
@@ -411,6 +430,8 @@ export class CloudflareScopeHost implements ScopeHost {
 
   private readonly scopeNs: DurableObjectNamespace;
   private readonly cp: ControlPlaneStub;
+  /** Project + evaluate permissions scope-locally (scope-local-permissions.md). */
+  private readonly scopeLocalPermissions: boolean;
 
   // Registration-mechanics bookkeeping (validation only — the DO executes).
   // Code-time, derived from the bundled modules, NOT durable directory state.
@@ -445,6 +466,7 @@ export class CloudflareScopeHost implements ScopeHost {
   constructor(options: CloudflareScopeHostOptions) {
     this.secretBox = options.secretBox ?? unconfiguredSecretBox;
     this.fetchImpl = options.fetch ?? ((input, init) => (globalThis as unknown as { fetch: FetchLike }).fetch(input, init));
+    this.scopeLocalPermissions = options.scopeLocalPermissions ?? false;
     this.scopeNs = options.scope;
     this.cp = options.controlPlane.get(
       options.controlPlane.idFromName('control-plane'),
@@ -696,6 +718,10 @@ export class CloudflareScopeHost implements ScopeHost {
     );
     // Instantiate the scope DO and trigger its lazy migration.
     await this.migrateAndRecord(input.scopeId);
+    // Scope-local permissions: a freshly-provisioned scope evaluates from its own
+    // storage, so project the tenant's current roles/tuples into it (no-op when off,
+    // or if migration threw above — a failed scope stays closed, never projected).
+    await this.projectScope(input.tenantId, input.scopeId);
     // Audit a real provision only; an idempotent re-provision changed nothing.
     if (created) {
       await this.recordAdmin(
@@ -977,6 +1003,7 @@ export class CloudflareScopeHost implements ScopeHost {
         const parsed = roleDefinition.parse(role);
         const before = await this.cp.defineRole(tenantId, parsed);
         await this.recordAdmin(actor, 'defineRole', { tenantId }, before, parsed);
+        await this.fanOut(tenantId); // role definitions are projected into the tenant's scopes
       },
       listRoles: async (actor, filter?: RoleFilter): Promise<TenantRole[]> => {
         const rows = await this.cp.listRoles({ tenantId: filter?.tenantId, source: filter?.source });
@@ -1018,6 +1045,9 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
           assignment,
         );
+        // A scope-level assignment writes a scope tuple (already local); only a
+        // tenant-level one changes the projected set and must fan out.
+        if (!assignment.node.scopeId) await this.fanOut(assignment.node.tenantId);
       },
       grant: async (actor, grant: CapabilityGrant) => {
         await writeGrant(
@@ -1034,6 +1064,9 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
           grant,
         );
+        // Tenant-level grant → changes the projected set. Scope-level + entity
+        // grants write scope tuples (already local), so they need no fan-out.
+        if (!grant.node.scopeId) await this.fanOut(grant.node.tenantId);
       },
       grantToConnection: async (actor: PlatformActorId, raw: ConnectionGrant) => {
         const grant = connectionGrant.parse(raw);
@@ -1096,6 +1129,7 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
           { orgId, permission, node, entity },
         );
+        if (!node.scopeId) await this.fanOut(node.tenantId);
       },
       // -- vertical + version registry (#31) ---------------------------------
 
@@ -1322,6 +1356,7 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
         );
         await this.recordAdmin(actor, 'addMember', { tenantId }, null, { principal, orgId });
+        await this.fanOut(tenantId); // membership is a tenant-level tuple
       },
       removeMember: async (actor, tenantId, principal, orgId) => {
         await requireOrg(tenantId, orgId);
@@ -1335,6 +1370,7 @@ export class CloudflareScopeHost implements ScopeHost {
         );
         if (!changed) return;
         await this.recordAdmin(actor, 'removeMember', { tenantId }, { principal, orgId }, null);
+        await this.fanOut(tenantId); // the tombstone must reach the projections
       },
       listMembers: async (actor, tenantId, orgId, options) => {
         await requireOrg(tenantId, orgId);
@@ -1760,5 +1796,59 @@ export class CloudflareScopeHost implements ScopeHost {
     // Deterministic DO id in milestone 1. Production mints per-jurisdiction ids
     // via newUniqueId (K-7) and stores the mapping in the directory — deferred.
     return this.scopeNs.get(this.scopeNs.idFromName(scopeId)) as unknown as ScopeStubRpc;
+  }
+
+  // -- scope-local projection (docs/design/scope-local-permissions.md, Phase 2) --
+  // The write side of the local reader (Phase 1): after any tenant-level change,
+  // the coordinator PROJECTS the tenant's current roles + tenant-level tuples into
+  // its scopes, which then evaluate permissions from their own storage. Cost moves
+  // from the request hot path (every check) to the admin write path (rare).
+
+  /** The tenant's current roles + tenant-level tuples, in the shape the ScopeDO stores. */
+  private async tenantProjection(
+    tenantId: TenantId,
+  ): Promise<{
+    roles: { role_key: string; permissions: string; source: string }[];
+    tuples: { subject: string; relation: string; object: string; expires_at: string | null; revoked_at: string | null }[];
+  }> {
+    const [roleRows, tuples] = await Promise.all([
+      this.cp.listRoles({ tenantId }),
+      this.cp.dumpTenantTuples(tenantId),
+    ]);
+    return {
+      roles: roleRows.map((r) => ({ role_key: r.role_key, permissions: r.permissions, source: r.source })),
+      tuples,
+    };
+  }
+
+  /** Project the tenant's current state into ONE scope + flip it to local. */
+  private async projectScope(tenantId: TenantId, scopeId: ScopeId): Promise<void> {
+    if (!this.scopeLocalPermissions) return;
+    const { roles, tuples } = await this.tenantProjection(tenantId);
+    await this.scopeStub(scopeId).applyProjection(tenantId, roles, tuples);
+  }
+
+  /**
+   * Fan the tenant's current state out into ALL its scopes — called after any
+   * tenant-level write so every projected scope converges. A dropped fan-out is
+   * repaired by `reconcileTenantProjection` (the reconciliation sweep, §5/§9).
+   */
+  private async fanOut(tenantId: TenantId): Promise<void> {
+    if (!this.scopeLocalPermissions) return;
+    const { roles, tuples } = await this.tenantProjection(tenantId);
+    const scopes = await this.cp.listScopes({ tenantId });
+    await Promise.all(
+      scopes.map((s) => this.scopeStub(s.scope_id as ScopeId).applyProjection(tenantId, roles, tuples)),
+    );
+  }
+
+  /**
+   * Re-project a tenant's full state into every one of its scopes — the
+   * reconciliation sweep + the back-fill for scopes provisioned before the flag was
+   * on (scope-local-permissions.md §8/§9). Idempotent: a full replace that converges
+   * whatever the prior projection was. Safe to run on a schedule or on demand.
+   */
+  async reconcileTenantProjection(tenantId: TenantId): Promise<void> {
+    await this.fanOut(tenantId);
   }
 }
