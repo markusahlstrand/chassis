@@ -26,7 +26,7 @@ import {
 } from '@substrat-run/kernel';
 import { OperationQueue } from './serialization.js';
 import { doScopedSql } from './sql.js';
-import { createDoTupleChecker, type ControlPlaneReader } from './checker.js';
+import { createDoTupleChecker, createLocalControlPlaneReader, type ControlPlaneReader } from './checker.js';
 
 /**
  * `defineScopeDO` — one Durable Object per scope, the CF analogue of a single
@@ -44,7 +44,13 @@ import { createDoTupleChecker, type ControlPlaneReader } from './checker.js';
  */
 
 export interface ScopeDoEnv {
-  CONTROL_PLANE: DurableObjectNamespace;
+  /**
+   * The shared directory DO — the source of tenant-level tuples + roles for a
+   * scope whose `permission_source` is still 'control-plane'. Optional: a scope
+   * that has been projected (or a CP-less vertical, docs/design/scope-local-
+   * permissions.md) evaluates permissions locally and needs no binding.
+   */
+  CONTROL_PLANE?: DurableObjectNamespace;
 }
 
 interface RegisteredModule {
@@ -120,6 +126,37 @@ const KERNEL_DDL = `
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
     PRIMARY KEY (event_id, consumer_module)
+  );
+  -- Scope-local permissions (docs/design/scope-local-permissions.md): the
+  -- tenant-level tuples + role definitions PROJECTED into this scope, so the
+  -- checker evaluates permissions from local storage instead of reading the shared
+  -- control-plane DO per request. Empty until a scope is projected (Phase 2) — until
+  -- then permission_source stays 'control-plane' and the RPC path is used.
+  CREATE TABLE IF NOT EXISTS _substrat_tenant_tuples (
+    tenant_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    object TEXT NOT NULL,
+    expires_at TEXT,
+    -- K-21 tombstone, mirroring _substrat_tuples: the row stays, the walk skips it.
+    revoked_at TEXT,
+    PRIMARY KEY (tenant_id, subject, relation, object)
+  );
+  CREATE TABLE IF NOT EXISTS _substrat_roles (
+    tenant_id TEXT NOT NULL,
+    role_key TEXT NOT NULL,
+    permissions TEXT NOT NULL,
+    source TEXT NOT NULL,
+    -- A removed role tombstones rather than deletes — a tombstoned role reads as
+    -- absent (grants nothing) but stays as evidence.
+    revoked_at TEXT,
+    PRIMARY KEY (tenant_id, role_key)
+  );
+  -- Small scope-local key/value store. Today: 'permission_source' ∈
+  -- {'control-plane','local'} — which reader the checker uses (default 'control-plane').
+  CREATE TABLE IF NOT EXISTS _substrat_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
   );
 `;
 
@@ -762,14 +799,104 @@ export function defineScopeDO(
       };
     }
 
+    /** 'local' once this scope has been projected, else 'control-plane' (default). */
+    private permissionSource(): 'local' | 'control-plane' {
+      const row = this.sql
+        .exec(`SELECT value FROM _substrat_meta WHERE key = 'permission_source'`)
+        .toArray()[0] as { value: string } | undefined;
+      return row?.value === 'local' ? 'local' : 'control-plane';
+    }
+
+    /**
+     * The checker's tenant-tuple/role reader. Chosen **per call** (the source can
+     * flip at runtime, and the checker holds this wrapper for the DO's lifetime):
+     * a projected scope — or one with no `CONTROL_PLANE` binding to read — evaluates
+     * from LOCAL storage (scope-local permissions); otherwise it reads the shared
+     * directory DO over RPC (the pre-projection behaviour). Reading the marker is a
+     * cheap local indexed lookup.
+     */
     private controlPlaneReader(): ControlPlaneReader {
-      const ns = this.env.CONTROL_PLANE;
-      const stub = ns.get(ns.idFromName('control-plane')) as unknown as ControlPlaneReader;
-      return {
-        tenantTuples: (tenantId, subject, relationPrefix) =>
-          stub.tenantTuples(tenantId, subject, relationPrefix),
-        getRole: (tenantId, key) => stub.getRole(tenantId, key),
+      const pick = (): ControlPlaneReader => {
+        const ns = this.env.CONTROL_PLANE;
+        if (this.permissionSource() === 'local' || !ns) {
+          return createLocalControlPlaneReader(this.sql);
+        }
+        const stub = ns.get(ns.idFromName('control-plane')) as unknown as ControlPlaneReader;
+        return {
+          tenantTuples: (tenantId, subject, relationPrefix) =>
+            stub.tenantTuples(tenantId, subject, relationPrefix),
+          getRole: (tenantId, key) => stub.getRole(tenantId, key),
+        };
       };
+      return {
+        tenantTuples: (tenantId, subject, relationPrefix) => pick().tenantTuples(tenantId, subject, relationPrefix),
+        getRole: (tenantId, key) => pick().getRole(tenantId, key),
+      };
+    }
+
+    // -- scope-local permission projection (docs/design/scope-local-permissions.md) --
+    // The write side of the local reader: the coordinator fans role/tuple changes
+    // into a scope's own storage (Phase 2), then flips the source to 'local'. Public
+    // RPC methods so `CloudflareScopeHost` (and the projection sweep) can call them.
+
+    /** Project (upsert) a role definition into this scope. */
+    async projectRole(tenantId: string, role: { key: string; permissions: string[]; source: string }): Promise<void> {
+      await this.queue.enqueue(() => {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO _substrat_roles (tenant_id, role_key, permissions, source, revoked_at)
+           VALUES (?, ?, ?, ?, NULL)`,
+          tenantId,
+          role.key,
+          JSON.stringify(role.permissions),
+          role.source,
+        );
+      });
+    }
+
+    /** Tombstone a projected role — it stops granting but stays as evidence (K-21). */
+    async revokeProjectedRole(tenantId: string, key: string, revokedAt: string): Promise<void> {
+      await this.queue.enqueue(() => {
+        this.sql.exec(
+          `UPDATE _substrat_roles SET revoked_at = ? WHERE tenant_id = ? AND role_key = ?`,
+          revokedAt,
+          tenantId,
+          key,
+        );
+      });
+    }
+
+    /** Project (upsert) a tenant-level tuple into this scope. `revokedAt` tombstones it. */
+    async projectTenantTuple(
+      tenantId: string,
+      subject: string,
+      relation: string,
+      object: string,
+      expiresAt: string | null,
+      revokedAt: string | null = null,
+    ): Promise<void> {
+      await this.queue.enqueue(() => {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO _substrat_tenant_tuples
+             (tenant_id, subject, relation, object, expires_at, revoked_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          tenantId,
+          subject,
+          relation,
+          object,
+          expiresAt,
+          revokedAt,
+        );
+      });
+    }
+
+    /** Flip which reader the checker uses. 'local' makes projections authoritative. */
+    async setPermissionSource(source: 'local' | 'control-plane'): Promise<void> {
+      await this.queue.enqueue(() => {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO _substrat_meta (key, value) VALUES ('permission_source', ?)`,
+          source,
+        );
+      });
     }
   };
 }
