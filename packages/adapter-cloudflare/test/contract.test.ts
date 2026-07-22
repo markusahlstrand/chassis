@@ -250,3 +250,56 @@ describe('scope-local permissions — automatic fan-out on write (Phase 2)', () 
     expect(await probe(alice, s2, ADMIN)).toBe(true); // repaired
   });
 });
+
+/**
+ * Scope-local permissions, Phase 3: a host with NO control plane — a scope-local /
+ * untrusted vertical. It provisions via `provisionScopeLocal` (grant the owner at
+ * scope level + project the role defs) and serves entirely from the scope's own
+ * storage. The null-object control plane no-ops the router-gated hot path
+ * (validateScopeAccess / entitlement / audit) and throws for the admin surface it
+ * genuinely lacks.
+ */
+describe('scope-local permissions — a CP-less host (Phase 3)', () => {
+  let host: CloudflareScopeHost;
+  const t = tenantId.parse(ulid());
+  const s = scopeId.parse(ulid());
+  const owner = principalId.parse(ulid());
+  const stranger = principalId.parse(ulid());
+  const ADMIN = permissionKey.parse('perm:admin');
+  const READ = permissionKey.parse('perm:read');
+
+  const probe = async (who: typeof owner, perm: typeof ADMIN): Promise<boolean> =>
+    (await (await host.getScope(who, t, s)).invoke<{ allowed: boolean }>('perm/probe', { permission: perm })).allowed;
+
+  beforeAll(async () => {
+    // No `controlPlane` — the host runs on the null-object stand-in.
+    host = new CloudflareScopeHost({
+      scope: env.SCOPE,
+      secretBox: webCryptoSecretBox('test-key', new Uint8Array(32).fill(7)),
+    });
+    await host.provisionScopeLocal({
+      tenantId: t,
+      scopeId: s,
+      owner,
+      roles: [{ key: 'office-admin', permissions: [ADMIN, READ], source: 'vertical' }],
+      ownerRoleKey: 'office-admin',
+    });
+  });
+
+  afterAll(async () => host.close());
+
+  it("serves the owner's permission from the scope alone — no control plane, entitlement trusted", async () => {
+    expect(await probe(owner, ADMIN)).toBe(true);
+    expect(await probe(owner, READ)).toBe(true);
+  });
+
+  it('denies a stranger (fail closed), still with no control plane', async () => {
+    expect(await probe(stranger, ADMIN)).toBe(false);
+  });
+
+  it('the admin directory surface throws — it genuinely has no control plane', async () => {
+    await expect(
+      host.admin.createTenant(platformActorId.parse(ulid()), { id: t, slug: `x-${t.toLowerCase()}`, name: 'X' }),
+    ).rejects.toThrow(/control plane unavailable/);
+  });
+});
