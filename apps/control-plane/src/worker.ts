@@ -25,10 +25,12 @@ import {
 } from '@substrat-run/adapter-cloudflare';
 import {
   createControlPlaneApi,
+  createWfpUploader,
   firstPlatformActorAuth,
   serviceTokenAuth,
   sessionPlatformAuth,
   UNSAFE_devPlatformActorAuth,
+  type DeployVerticalFn,
   type PlatformActorAuth,
 } from '@substrat-run/control-plane-api';
 import { VerticalClient } from '@substrat-run/control-plane-api';
@@ -59,11 +61,29 @@ interface Env {
    */
   PLATFORM_SECRET?: string;
   /**
+   * A `substrat push` uploads a built vertical bundle into this WfP dispatch namespace,
+   * with the platform's own token — the builder never holds one (D-34, self-serve-deploy.md).
+   * All three unset ⇒ the deploy route 501s.
+   */
+  CF_API_TOKEN?: string;
+  CF_ACCOUNT_ID?: string;
+  DISPATCH_NAMESPACE?: string;
+  /**
    * Service bindings to vertical deployments, `VERTICAL_<SLUG>` with dashes as
    * underscores — the same convention and the same static-map shape the router
    * carries, with the same Workers-for-Platforms swap later.
    */
   [binding: string]: unknown;
+}
+
+/** The WfP uploader, when the platform's CF credential is configured (self-serve-deploy.md). */
+function deployVerticalFor(env: Env): DeployVerticalFn | undefined {
+  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return undefined;
+  return createWfpUploader({
+    accountId: env.CF_ACCOUNT_ID,
+    namespace: env.DISPATCH_NAMESPACE ?? 'substrat-verticals',
+    apiToken: env.CF_API_TOKEN,
+  });
 }
 
 // The actor a connected vertical acts as when it registers (a service, not staff).
@@ -142,6 +162,7 @@ export default {
         host: hostFor(env),
         authenticate: authFor(env, origin),
         verticals: verticalsFor(env),
+        deployVertical: deployVerticalFor(env),
       }),
     );
 

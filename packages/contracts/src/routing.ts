@@ -114,6 +114,14 @@ export const routeTarget = z.object({
   tenantId,
   scopeId,
   verticalSlug: slug.nullable(),
+  /**
+   * The dispatch script the scope's bound version deploys as (orchestration.md §5.4) —
+   * what the router hands to `env.DISPATCH.get(...)`. Null when the scope has no bound
+   * version, in which case the router has nothing to dispatch and answers 502.
+   * Resolved by the directory read (a join scope → version), so the hot path stays one
+   * DO call.
+   */
+  deploymentRef: z.string().min(1).nullable(),
   surface: surfaceName,
   region: hostnameRegion,
 });

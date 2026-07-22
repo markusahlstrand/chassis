@@ -1958,10 +1958,17 @@ export class SqliteScopeHost implements ScopeHost {
         // The router's per-request read. No actor, not logged — same carve-out as
         // resolveIdentity (K-24): this is a machine path, not a staff read.
         const hostname = raw.toLowerCase();
+        // Join the scope's bound version's deployment_ref — the router's dispatch
+        // script — in the same read (orchestration.md §5.4). LEFT joins: no bound
+        // version resolves with deployment_ref = null.
         const r = this.directory
           .prepare(
-            `SELECT tenant_id, scope_id, vertical_slug, surface, region
-             FROM hostnames WHERE hostname = ? AND status = 'active'`,
+            `SELECT h.tenant_id, h.scope_id, h.vertical_slug, h.surface, h.region,
+                    vv.deployment_ref AS deployment_ref
+               FROM hostnames h
+               LEFT JOIN scopes s ON s.scope_id = h.scope_id
+               LEFT JOIN vertical_versions vv ON vv.id = s.vertical_version_id
+              WHERE h.hostname = ? AND h.status = 'active'`,
           )
           .get(hostname) as
           | {
@@ -1970,6 +1977,7 @@ export class SqliteScopeHost implements ScopeHost {
               vertical_slug: string | null;
               surface: string;
               region: string | null;
+              deployment_ref: string | null;
             }
           | undefined;
         if (!r) return undefined;
@@ -1977,6 +1985,7 @@ export class SqliteScopeHost implements ScopeHost {
           tenantId: r.tenant_id,
           scopeId: r.scope_id,
           verticalSlug: r.vertical_slug,
+          deploymentRef: r.deployment_ref ?? null,
           surface: r.surface,
           region: r.region,
         });

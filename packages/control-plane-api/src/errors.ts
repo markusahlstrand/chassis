@@ -44,6 +44,9 @@ const STATUS_PATTERNS: readonly [RegExp, ContentfulStatusCode][] = [
   [/belongs to '/, 409],
   [/not admitted/, 409],
   [/acknowledge it explicitly to promote/, 409],
+  // The §4 sandbox contract: a declared binding reaches platform infrastructure.
+  // Forbidden, not a conflict — the upload is well-formed and still refused.
+  [/deploy refused:/, 403],
   // The ADDRESSED resource does not exist — including the K-3 fail-closed case
   // where it exists under a DIFFERENT tenant and must read as absent.
   [/unknown tenant:/, 404],

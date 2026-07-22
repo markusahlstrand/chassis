@@ -1,0 +1,48 @@
+import type { DeployVerticalFn, VerticalBundle } from './deploy.js';
+
+/**
+ * A `DeployVerticalFn` that uploads a bundle into a Workers-for-Platforms **dispatch
+ * namespace** (orchestration.md §5.2). It is pure web-standard `fetch` + `FormData` —
+ * no Cloudflare SDK, no node built-ins — so it runs unchanged in a Worker (the control
+ * plane holds the token as a secret) or in node (the dev server, tests against a real
+ * namespace). The multipart shape is exactly what `wrangler deploy` sends and what the
+ * K-28 spike verified.
+ */
+export interface WfpUploaderOptions {
+  accountId: string;
+  namespace: string;
+  /** A Cloudflare API token with Workers Scripts / dispatch write. Platform-held. */
+  apiToken: string;
+}
+
+export function createWfpUploader(opts: WfpUploaderOptions): DeployVerticalFn {
+  return async (deploymentRef: string, bundle: VerticalBundle) => {
+    const metadata = {
+      main_module: bundle.entry,
+      compatibility_date: bundle.compatibilityDate,
+      bindings: bundle.bindings,
+      // Every Substrat scope DO is SQLite-backed (new_sqlite_classes, not new_classes).
+      migrations: { new_tag: 'v1', new_sqlite_classes: bundle.doClasses },
+    };
+
+    const form = new FormData();
+    form.set('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }), 'metadata.json');
+    for (const m of bundle.modules) {
+      form.set(m.name, new Blob([m.content as BlobPart], { type: m.contentType }), m.name);
+    }
+
+    const url =
+      `https://api.cloudflare.com/client/v4/accounts/${opts.accountId}` +
+      `/workers/dispatch/namespaces/${opts.namespace}/scripts/${encodeURIComponent(deploymentRef)}`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${opts.apiToken}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      // Surfaced as a 502-ish deploy failure by the caller; not a sandbox refusal.
+      throw new Error(`WfP upload failed (${res.status}) for '${deploymentRef}': ${body.slice(0, 400)}`);
+    }
+  };
+}

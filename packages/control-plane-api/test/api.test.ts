@@ -572,3 +572,98 @@ describe('control-plane API — vertical registry', () => {
     expect((await json(`/verticals/fsm/versions/${v3}/admit`, 'POST')).status).toBe(409);
   });
 });
+
+/**
+ * The deploy seam (self-serve-deploy.md) — `substrat push` uploads a built bundle,
+ * the endpoint validates the sandbox contract, forwards to an injected uploader, and
+ * records a PENDING version. The uploader is faked here; the real one calls the WfP
+ * dispatch API in apps/control-plane.
+ */
+describe('control-plane API — deploy', () => {
+  let dir: string;
+  let host: SqliteScopeHost;
+  let app: ReturnType<typeof createControlPlaneApi>;
+  const staff = platformActorId.parse(ulid());
+  const auth = { [DEV_ACTOR_HEADER]: staff };
+  const deployed: { ref: string; bundle: { doClasses: string[]; entry: string; modules: unknown[] } }[] = [];
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cp-deploy-'));
+    host = new SqliteScopeHost({ dir });
+    app = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      deployVertical: async (ref, bundle) => {
+        deployed.push({ ref, bundle: bundle as never });
+      },
+    });
+  });
+  afterAll(async () => {
+    await host.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const manifest = (over: Record<string, unknown> = {}) => ({
+    version: '0.1.0',
+    entry: 'worker.js',
+    compatibilityDate: '2025-01-01',
+    doClasses: ['ScopeDO'],
+    bindings: [{ type: 'durable_object_namespace', name: 'SCOPE', class_name: 'ScopeDO' }],
+    digests: { manifest: 'm1', permission: 'p1', migration: 'g1' },
+    ...over,
+  });
+  function form(m: Record<string, unknown>, entryName = 'worker.js', body = 'export default {}') {
+    const fd = new FormData();
+    fd.set('manifest', JSON.stringify(m));
+    fd.set(entryName, new Blob([body], { type: 'application/javascript+module' }), entryName);
+    return fd;
+  }
+  const push = (slug: string, fd: FormData) =>
+    app.request(`/verticals/${slug}/deploy`, { method: 'POST', headers: auth, body: fd });
+
+  it('uploads a bundle, registers the vertical, and records a pending version', async () => {
+    const res = await push('fsm', form(manifest()));
+    expect(res.status).toBe(201);
+    const version = await res.json();
+    expect(version).toMatchObject({ verticalSlug: 'fsm', version: '0.1.0', admission: 'pending' });
+    // deploymentRef is the dispatch script name: slug-<lowercased versionId>, CF-valid.
+    expect(version.deploymentRef).toBe(`fsm-${version.id.toLowerCase()}`);
+    expect(deployed.at(-1)!.ref).toBe(version.deploymentRef);
+    expect(deployed.at(-1)!.bundle.doClasses).toEqual(['ScopeDO']);
+    expect(deployed.at(-1)!.bundle.modules).toHaveLength(1);
+    const verticals = await (await app.request('/verticals', { headers: auth })).json();
+    expect(verticals).toContainEqual(expect.objectContaining({ slug: 'fsm', source: 'cli' }));
+  });
+
+  it('refuses a CONTROL_PLANE binding — the sandbox contract (403)', async () => {
+    const res = await push(
+      'evil',
+      form(manifest({ bindings: [{ type: 'durable_object_namespace', name: 'CONTROL_PLANE', class_name: 'ControlPlaneDO' }] })),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses a cross-script DO binding (403)', async () => {
+    const res = await push(
+      'evil',
+      form(manifest({ bindings: [{ type: 'durable_object_namespace', name: 'X', class_name: 'ScopeDO', script_name: 'substrat-control-plane' }] })),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses a service binding to a platform worker (403)', async () => {
+    const res = await push('evil', form(manifest({ bindings: [{ type: 'service', name: 'CP' }] })));
+    expect(res.status).toBe(403);
+  });
+
+  it('400s when the entry module is not among the uploaded files', async () => {
+    const res = await push('fsm', form(manifest({ entry: 'missing.js' })));
+    expect(res.status).toBe(400);
+  });
+
+  it('501s when deploy is not configured on the control plane', async () => {
+    const bare = createControlPlaneApi({ host, authenticate: UNSAFE_devPlatformActorAuth() });
+    const res = await bare.request('/verticals/fsm/deploy', { method: 'POST', headers: auth, body: form(manifest()) });
+    expect(res.status).toBe(501);
+  });
+});

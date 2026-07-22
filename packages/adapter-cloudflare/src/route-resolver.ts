@@ -22,6 +22,8 @@ interface HostnameReader {
     surface: string;
     region: string | null;
     status: string;
+    /** The scope's bound version's dispatch script, joined in the read. */
+    deployment_ref: string | null;
   } | undefined>;
 }
 
@@ -38,6 +40,7 @@ export function toRouteTarget(
         surface: string;
         region: string | null;
         status: string;
+        deployment_ref?: string | null;
       }
     | undefined,
 ): RouteTarget | undefined {
@@ -46,6 +49,7 @@ export function toRouteTarget(
     tenantId: row.tenant_id,
     scopeId: row.scope_id,
     verticalSlug: row.vertical_slug,
+    deploymentRef: row.deployment_ref ?? null,
     surface: row.surface,
     region: row.region,
   });

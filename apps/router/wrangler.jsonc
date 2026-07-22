@@ -37,12 +37,13 @@
 	// forwards. It has no business opening a scope, and the surest way to
 	// guarantee that is to not hand it the key.
 
-	// No vertical service bindings yet: platform-only bring-up. A vertical is bound
-	// here as VERTICAL_<SLUG> (dashes → underscores) once its worker exists — the
-	// milestone-one shape, later a Workers-for-Platforms dispatch namespace
-	// (#31 blocker 1), which changes this lookup and nothing else in the worker.
+	// Pushed verticals live in the Workers-for-Platforms dispatch namespace; the
+	// router dispatches on the scope's bound version — verticalFor does
+	// env.DISPATCH.get(deploymentRef) (orchestration.md §5.4). A route with no bound
+	// version falls back to a static VERTICAL_<SLUG> binding (none bound today).
 	// ROUTER_SECRET is set together with the first vertical's own, not before: with
 	// nothing to forward to, there is no secret to match.
+	"dispatch_namespaces": [{ "binding": "DISPATCH", "namespace": "substrat-verticals" }],
 
 	// Tenant hostnames (`*.<jurisdiction>.substrat.run`) are not attached yet: the
 	// two-level wildcard needs Advanced Certificate Manager (K-30/D-35), not bought.

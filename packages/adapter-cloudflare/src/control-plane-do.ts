@@ -873,10 +873,20 @@ export class ControlPlaneDO extends DurableObject {
 
   // -- the hostname map (K-26) ------------------------------------------------
 
-  readHostname(hostname: string): HostnameRow | undefined {
+  readHostname(hostname: string): (HostnameRow & { deployment_ref: string | null }) | undefined {
+    // Join the scope's bound version's deployment_ref, so the router resolves the
+    // dispatch script in the same one directory read (orchestration.md §5.4). LEFT
+    // joins: a scope with no bound version resolves with deployment_ref = null.
     return this.sql
-      .exec('SELECT * FROM hostnames WHERE hostname = ?', hostname)
-      .toArray()[0] as unknown as HostnameRow | undefined;
+      .exec(
+        `SELECT h.*, vv.deployment_ref AS deployment_ref
+           FROM hostnames h
+           LEFT JOIN scopes s ON s.scope_id = h.scope_id
+           LEFT JOIN vertical_versions vv ON vv.id = s.vertical_version_id
+          WHERE h.hostname = ?`,
+        hostname,
+      )
+      .toArray()[0] as unknown as (HostnameRow & { deployment_ref: string | null }) | undefined;
   }
 
   /** Demote any current canonical for this surface — exactly one may hold it. */
