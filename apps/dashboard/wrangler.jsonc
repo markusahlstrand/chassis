@@ -3,6 +3,12 @@
 	"main": "src/worker.ts",
 	"compatibility_date": "2025-01-01",
 	"workers_dev": false,
+	// The tenant self-service Dashboard is FIRST-PARTY: it lives on substrat.net,
+	// never substrat.run. substrat.run is the tenant-app domain (a wildcard router +
+	// provisioned instances) — a different registrable domain, so the Dashboard's
+	// privileged platform session is cookie/origin-isolated from tenant code. A
+	// Custom Domain (wrangler provisions DNS + cert); first-level, Universal SSL.
+	"routes": [{ "pattern": "app.substrat.net", "custom_domain": true }],
 	"durable_objects": {
 		"bindings": [
 			// The Dashboard runs its customers' dashboard scopes AND (M0, single
@@ -21,7 +27,6 @@
 	//   wrangler secret put OIDC_CLIENT_ID
 	//   wrangler secret put OIDC_CLIENT_SECRET
 	//   wrangler secret put SESSION_SECRET       # random 32+ bytes; signs the cookies
-	// The AuthHero client must allow the redirect URI  <origin>/api/auth/callback
-	// (e.g. https://dashboard.substrat.run/api/auth/callback and, for dev,
-	// http://localhost:8890/api/auth/callback).
+	// The AuthHero client must allow the redirect URI
+	//   https://app.substrat.net/api/auth/callback   (and http://localhost:8890/api/auth/callback for dev).
 }
