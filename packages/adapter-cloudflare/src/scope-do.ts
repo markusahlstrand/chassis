@@ -898,5 +898,49 @@ export function defineScopeDO(
         );
       });
     }
+
+    /**
+     * Replace this scope's projected view of a tenant's roles + tenant-level tuples
+     * with a fresh snapshot, and make it authoritative (source = 'local'). A full
+     * replace so it converges regardless of prior state — the coordinator's fan-out
+     * and the reconciliation sweep both call it (scope-local-permissions.md Phase 2).
+     * One enqueued unit, so no half-applied projection is ever visible to a check.
+     */
+    async applyProjection(
+      tenantId: string,
+      roles: { role_key: string; permissions: string; source: string }[],
+      tuples: { subject: string; relation: string; object: string; expires_at: string | null; revoked_at: string | null }[],
+    ): Promise<void> {
+      await this.queue.enqueue(() => {
+        this.sql.exec(`DELETE FROM _substrat_roles WHERE tenant_id = ?`, tenantId);
+        for (const r of roles) {
+          this.sql.exec(
+            `INSERT OR REPLACE INTO _substrat_roles (tenant_id, role_key, permissions, source, revoked_at)
+             VALUES (?, ?, ?, ?, NULL)`,
+            tenantId,
+            r.role_key,
+            r.permissions,
+            r.source,
+          );
+        }
+        this.sql.exec(`DELETE FROM _substrat_tenant_tuples WHERE tenant_id = ?`, tenantId);
+        for (const t of tuples) {
+          this.sql.exec(
+            `INSERT OR REPLACE INTO _substrat_tenant_tuples
+               (tenant_id, subject, relation, object, expires_at, revoked_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            tenantId,
+            t.subject,
+            t.relation,
+            t.object,
+            t.expires_at,
+            t.revoked_at,
+          );
+        }
+        this.sql.exec(
+          `INSERT OR REPLACE INTO _substrat_meta (key, value) VALUES ('permission_source', 'local')`,
+        );
+      });
+    }
   };
 }
