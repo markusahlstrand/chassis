@@ -25,6 +25,8 @@ export interface DeclaredBinding {
   name: string;
   class_name?: string;
   script_name?: string;
+  /** For a `d1` binding: the database id — a vertical's OWN store (see the contract below). */
+  id?: string;
 }
 
 /** A built vertical, ready to upload. `modules` are the bundled ESM parts. */
@@ -48,6 +50,7 @@ const declaredBinding = z.object({
   name: z.string().min(1),
   class_name: z.string().optional(),
   script_name: z.string().optional(),
+  id: z.string().optional(),
 });
 
 /** The JSON part a `substrat push` sends alongside the module files. */
@@ -72,6 +75,20 @@ export type DeployManifest = z.infer<typeof deployManifest>;
 /**
  * The §4 sandbox contract. Throws (mapped to a 4xx by errors.ts via "deploy refused")
  * if the declared bindings would give the vertical reach into platform infrastructure.
+ *
+ * What it REFUSES is the platform's own infrastructure: the `CONTROL_PLANE` directory,
+ * a service binding to a platform worker, and any DO binding that is not one of the
+ * vertical's own classes (cross-script, or a class it didn't declare). Everything a
+ * vertical legitimately owns falls through and is allowed — its own `ScopeDO`, and its
+ * own data stores like a `d1` binding for a Better-Auth `AUTH_DB` (self-serve-deploy.md
+ * §4: "no `AUTH_DB` it did not create", i.e. its OWN store is fine).
+ *
+ * Open question (§4, model B): a `d1` binding names a `database_id`, and this check does
+ * not yet prove the vertical *owns* that id rather than pointing at another tenant's DB.
+ * Under model B that gap is closed by human admission — a person trusts the builder's
+ * declared bindings before the version can serve — not by this structural check. When
+ * self-serve opens wider, per-vertical store PROVISIONING (the platform mints the D1 and
+ * injects the id) replaces a bundle-chosen id; that is a deploy-pipeline change, not here.
  */
 export function assertSandboxContract(m: DeployManifest): void {
   const own = new Set(m.doClasses);

@@ -46,12 +46,23 @@ const name = arg('name', false);
 
 const cfg = readJsonc(join(dir, 'wrangler.jsonc'));
 const doBindings = cfg.durable_objects?.bindings ?? [];
-const bindings = doBindings.map((b) => ({
-  type: 'durable_object_namespace',
-  name: b.name,
-  class_name: b.class_name,
-  ...(b.script_name ? { script_name: b.script_name } : {}),
+// A vertical's OWN data stores travel with the bundle so the pushed worker has them:
+// its DO classes, and its D1 databases (e.g. a Better-Auth AUTH_DB). The control plane
+// re-checks these against the §4 sandbox contract before the upload reaches the namespace.
+const d1Bindings = (cfg.d1_databases ?? []).map((b) => ({
+  type: 'd1',
+  name: b.binding,
+  id: b.database_id,
 }));
+const bindings = [
+  ...doBindings.map((b) => ({
+    type: 'durable_object_namespace',
+    name: b.name,
+    class_name: b.class_name,
+    ...(b.script_name ? { script_name: b.script_name } : {}),
+  })),
+  ...d1Bindings,
+];
 const doClasses = (cfg.migrations ?? []).flatMap((m) => m.new_sqlite_classes ?? []);
 const compatibilityDate = cfg.compatibility_date ?? '2025-01-01';
 
