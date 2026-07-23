@@ -50,7 +50,7 @@ import { instantiateProtocol, requireSigned, PROTOCOL_PERM } from '@substrat-run
 | `voidProtocol(ctx, input)` | |
 | `getProtocol(ctx, instanceId)` | |
 | `listProtocolsForEntity(ctx, entity)` | |
-| `protocolContentHash(ctx, …)` | **async** — the hash recipe, exported so you can verify independently |
+| `protocolContentHash(template, latest, boundHash?)` | **async** — the hash recipe, exported so you can verify independently. Takes no `ctx`: it hashes a template plus the latest responses (or a bound document hash), nothing scope-bound |
 | `requireSigned(ctx, entity, templateKey)` | throws unless signed — the completion-guard building block |
 | `requireCountersigned(ctx, …)` | the counter-signed equivalent |
 

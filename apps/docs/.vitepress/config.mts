@@ -20,6 +20,7 @@ export default withMermaid(defineConfig({
       { text: 'Engines', link: '/engines/', activeMatch: '/engines/' },
       { text: 'Connectors', link: '/connectors/', activeMatch: '/connectors/' },
       { text: 'Verticals', link: '/verticals/', activeMatch: '/verticals/' },
+      { text: 'Platform', link: '/platform/', activeMatch: '/platform/' },
       { text: 'Reference', link: '/reference/contracts', activeMatch: '/reference/' },
     ],
 
@@ -29,6 +30,7 @@ export default withMermaid(defineConfig({
       '/engines/': guideSidebar(),
       '/connectors/': guideSidebar(),
       '/verticals/': guideSidebar(),
+      '/platform/': guideSidebar(),
       '/reference/': guideSidebar(),
     },
 
@@ -75,6 +77,7 @@ function guideSidebar() {
         { text: 'Architecture', link: '/guide/architecture' },
         { text: 'Getting started', link: '/guide/getting-started' },
         { text: 'Running locally', link: '/guide/running-locally' },
+        { text: 'Deploying a vertical', link: '/guide/deploying' },
         { text: 'Building for AI agents', link: '/guide/ai-agents' },
       ],
     },
@@ -114,8 +117,21 @@ function guideSidebar() {
       text: 'Verticals',
       items: [
         { text: 'What is a vertical?', link: '/verticals/' },
+        { text: 'Callout (field service)', link: '/verticals/callout' },
+        { text: 'Handlebar (bike workshop)', link: '/verticals/handlebar' },
+        { text: 'Kallkälla (coffee shop)', link: '/verticals/shop' },
         { text: 'Meridian (HR)', link: '/verticals/meridian' },
         { text: 'RallyPoint (padel club)', link: '/verticals/rallypoint' },
+      ],
+    },
+    {
+      text: 'Platform',
+      items: [
+        { text: 'The platform surfaces', link: '/platform/' },
+        { text: 'Control plane', link: '/platform/control-plane' },
+        { text: 'Console', link: '/platform/console' },
+        { text: 'Router', link: '/platform/router' },
+        { text: 'Dashboard', link: '/platform/dashboard' },
       ],
     },
     {
@@ -126,6 +142,7 @@ function guideSidebar() {
         { text: '@substrat-run/adapter-sqlite', link: '/reference/adapter-sqlite' },
         { text: '@substrat-run/adapter-cloudflare', link: '/reference/adapter-cloudflare' },
         { text: '@substrat-run/contract-tests', link: '/reference/contract-tests' },
+        { text: '@substrat-run/oidc-rp', link: '/reference/oidc-rp' },
       ],
     },
   ];

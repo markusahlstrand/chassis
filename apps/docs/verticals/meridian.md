@@ -124,7 +124,7 @@ So the demo opens on a contract that is frozen and pending, and stays there. Tha
 honest state of the platform.
 :::
 
-Everything else is vertical codeEverything else is vertical code — and the most interesting part is what *isn't* an engine
+Everything else is vertical code — and the most interesting part is what *isn't* an engine
 yet. **Two ledgers, one shape:**
 
 - `hr_absence_ledger` — vacation/absence, where an entry moves a **balance** (accrual `+`,

@@ -112,6 +112,23 @@ AUTH=better-auth,oidc      # both doors — resolve to the same principal model 
 config on the *same* adapter — or a second adapter against the *same* `resolveIdentity`.
 Either way the kernel is untouched: doing the seam neutrally is what buys the choice.
 
+### Two real choices, made differently
+
+The neutral seam is not hypothetical — the codebase exercises both ends of it deliberately:
+
+- **The platform's own apps** — the [Dashboard](/platform/dashboard) and the
+  [control-plane Console](/platform/console) — authenticate against **AuthHero OIDC**
+  (Authorization-Code + PKCE) through the shared
+  [`@substrat-run/oidc-rp`](/reference/oidc-rp) relying party. One IdP, one session model,
+  across every platform surface — including the `substrat login` CLI, which brokers the same
+  flow. This is the "log in with SSO" corner, chosen because platform staff and tenant admins
+  are one identity population the platform runs itself.
+- **The demos stay on Better Auth**, each with its own user store, because a demo vertical
+  models a business that owns *its* customers' logins. Same `AuthAdapter` contract, opposite
+  end of the choice.
+
+That the same kernel serves both, unchanged, is the seam paying out.
+
 ## Identity sync on first login
 
 The first time an adapter resolves an external user it hasn't seen, it provisions them —
