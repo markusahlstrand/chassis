@@ -30,7 +30,7 @@ import { meridianModule } from '@substrat-run/demo-meridian/module';
 import { CATALOG, ensureCatalog, availableCatalog } from './catalog.js';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
-import { createApp, deprovisionApp, retryApp, provisionDashboard, type DashboardNode } from './provision.js';
+import { createApp, deprovisionApp, retryApp, provisionDashboard, reconcileRoles, type DashboardNode } from './provision.js';
 import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 import { transportFor, senderFor, teamInviteEmail } from './email.js';
@@ -277,6 +277,9 @@ async function resolveNode(
   const mapped = await host.admin.resolveIdentity(t, PROVIDER, userId);
   const dash = (await host.admin.listScopes(STAFF, { tenantId: t, vertical: 'dashboard' }))[0];
   if (!mapped || !dash) return null;
+  // Self-heal role drift: a tenant provisioned before a permission was added to a role
+  // (e.g. dashboard:manage-integrations) gets its role set brought current here, once.
+  await reconcileRoles(host, STAFF, t);
   return { tenantId: t, scopeId: dash.id, principal: mapped.principal };
 }
 

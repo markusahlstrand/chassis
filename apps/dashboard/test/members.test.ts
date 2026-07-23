@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { orgId, platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
 import { ulid } from '@substrat-run/kernel';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
-import { MODULES, provisionDashboard, type DashboardNode } from '../src/index.js';
+import { MODULES, provisionDashboard, reconcileRoles, type DashboardNode } from '../src/index.js';
 import type { DashboardMemberRow } from '../src/module.js';
 
 /**
@@ -261,5 +261,24 @@ describe('Dashboard teams — invite + accept', () => {
     await expect(
       pScope.invoke('dashboard/accept-invite', { invitationId, identifier: 'gone@acme4.com' }),
     ).rejects.toThrow(/not acceptable/);
+  });
+
+  it('reconcileRoles backfills a permission added to a role after provisioning', async () => {
+    // Simulates the real production case: a tenant provisioned before
+    // dashboard:manage-integrations existed. Its owner role lacks the key, so the
+    // in-scope check would deny — until reconcileRoles brings the role set current.
+    const acme = await makeTeam('acme-recon', 'owner@recon.com');
+    const owner = () =>
+      host.admin.listRoles(staff, { tenantId: acme.tenantId }).then((rs) => rs.find((r) => r.key === 'owner')!);
+
+    // Regress the owner role to a pre-feature set (read only).
+    await host.admin.defineRole(staff, acme.tenantId, { key: 'owner', permissions: ['dashboard:read'] as never, source: 'vertical' });
+    expect((await owner()).permissions).not.toContain('dashboard:manage-integrations');
+
+    await reconcileRoles(host, staff, acme.tenantId);
+
+    const perms = (await owner()).permissions;
+    expect(perms).toContain('dashboard:manage-integrations'); // the new key is back
+    expect(perms).toContain('dashboard:manage-members'); // and the rest of owner's set
   });
 });
