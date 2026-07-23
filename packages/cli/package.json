@@ -1,16 +1,32 @@
 {
   "name": "@substrat-run/cli",
   "version": "0.0.1",
-  "private": true,
-  "description": "The substrat CLI — authenticated deploy tooling (push a vertical to the platform)",
-  "license": "AGPL-3.0-or-later",
+  "description": "The substrat CLI — authenticated deploy tooling: push a vertical to the platform, manage its versions and channels",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrat-run/substrat.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://substrat.net/guide/deploying",
+  "keywords": [
+    "substrat",
+    "deploy",
+    "cli",
+    "cloudflare",
+    "workers-for-platforms"
+  ],
   "type": "module",
   "bin": {
     "substrat": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -18,5 +34,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^7.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

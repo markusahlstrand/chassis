@@ -26,9 +26,18 @@ One credential principle underpins all of it: **the author never holds a Cloudfl
 control plane holds the Workers-for-Platforms credential and does the upload; the CLI builds
 locally and POSTs a bundle. (Decision D-34.)
 
-## Sign in — `substrat login`
+## Install
 
-The CLI is wired at the repo root as `pnpm substrat`; installed, it is the `substrat` bin.
+The CLI is published to npm as [`@substrat-run/cli`](https://www.npmjs.com/package/@substrat-run/cli) (Apache-2.0):
+
+```bash
+npm install -g @substrat-run/cli    # or: pnpm add -g @substrat-run/cli
+```
+
+That gives you the `substrat` bin. Inside this monorepo it is also wired at the root as
+`pnpm substrat`, so the examples below work either way.
+
+## Sign in — `substrat login`
 
 ```bash
 substrat login
@@ -52,6 +61,23 @@ Either way, auth resolves in this order at push time: explicit `--token` /
 URL resolves `--cp` → `SUBSTRAT_CP_URL` → the stored config (default
 `https://console.substrat.net/api`). You are always authenticated **as yourself** — a push is
 attributable to the human or service that ran it, never a hand-picked actor.
+
+## Your workspace
+
+A vertical is owned by a **workspace** (a tenant), not a bare user — the same account you sign
+into the [dashboard](/platform/dashboard) with. On `login` the CLI resolves which workspaces you
+belong to and stores a default; `substrat whoami` prints them:
+
+```bash
+substrat whoami
+# signed in as you@acme.com
+#   acme-co  (Acme Co)
+```
+
+If you belong to several, pick per command with `--tenant <slug>` (or set `SUBSTRAT_TENANT`, or
+change the stored default). You never type your workspace *into* a slug — the control plane
+forms the prefix for you (next section). New here? Sign up once in the dashboard to create your
+workspace, then the CLI just works.
 
 ## Ship it — `substrat push`
 
@@ -80,26 +106,73 @@ a `deploymentRef`, and records a **pending** version. It never promotes or binds
 CLI prints the version id, its `pending` admission state, and the `deploymentRef`:
 
 ```
-✓ pushed. version 01J… is pending; deploymentRef=<builder>-<slug>@<v>
+✓ pushed. version 01J… is pending; deploymentRef=acme-co-helpdesk-01j…
   admit it in the console to let a scope bind it.
 ```
 
-## Admit it — the console
+### The `<workspace>/` prefix
 
-The pushed version now sits **pending** in the [control-plane console](/platform/console). An
-admin admits it (the deliberate human gate), which lets `bindScopeVersion` / `promoteVersion`
-attach it to a scope; the [router](/platform/router) then resolves a request's hostname to that
-scope and dispatches into the running isolate. `bindScopeVersion` and `promoteVersion` refuse
-anything not admitted — the gate is mechanical, the admission is human.
+You push a **bare** `--slug helpdesk`; the vertical's registry id is `acme-co/helpdesk` —
+your workspace slug, prepended by the control plane from your authenticated session. You never
+type it. The point is that the name is unique *by construction*: every workspace can own a
+`helpdesk` without a global land-grab, the same way project names are scoped to your account on
+Vercel. (This prefixes only the registry id and the `deploymentRef` — never an app's hostname,
+which is per *instance* and chosen when someone creates one.)
 
-That is the whole path: **push → pending version → admission → bind → serve** — laptop to
-production with the author never holding a Cloudflare credential, and no unvetted code ever
-reaching a production isolate.
+Ownership is claimed on first push and fixed there: a later push to `helpdesk` from a different
+workspace is *its own* `other-co/helpdesk`, and no one else can push versions of yours.
+
+## See what you've pushed — `substrat versions`
+
+```bash
+substrat versions helpdesk
+# VERSION  ADMISSION  CHANNELS      ID
+# 0.2.0    admitted   staging       01J…
+# 0.1.0    admitted   dev,prod      01J…
+```
+
+A bare slug again — the control plane resolves it under your workspace. The same view is in the
+dashboard's **Deployments** tab (below), so you can watch admission state and channels without
+the CLI.
+
+## Promote to dev / staging — `substrat promote`
+
+Once a version is **admitted**, you move it onto a channel yourself:
+
+```bash
+substrat promote helpdesk --channel staging --version 01J…
+```
+
+Channels are named pointers per vertical — `dev`, `staging`, `prod` are the same vertical pinned
+differently. You self-serve `dev` and `staging`; **`prod` is not yours to promote.** Production
+promotion, and the admission that precedes it, are a deliberate platform decision (the trust
+boundary the [self-serve deploy note](https://github.com/substrat-run/substrat/blob/main/docs/design/self-serve-deploy.md)
+draws) — `substrat promote … --channel prod` is refused, and so is the dashboard's prod control.
+
+## Watch it in the dashboard
+
+Everything above is mirrored in the [dashboard](/platform/dashboard)'s **Deployments** view: the
+verticals your workspace has pushed, each version's admission state, and which channel points
+where — with the same `dev`/`staging` self-serve promotion, and `prod` shown read-only. Push
+from the CLI, manage from either.
+
+## The whole path
+
+**push → pending version → admission → promote → serve** — laptop to production with the author
+never holding a Cloudflare credential, and no unvetted code reaching a production isolate:
+
+| Step | Who | Where |
+|---|---|---|
+| `push` a bare slug → `<workspace>/<slug>` pending version | you (the builder) | CLI |
+| **admit** the version (the human gate) | platform staff | console |
+| promote `dev` / `staging` | you | CLI or dashboard |
+| promote `prod` | platform staff | console |
+| resolve hostname → scope → dispatch | the [router](/platform/router) | — |
 
 ## Where this is going
 
-The foundation above is real and works today for the platform's own verticals (Callout ships
-this way). Opening it to *untrusted* builders — inspecting an opaque bundle, or building
-customer source in a disposable sandbox so the digest checkpoints become verified rather than
-advisory — is the phased work described in the
+Self-serve for *vetted* builders — you own your verticals, push them, and drive their non-prod
+channels — is what ships today. The remaining evolution is admitting *untrusted* source safely:
+building a customer's code in a disposable sandbox so the digest checkpoints become verified
+rather than advisory, at which point the staff admission gate can relax. That trust model is the
 [self-serve deploy design note](https://github.com/substrat-run/substrat/blob/main/docs/design/self-serve-deploy.md).
