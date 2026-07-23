@@ -645,7 +645,10 @@ describe('control-plane API — deploy', () => {
   let app: ReturnType<typeof createControlPlaneApi>;
   const staff = platformActorId.parse(ulid());
   const auth = { [DEV_ACTOR_HEADER]: staff };
-  const deployed: { ref: string; bundle: { doClasses: string[]; entry: string; modules: unknown[] } }[] = [];
+  const deployed: {
+    ref: string;
+    bundle: { doClasses: string[]; entry: string; modules: unknown[]; bindings: { type: string; name: string; id?: string }[] };
+  }[] = [];
 
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'cp-deploy-'));
@@ -693,6 +696,23 @@ describe('control-plane API — deploy', () => {
     expect(deployed.at(-1)!.bundle.modules).toHaveLength(1);
     const verticals = await (await app.request('/verticals', { headers: auth })).json();
     expect(verticals).toContainEqual(expect.objectContaining({ slug: 'fsm', source: 'cli' }));
+  });
+
+  it("forwards a vertical's own D1 binding (with its database id) to the uploader", async () => {
+    const res = await push(
+      'd1demo',
+      form(
+        manifest({
+          bindings: [
+            { type: 'durable_object_namespace', name: 'SCOPE', class_name: 'ScopeDO' },
+            { type: 'd1', name: 'AUTH_DB', id: 'db-abc-123' },
+          ],
+        }),
+      ),
+    );
+    expect(res.status).toBe(201);
+    const forwarded = deployed.at(-1)!.bundle.bindings;
+    expect(forwarded).toContainEqual({ type: 'd1', name: 'AUTH_DB', id: 'db-abc-123' });
   });
 
   it('refuses a CONTROL_PLANE binding — the sandbox contract (403)', async () => {
