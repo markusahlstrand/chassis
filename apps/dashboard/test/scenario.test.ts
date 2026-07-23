@@ -17,6 +17,7 @@ import {
   type DashboardAppRow,
   type DashboardNode,
 } from '../src/index.js';
+import { listDeploymentsFromHost, assertOwned } from '../src/deployments.js';
 
 /**
  * M0 — the central claim of docs/design/dashboard.md, cashed out: a tenant admin
@@ -240,5 +241,76 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     });
     expect(await scopeIds(acme.tenantId)).toContain(own);
     expect(await scopeIds(other.tenantId)).not.toContain(own);
+  });
+});
+
+/**
+ * Deployments (builder-plane.md Phase 4) — the builder-facing view of the verticals a
+ * tenant pushed, assembled from the registry and narrowed to that tenant's own. Proves
+ * the ownership filter (a tenant sees only what it owns), the shaping (prefix stripped,
+ * versions newest-first, channels), and that a slug you don't own is not promotable.
+ */
+describe('Dashboard Phase 4 — a tenant sees only its own deployments', () => {
+  let dir: string;
+  let host: SqliteScopeHost;
+  const staff = platformActorId.parse(ulid());
+  const acme = tenantId.parse(ulid());
+  const other = tenantId.parse(ulid());
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'substrat-deployments-'));
+    host = new SqliteScopeHost({ dir });
+  });
+  afterEach(async () => {
+    await host.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const publish = async (slug: string, version: string, id: string) => {
+    await host.admin.publishVersion(staff, {
+      id,
+      verticalSlug: slug,
+      version,
+      manifestDigest: 'm',
+      permissionDigest: 'p',
+      migrationDigest: 'g',
+      deploymentRef: `${slug}-${id.toLowerCase()}`,
+    });
+  };
+
+  it('lists only the tenant’s own verticals, shaped with channels and newest-first versions', async () => {
+    // acme owns `helpdesk` (two versions, dev pinned to the newer); a platform vertical
+    // (owner null) and another tenant's vertical must NOT appear for acme.
+    await host.admin.registerVertical(staff, { slug: 'helpdesk', name: 'Helpdesk', source: 'cli', ownerTenant: acme });
+    await host.admin.registerVertical(staff, { slug: 'callout', name: 'Callout', source: 'builtin' }); // platform
+    await host.admin.registerVertical(staff, { slug: 'billing', name: 'Billing', source: 'cli', ownerTenant: other });
+
+    const v1 = ulid();
+    const v2 = ulid();
+    await publish('helpdesk', '0.1.0', v1);
+    await publish('helpdesk', '0.2.0', v2);
+    await host.admin.admitVersion(staff, v2);
+    await host.admin.promoteVersion(staff, 'helpdesk', 'dev', v2);
+
+    const mine = await listDeploymentsFromHost(host, staff, acme);
+    expect(mine.map((d) => d.slug)).toEqual(['helpdesk']); // not callout, not billing
+    const hd = mine[0]!;
+    expect(hd.displaySlug).toBe('helpdesk');
+    // Newest-first: 0.2.0 (v2) before 0.1.0 (v1).
+    expect(hd.versions.map((v) => v.id)).toEqual([v2, v1]);
+    expect(hd.channels).toContainEqual({ channel: 'dev', versionId: v2 });
+
+    // The other tenant sees only its own.
+    expect((await listDeploymentsFromHost(host, staff, other)).map((d) => d.slug)).toEqual(['billing']);
+  });
+
+  it('refuses to treat a slug the tenant does not own as promotable', async () => {
+    await host.admin.registerVertical(staff, { slug: 'helpdesk', name: 'Helpdesk', source: 'cli', ownerTenant: acme });
+    await host.admin.registerVertical(staff, { slug: 'billing', name: 'Billing', source: 'cli', ownerTenant: other });
+    const mine = await listDeploymentsFromHost(host, staff, acme);
+
+    expect(() => assertOwned(mine, 'helpdesk')).not.toThrow();
+    // billing is other's — not in acme's deployments, so a promote attempt is refused.
+    expect(() => assertOwned(mine, 'billing')).toThrow(/not one of your deployments/);
   });
 });
