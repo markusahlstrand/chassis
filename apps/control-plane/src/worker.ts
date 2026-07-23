@@ -62,6 +62,12 @@ interface Env extends OidcEnv {
    */
   PLATFORM_SECRET?: string;
   /**
+   * The router's shared secret (K-27). Injected into every pushed vertical so it can
+   * verify the router-asserted node; the router presents the same value. Platform-owned,
+   * like PLATFORM_SECRET — the vertical receives it, never declares it.
+   */
+  ROUTER_SECRET?: string;
+  /**
    * A `substrat push` uploads a built vertical bundle into this WfP dispatch namespace,
    * with the platform's own token — the builder never holds one (D-34, self-serve-deploy.md).
    * All three unset ⇒ the deploy route 501s.
@@ -94,6 +100,10 @@ function deployVerticalFor(env: Env): DeployVerticalFn | undefined {
     accountId: env.CF_ACCOUNT_ID,
     namespace: env.DISPATCH_NAMESPACE ?? 'substrat-verticals',
     apiToken: env.CF_API_TOKEN,
+    // Inject the platform-owned secrets a vertical needs to verify inbound platform +
+    // router calls, so a pushed vertical is provisionable + servable with no per-vertical
+    // secret setup (wrangler can't set secrets on a dispatch-namespace script anyway).
+    injectSecrets: { PLATFORM_SECRET: env.PLATFORM_SECRET, ROUTER_SECRET: env.ROUTER_SECRET },
   });
 }
 

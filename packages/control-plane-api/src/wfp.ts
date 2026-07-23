@@ -13,9 +13,22 @@ export interface WfpUploaderOptions {
   namespace: string;
   /** A Cloudflare API token with Workers Scripts / dispatch write. Platform-held. */
   apiToken: string;
+  /**
+   * Platform-owned secrets injected as `secret_text` bindings on every pushed script —
+   * the ambient credentials a vertical needs to VERIFY inbound platform/router calls
+   * (`PLATFORM_SECRET` for `/internal/provision`, K-31; `ROUTER_SECRET` for the routed
+   * node, K-27). The vertical does not declare these (they'd fail the §4 sandbox check
+   * with no value to give); the platform provides them at deploy from its own env.
+   * Names with an undefined/empty value are skipped.
+   */
+  injectSecrets?: Record<string, string | undefined>;
 }
 
 export function createWfpUploader(opts: WfpUploaderOptions): DeployVerticalFn {
+  const injected = Object.entries(opts.injectSecrets ?? {})
+    .filter(([, text]) => text)
+    .map(([name, text]) => ({ type: 'secret_text', name, text: text as string }));
+
   return async (deploymentRef: string, bundle: VerticalBundle) => {
     const metadata = {
       main_module: bundle.entry,
@@ -23,7 +36,10 @@ export function createWfpUploader(opts: WfpUploaderOptions): DeployVerticalFn {
       // Without the declared flags (e.g. `nodejs_compat`) a script importing `node:*`
       // fails to start and the upload is rejected — carry them through.
       compatibility_flags: bundle.compatibilityFlags,
-      bindings: bundle.bindings,
+      // The vertical's own bindings, plus the platform's injected secrets (added here,
+      // AFTER the §4 sandbox check on the declared set — the platform is granting the
+      // vertical verification secrets, not the vertical reaching for a platform binding).
+      bindings: [...bundle.bindings, ...injected],
       // Every Substrat scope DO is SQLite-backed (new_sqlite_classes, not new_classes).
       migrations: { new_tag: 'v1', new_sqlite_classes: bundle.doClasses },
     };
