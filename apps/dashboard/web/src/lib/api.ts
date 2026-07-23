@@ -214,6 +214,8 @@ export const api = {
   deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   retryApp: (scopeId: string) => call<AppRow>(`/apps/${encodeURIComponent(scopeId)}/retry`, { method: 'POST' }),
   appEvents: (scopeId: string) => call<AppEvent[]>(`/apps/${encodeURIComponent(scopeId)}/events`),
+  /** The app's vertical version registry + channels — which version it runs (the `prod` one). */
+  appDeployments: (scopeId: string) => call<Deployment>(`/apps/${encodeURIComponent(scopeId)}/deployments`),
   listDeployments: () => call<Deployment[]>('/deployments'),
   /** The tenant's GitHub-import state — connection status + the repos it can see. */
   gitRepos: () => call<GitReposResult>('/github/repos'),
