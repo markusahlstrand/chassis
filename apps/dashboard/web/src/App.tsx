@@ -477,7 +477,7 @@ export function App() {
       </Dialog>
 
       {toast && (
-        <div style={{ position: 'fixed', right: 24, top: 72, zIndex: 60 }}>
+        <div style={{ position: 'fixed', right: 24, bottom: 24, zIndex: 60 }}>
           <Toast status={toast.status} title={toast.title} detail={toast.detail} />
         </div>
       )}
