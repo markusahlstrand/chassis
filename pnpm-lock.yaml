@@ -880,6 +880,15 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(tsx@4.23.1)
 
+  packages/cli:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^7.0.0
+        version: 7.0.2
+
   packages/contract-tests:
     dependencies:
       '@substrat-run/contracts':

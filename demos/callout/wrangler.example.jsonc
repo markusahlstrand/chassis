@@ -13,8 +13,8 @@
 //   wrangler d1 create substrat-fsm-auth        # prints a database_id
 //   # paste that id into AUTH_DB's "database_id" below (replacing "local")
 //   wrangler d1 migrations apply substrat-fsm-auth --remote
-//   node tools/substrat-push.mjs demos/callout --slug callout --version <v> \
-//        --cp https://console.substrat.net/api --actor <PlatformActorId>
+//   substrat login                                    # stores the control plane URL + SERVICE_TOKEN
+//   substrat push demos/callout --slug callout --version <v>
 //   # then admit + promote the version in the console; a scope binds it via the dashboard
 //
 // SANDBOX CONTRACT (self-serve-deploy.md §4). This worker's ONLY bindings are its OWN
