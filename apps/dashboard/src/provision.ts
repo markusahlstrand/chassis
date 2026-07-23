@@ -169,7 +169,10 @@ export async function createApp(
       ? await provisionOnSharedPlane(input.controlPlane, input)
       : await provisionEmbedded(host, input);
   } catch (e) {
-    await scope.invoke('dashboard/mark-app-failed', { appScopeId: input.appScopeId }).catch(() => {});
+    // Record WHY on the app's audit trail (e.g. "no deployment is bound for vertical 'meridian'"),
+    // not just the toast — so the failure is visible on the app's Activity panel afterward.
+    const reason = e instanceof Error ? e.message : String(e);
+    await scope.invoke('dashboard/mark-app-failed', { appScopeId: input.appScopeId, reason }).catch(() => {});
     throw e;
   }
 

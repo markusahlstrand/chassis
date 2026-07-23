@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Dialog, Input, Tabs } from '@substrat-run/ui';
-import type { AppRow } from '../lib/api';
+import { api, type AppRow, type AppEvent } from '../lib/api';
 import { verticalMeta, APP_TABS, DEPLOYMENTS, ENV_VARS, INTEGRATIONS, ENV_OPTS, type EnvVar } from '../lib/demo';
-import { shortDate, shortId } from '../lib/format';
+import { DEV_MOCK } from '../lib/mock';
+import { relativeTime, shortDate, shortId } from '../lib/format';
 import { Ic } from '../lib/icons';
 import { Page } from '../components/layout';
 import { card, CopyButton, Eyebrow, HonestyBanner, MonoTag, Pill, RowActions } from '../components/ui';
@@ -73,6 +74,23 @@ function KV({ label, children, last }: { label: string; children: React.ReactNod
 
 function Overview({ app, meta, statusKind, statusLabel }: { app: AppRow; meta: { label: string; accent: string }; statusKind: 'success' | 'info' | 'danger'; statusLabel: string }) {
   const mono = { fontFamily: 'var(--font-mono)', fontSize: 12.5 } as const;
+  // The app's REAL audit trail (created / active / failed+reason / deleted). Dev-preview
+  // shows a representative sample; a live deploy reads it from the worker.
+  const [events, setEvents] = useState<AppEvent[] | null>(null);
+  useEffect(() => {
+    if (DEV_MOCK) {
+      setEvents(mockEventsFor(app));
+      return;
+    }
+    let live = true;
+    api
+      .appEvents(app.app_scope_id)
+      .then((e) => live && setEvents(e))
+      .catch(() => live && setEvents([]));
+    return () => {
+      live = false;
+    };
+  }, [app.app_scope_id]);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -107,21 +125,47 @@ function Overview({ app, meta, statusKind, statusLabel }: { app: AppRow; meta: {
       </div>
       <div style={{ ...card, padding: 20, display: 'flex', flexDirection: 'column' }}>
         <Eyebrow style={{ paddingBottom: 12 }}>Activity</Eyebrow>
-        <Timeline
-          items={[
-            { dot: 'success', body: <>App activated</>, time: 'just now' },
-            { dot: 'info', body: <>Provisioning started</>, time: 'just now' },
-            { dot: 'neutral', body: <>Created by <span style={{ fontFamily: 'var(--font-mono)' }}>{app.created_by}</span></>, time: shortDate(app.created_at) },
-          ]}
-        />
-        <a href="#" style={{ fontSize: 12.5, marginTop: 14 }}>View full audit log</a>
+        {events === null ? (
+          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>Loading activity…</div>
+        ) : events.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>No activity recorded yet.</div>
+        ) : (
+          <Timeline items={events.map(toTimelineItem)} />
+        )}
       </div>
     </div>
   );
 }
 
-function Timeline({ items }: { items: Array<{ dot: 'success' | 'info' | 'neutral'; body: React.ReactNode; time: string }> }) {
-  const dotColor = { success: 'var(--status-success-dot)', info: 'var(--status-info-dot)', neutral: 'var(--status-neutral-dot)' };
+type TimelineDot = 'success' | 'info' | 'neutral' | 'danger';
+
+/** An app-event → a timeline row. `failed` carries the reason (the whole point of the audit trail). */
+function toTimelineItem(e: AppEvent): { dot: TimelineDot; body: React.ReactNode; time: string } {
+  const time = relativeTime(e.created_at);
+  switch (e.kind) {
+    case 'active':
+      return { dot: 'success', body: <>App active{e.detail ? <> · <span style={{ fontFamily: 'var(--font-mono)' }}>{e.detail}</span></> : null}</>, time };
+    case 'failed':
+      return { dot: 'danger', body: <>Provisioning failed{e.detail ? <> — {e.detail}</> : null}</>, time };
+    case 'deleted':
+      return { dot: 'neutral', body: <>Deleted</>, time };
+    case 'created':
+    default:
+      return { dot: 'info', body: <>Provisioning started{e.detail ? <> · <span style={{ fontFamily: 'var(--font-mono)' }}>{e.detail}</span></> : null}</>, time };
+  }
+}
+
+/** Dev-preview sample so the panel isn't empty without a backend. */
+function mockEventsFor(app: AppRow): AppEvent[] {
+  const base = { app_scope_id: app.app_scope_id, actor: app.created_by };
+  const events: AppEvent[] = [{ ...base, id: 'e1', kind: 'created', detail: app.vertical_slug, created_at: app.created_at }];
+  if (app.status === 'active') events.unshift({ ...base, id: 'e2', kind: 'active', detail: app.hostname, created_at: app.created_at });
+  if (app.status === 'failed') events.unshift({ ...base, id: 'e2', kind: 'failed', detail: 'no deployment is bound for vertical', created_at: app.created_at });
+  return events;
+}
+
+function Timeline({ items }: { items: Array<{ dot: TimelineDot; body: React.ReactNode; time: string }> }) {
+  const dotColor = { success: 'var(--status-success-dot)', info: 'var(--status-info-dot)', neutral: 'var(--status-neutral-dot)', danger: 'var(--status-danger-dot)' };
   return (
     <>
       {items.map((it, i) => (

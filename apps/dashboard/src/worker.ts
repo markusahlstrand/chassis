@@ -725,6 +725,19 @@ app.get('/api/apps', async (c) => {
   return c.json(await dash.invoke('dashboard/list-apps', {}));
 });
 
+/**
+ * One app's audit trail (Activity panel) — created / active / failed(+reason) / deleted.
+ * Read from the caller's OWN dashboard scope, so the events are naturally tenant-scoped:
+ * another tenant's app-scope-id has no events here.
+ */
+app.get('/api/apps/:scopeId/events', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  return c.json(await dash.invoke('dashboard/app-events', { appScopeId: c.req.param('scopeId') }));
+});
+
 /** Create an app — provisioned into MY tenant (from the session), authorized in-scope. */
 app.post('/api/apps', async (c) => {
   const host = hostFor(c.env);
