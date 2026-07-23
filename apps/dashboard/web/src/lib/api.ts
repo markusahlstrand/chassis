@@ -182,6 +182,7 @@ export const api = {
   createApp: (input: { verticalSlug: string; name: string }) =>
     call<AppRow>('/apps', { method: 'POST', body: JSON.stringify(input) }),
   deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  retryApp: (scopeId: string) => call<AppRow>(`/apps/${encodeURIComponent(scopeId)}/retry`, { method: 'POST' }),
   listDeployments: () => call<Deployment[]>('/deployments'),
   promoteDeployment: (slug: string, channel: 'dev' | 'staging', versionId: string) =>
     call<void>(`/deployments/${encodeURIComponent(slug)}/promote`, {

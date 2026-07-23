@@ -8,6 +8,7 @@ export {
   provisionDashboard,
   createApp,
   deprovisionApp,
+  retryApp,
   MODULES,
   ROLES,
   VERTICAL,

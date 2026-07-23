@@ -250,6 +250,33 @@ export function App() {
     [reloadApps],
   );
 
+  const retryingRef = useRef(false);
+  const retryApp = useCallback(
+    async (scopeId: string) => {
+      // Guard the double-click, same as delete.
+      if (retryingRef.current) return;
+      retryingRef.current = true;
+      try {
+        if (DEV_MOCK) {
+          setApps((a) => a.map((x) => (x.app_scope_id === scopeId ? { ...x, status: 'provisioning' } : x)));
+        } else {
+          await api.retryApp(scopeId);
+          await reloadApps();
+        }
+        go('#/apps');
+        setToast({ status: 'success', title: 'Retrying', detail: 'Re-provisioning the app — it will update in your grid as it comes up.' });
+      } catch (e) {
+        // A retry that still fails re-marks the row failed and surfaces the REAL error.
+        await reloadApps().catch(() => {});
+        go('#/apps');
+        setToast({ status: 'danger', title: 'Retry failed', detail: e instanceof Error ? e.message : String(e) });
+      } finally {
+        retryingRef.current = false;
+      }
+    },
+    [reloadApps],
+  );
+
   const promoteDeployment = useCallback(
     async (slug: string, versionId: string, channel: 'dev' | 'staging') => {
       if (promoting) return;
@@ -475,7 +502,7 @@ export function App() {
       ) : route.section === 'apps' && route.app ? (
         <NotFound label="That app could not be found." onBack={() => go('#/apps')} />
       ) : route.section === 'overview' || route.section === 'apps' ? (
-        <Apps apps={apps} onCreate={() => go('#/apps/new')} onOpen={(s) => go(`#/apps/${s}/overview`)} onRetry={(s) => setToast({ status: 'danger', title: 'Retry not wired yet', detail: s })} />
+        <Apps apps={apps} onCreate={() => go('#/apps/new')} onOpen={(s) => go(`#/apps/${s}/overview`)} onRetry={(s) => void retryApp(s)} />
       ) : route.section === 'deployments' ? (
         <Deployments deployments={deployments} onPromote={(slug, vid, ch) => void promoteDeployment(slug, vid, ch)} busy={promoting} />
       ) : route.section === 'team' ? (

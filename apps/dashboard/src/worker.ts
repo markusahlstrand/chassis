@@ -29,7 +29,7 @@ import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
 import { meridianModule, HR_PERM } from '@substrat-run/demo-meridian/module';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
-import { createApp, deprovisionApp, provisionDashboard, type DashboardNode } from './provision.js';
+import { createApp, deprovisionApp, retryApp, provisionDashboard, type DashboardNode } from './provision.js';
 import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 import { transportFor, senderFor, teamInviteEmail } from './email.js';
@@ -734,6 +734,42 @@ app.delete('/api/apps/:id', async (c) => {
     controlPlane: controlPlaneFor(c.env, node.tenantId) ?? undefined,
   });
   return c.body(null, 204);
+});
+
+/**
+ * Retry a FAILED app — re-attempt provisioning for real. A first attempt can leave
+ * a half-provisioned scope (e.g. the directory row landed but the vertical instance
+ * didn't), so we best-effort tear that down, then re-provision fresh under a new
+ * scope with the same vertical + name via the proven create path. That path marks
+ * the row `failed` again and surfaces the REAL error if it still can't come up, so
+ * Retry re-tries instead of showing a placeholder. Only a `failed` app is retryable;
+ * the app must be one of the caller's own (list-apps is tenant-scoped).
+ */
+app.post('/api/apps/:scopeId/retry', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  if (appRow.status !== 'failed') throw new HTTPException(409, { message: 'only a failed app can be retried' });
+  const entry = CATALOG[appRow.vertical_slug];
+  if (!entry) throw new HTTPException(400, { message: `unknown vertical '${appRow.vertical_slug}'` });
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  const appRowNew = await retryApp(host, {
+    node,
+    failedScopeId: scopeId.parse(appRow.app_scope_id),
+    hostname: appRow.hostname,
+    newScopeId: scopeId.parse(ulid()),
+    verticalSlug: appRow.vertical_slug,
+    name: appRow.name,
+    appEntitlements: entry.entitlements,
+    appOwnerGrants: entry.ownerGrants,
+    controlPlane: controlPlaneFor(c.env, node.tenantId) ?? undefined,
+    tenantName: user?.name ?? user?.email ?? 'Workspace',
+  });
+  return c.json(appRowNew, 201);
 });
 
 /**

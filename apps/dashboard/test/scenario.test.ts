@@ -15,6 +15,7 @@ import {
   provisionDashboard,
   createApp,
   deprovisionApp,
+  retryApp,
   type DashboardAppRow,
   type DashboardNode,
 } from '../src/index.js';
@@ -124,6 +125,54 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
     const apps = await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {});
     expect(apps.find((a) => a.app_scope_id === failScopeId)?.status).toBe('failed');
+  });
+
+  it('retrying a failed app tears down the failed attempt and provisions a fresh, active one', async () => {
+    const acme = await bootstrap('acme-retry');
+    const failScopeId = scopeId.parse(ulid());
+    // First attempt fails at the very first control-plane call → row is `failed`.
+    const failingCp = {
+      tenantId: acme.tenantId,
+      ensureTenant: () => Promise.reject(new Error('boom')),
+    } as unknown as Parameters<typeof createApp>[1]['controlPlane'];
+    await expect(
+      createApp(host, {
+        node: acme,
+        appScopeId: failScopeId,
+        verticalSlug: 'meridian',
+        name: 'People',
+        appEntitlements: ['meridian', 'protocol'],
+        appOwnerGrants: [HR_PERM.absenceConfigure] as PermissionKey[],
+        controlPlane: failingCp,
+      }),
+    ).rejects.toThrow('boom');
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    expect((await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {})).find((a) => a.app_scope_id === failScopeId)?.status).toBe('failed');
+
+    // Retry (embedded — no failing plane) → a fresh, active app; the failed row is gone.
+    const retried = await retryApp(host, {
+      node: acme,
+      failedScopeId: failScopeId,
+      hostname: null,
+      newScopeId: scopeId.parse(ulid()),
+      verticalSlug: 'meridian',
+      name: 'People',
+      appEntitlements: ['meridian', 'protocol'],
+      appOwnerGrants: [HR_PERM.absenceConfigure, HR_PERM.absenceRead, HR_PERM.employeeManage] as PermissionKey[],
+    });
+    expect(retried.status).toBe('active');
+    expect(retried.vertical_slug).toBe('meridian');
+
+    const apps = await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {});
+    // Only the fresh app is listed (the failed one soft-deleted on retry), and it's active.
+    expect(apps).toHaveLength(1);
+    expect(apps[0]!.app_scope_id).toBe(retried.app_scope_id);
+    expect(apps[0]!.status).toBe('active');
+
+    // ...and the fresh scope is LIVE — a real HR op resolves for the owner.
+    const appScope = await host.getScope(acme.principal, acme.tenantId, scopeId.parse(retried.app_scope_id));
+    await appScope.invoke('hr/define-leave-type', { key: 'vacation', label: 'Vacation', kind: 'vacation', annualDays: '25' });
+    expect(await appScope.invoke('hr/list-leave-types', {})).toHaveLength(1);
   });
 
   it('deleting an app deprovisions its scope and drops it from the list (record retained)', async () => {
