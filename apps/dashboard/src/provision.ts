@@ -8,25 +8,31 @@ import {
   type TenantId,
 } from '@substrat-run/contracts';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
-import { DASHBOARD_PERM, dashboardModule, type DashboardAppRow } from './module.js';
+import { invitesModule } from '@substrat-run/engine-invites';
+import { MEMBER_ROLES, dashboardModule, type DashboardAppRow } from './module.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 
 /** This vertical's slug and the DO/entitlement key it registers under. */
 export const VERTICAL = 'dashboard';
 
-export const MODULES = [dashboardModule];
+/**
+ * The dashboard vertical composes the invites engine (star topology, never a fork):
+ * team invitations are the engine's hashed, accept-required state machine, driven by
+ * the dashboard's own member operations. Both modules run in the dashboard scope.
+ */
+export const MODULES = [dashboardModule, invitesModule];
 
 /**
- * The account owner — the tenant admin. Holds the keys to provision and manage
- * apps in their own tenant. Members (a later milestone) get a narrower subset.
+ * The team roles, rendered from `MEMBER_ROLES` (module.ts) so the checkpoint artifact
+ * (PERMISSIONS.md) and the runtime `assignRole` set agree by construction. `owner` is
+ * the un-removable first member; `admin` manages the team; `member` runs apps; `viewer`
+ * is read-only. The invite flow enforces the §5.1 "assign only what you hold" bound.
  */
-export const ROLES: RoleDefinition[] = [
-  {
-    key: 'owner',
-    permissions: [DASHBOARD_PERM.provisionApp, DASHBOARD_PERM.read] as PermissionKey[],
-    source: 'vertical',
-  },
-];
+export const ROLES: RoleDefinition[] = Object.entries(MEMBER_ROLES).map(([key, permissions]) => ({
+  key,
+  permissions: permissions as PermissionKey[],
+  source: 'vertical',
+}));
 
 /** The customer's dashboard node + who they are — everything an app action needs, all ambient. */
 export interface DashboardNode {
@@ -49,6 +55,9 @@ export async function provisionDashboard(
   const staff = platformActorId.parse(ulid());
   await host.admin.createTenant(staff, { id: input.tenantId, slug: input.slug, name: input.name });
   await host.admin.grantEntitlement(staff, input.tenantId, VERTICAL);
+  // The invites engine runs in this scope (team invitations); its ops resolve only
+  // for a tenant holding the 'invites' entitlement (default-deny), so grant it too.
+  await host.admin.grantEntitlement(staff, input.tenantId, 'invites');
   await host.provisionScope(staff, {
     tenantId: input.tenantId,
     scopeId: input.scopeId,

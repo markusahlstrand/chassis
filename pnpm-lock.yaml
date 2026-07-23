@@ -109,6 +109,9 @@ importers:
       '@substrat-run/demo-callout':
         specifier: workspace:^
         version: link:../../demos/callout
+      '@substrat-run/engine-invites':
+        specifier: workspace:^
+        version: link:../../engines/invites
       '@substrat-run/engine-invoicing':
         specifier: workspace:^
         version: link:../../engines/invoicing
