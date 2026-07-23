@@ -10,13 +10,14 @@
     "./module": "./src/module.ts"
   },
   "scripts": {
+    "gen:assets": "node scripts/gen-assets.mjs",
+    "pretypecheck": "node scripts/gen-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "vitest run",
     "server": "tsx src/server.ts",
     "dev": "concurrently -n api,app -c blue,green \"ALLOW_DEV_HEADER=true tsx src/server.ts\" \"pnpm --dir app dev\"",
-    "cf:dev": "pnpm --dir app build && wrangler dev --var STANDALONE:true --var ALLOW_DEV_HEADER:true",
-    "cf:deploy": "node ../../tools/preflight-migrations.mjs && pnpm --dir app build && wrangler deploy",
-    "cf:dry-run": "pnpm --dir app build && wrangler deploy --dry-run --outdir dist-worker"
+    "cf:dev": "wrangler dev --var ALLOW_DEV_HEADER:true",
+    "cf:dry-run": "wrangler deploy --dry-run --outdir dist-worker"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

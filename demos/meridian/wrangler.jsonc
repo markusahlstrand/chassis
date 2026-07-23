@@ -5,10 +5,29 @@
 	// Better Auth (end-user sign-in) needs Node built-ins on workerd.
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
-	// Better Auth's edge store — end-user identity/credentials/sessions, separate
-	// from the directory DO. Apply migrations/0001_better_auth.sql before deploy:
+	// Build the SPA and inline it into the worker BEFORE bundling. Wrangler runs this on
+	// every `wrangler dev` / `--dry-run` — including the `--dry-run` a `substrat push`
+	// performs — so a push always ships the current UI with no extra step. A sandbox-clean
+	// vertical has no ASSETS binding (WfP static assets are a separate upload path), so the
+	// SPA rides along as ordinary worker modules (src/assets.generated.ts).
+	"build": {
+		"command": "pnpm --dir app build && node scripts/gen-assets.mjs"
+	},
+	// A SANDBOX-CLEAN, control-plane-less vertical (scope-local-permissions.md Phase 3):
+	// its ONLY bindings are its own SCOPE DO class and AUTH_DB. No CONTROL_PLANE binding,
+	// no service binding to a platform worker, no ASSETS binding — assertSandboxContract
+	// (control-plane-api/deploy.ts) refuses those, and the push would be rejected. The
+	// router asserts the node; permissions evaluate from each scope's own storage.
+	"durable_objects": {
+		"bindings": [
+			{ "name": "SCOPE", "class_name": "ScopeDO" }
+		]
+	},
+	// Better Auth's own store (identity, credentials, sessions) — separate from the scope
+	// DOs. It also holds the CP-less identity binding: `user.principal_id`, the kernel
+	// PrincipalId a login resolves to (migrations/0002). Local D1 is created automatically
+	// under `wrangler dev`. Before a real push, apply migrations:
 	//   wrangler d1 migrations apply substrat-meridian-auth   (--local for dev)
-	// database_id is a placeholder for local dev; set the real one before deploy.
 	"d1_databases": [
 		{
 			"binding": "AUTH_DB",
@@ -17,48 +36,17 @@
 			"migrations_dir": "migrations"
 		}
 	],
-	"durable_objects": {
-		"bindings": [
-			// One ScopeDO per scope (kernel + protocol engine + Meridian module bundled),
-			// and this vertical's own directory. Self-contained for now; wiring to the
-			// SHARED control plane (script_name binding / connected mode) is a later stage.
-			{ "name": "SCOPE", "class_name": "ScopeDO" },
-			{ "name": "CONTROL_PLANE", "class_name": "ControlPlaneDO" }
-		]
-	},
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": ["ScopeDO", "ControlPlaneDO"]
+			"new_sqlite_classes": ["ScopeDO"]
 		}
-	],
-	// Serve the built employee SPA (app/dist) from the same origin as the API.
-	// run_worker_first sends every request to the Worker first (it owns /api/* and
-	// /internal/*); the catch-all delegates the rest to ASSETS with SPA fallback.
-	"assets": {
-		"directory": "./app/dist",
-		"binding": "ASSETS",
-		"not_found_handling": "single-page-application",
-		"run_worker_first": true
-	},
-	// The poll-path timer (#96): one platform sweep per tick drains due deliveries
-	// (outbound Scrive dispatch + executor retries) and reconciles live connections.
-	// This is what the node runtime got from setInterval.
-	"triggers": { "crons": ["*/2 * * * *"] },
-
-	// Connected mode (first-flow.md slice 4): reach the SHARED control plane so the
-	// portal provisions into this vertical and a suspend there gates requests here.
-	// The service binding is how worker-to-worker calls reach it (a same-zone
-	// workers.dev fetch is blocked, Cloudflare 1042). Omit both for a self-contained
-	// / `wrangler dev` box. Also needs `wrangler secret put SERVICE_TOKEN` (matching
-	// the control plane's) and `PLATFORM_SECRET` / `ROUTER_SECRET` (matching theirs).
-	"vars": {
-		"CONTROL_PLANE_URL": "https://substrat-control-plane.ahlstrand.workers.dev/api"
-	},
-	"services": [
-		{ "binding": "CONTROL_PLANE_SVC", "service": "substrat-control-plane" }
 	]
-	// ALLOW_DEV_HEADER / STANDALONE are set by `pnpm cf:dev` for local use only, so a
-	// real `wrangler deploy` stays fail-closed. Scrive creds + CONNECTION_SECRET_KEY
-	// are `wrangler secret put`, never checked in.
+	// Secrets on deploy (`wrangler secret put …` / injected by the platform on push):
+	//   ROUTER_SECRET    — the router's, gates the routed request path (K-26)
+	//   PLATFORM_SECRET  — the control plane's, gates /internal/provision + /internal/link (K-31)
+	// No SERVICE_TOKEN / CONTROL_PLANE_URL — a CP-less vertical calls no control plane.
+	// ALLOW_DEV_HEADER is set by `pnpm cf:dev` for local use only, so a real deploy stays
+	// fail-closed. Scrive is NOT wired in the pushed worker (its reconcile cron cannot run
+	// as a dispatch user-worker) — it remains a standalone-mode feature.
 }
