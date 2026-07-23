@@ -6,6 +6,7 @@ import { Expenses, Home, Me, TimeOff, TimesheetScreen, type FlowKind } from './s
 import { LogTime, Onboarding, RequestLeave, SubmitExpense } from './flows';
 import { Inbox, OnboardingView, Team, TeamCalendar, Timesheets } from './manage';
 import { ADMIN_TABS, AdminLeaveTypes, AdminPayroll, AdminPeople, AdminProjects, AdminSetup, type AdminTab } from './admin';
+import { SignIn } from './auth';
 
 type WorkTab = 'home' | 'timeoff' | 'timesheet' | 'expenses' | 'me';
 type ManageTab = 'inbox' | 'calendar' | 'timesheets' | 'onboarding' | 'team';
@@ -44,7 +45,7 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>((localStorage.getItem('meridian.theme') as Theme) ?? 'system');
   const [toast, setToast] = useState<string | null>(null);
 
-  const { data: empData, loading, error, reload: reloadEmp } = useAppData(personaKey);
+  const { data: empData, loading, error, unauthorized, reload: reloadEmp } = useAppData(personaKey);
   const me = empData?.me ?? null;
   const hasMyWork = !!me?.employeeId;
   const canManage = me?.role === 'manager' || me?.role === 'hr-admin';
@@ -175,6 +176,9 @@ export default function App() {
     : flow === 'onboarding' && empData?.onboarding ? <Onboarding d={empData} onClose={() => setFlow(null)} onDone={done} />
     : null;
 
+  // No session (hosted instance, not signed in) → the sign-in/sign-up screen. On success
+  // it reloads and /api/me resolves (the first sign-in claims the owner seat → hr-admin).
+  if (unauthorized) return <SignIn onDone={() => window.location.reload()} />;
   if (loading && !empData) return <div className="phone"><Centered>Loading…</Centered></div>;
   if (error && !empData) return <div className="phone"><Centered>{error}</Centered></div>;
   if (me && !hasMyWork && !canManage) {

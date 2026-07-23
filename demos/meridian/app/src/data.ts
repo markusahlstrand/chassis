@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   api,
+  ApiError,
   type Balance,
   type Expense,
   type LeaveRequest,
@@ -35,6 +36,8 @@ export interface Loaded {
   data: AppData | null;
   loading: boolean;
   error: string | null;
+  /** The caller has no session — show the sign-in screen rather than an error. */
+  unauthorized: boolean;
   reload: () => void;
 }
 
@@ -43,11 +46,13 @@ export function useAppData(personaKey: string): Loaded {
   const [data, setData] = useState<AppData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unauthorized, setUnauthorized] = useState(false);
 
   const reload = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setUnauthorized(false);
     (async () => {
       try {
         const me = await api.me();
@@ -91,7 +96,8 @@ export function useAppData(personaKey: string): Loaded {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+          if (e instanceof ApiError && e.status === 401) setUnauthorized(true);
+          else setError(e instanceof Error ? e.message : String(e));
           setLoading(false);
         }
       }
@@ -103,7 +109,7 @@ export function useAppData(personaKey: string): Loaded {
 
   useEffect(() => reload(), [reload]);
 
-  return { data, loading, error, reload };
+  return { data, loading, error, unauthorized, reload };
 }
 
 export interface ManagerData {
