@@ -1,5 +1,107 @@
 # @substrat-run/demo-fsm
 
+## 0.1.0
+
+### Minor Changes
+
+- f5933ec: **Callout bundles its SPA into the worker — no `ASSETS` binding (the pushable-vertical UI).**
+
+  A pushed, sandbox-clean vertical can't serve static assets through a binding — Workers-for-Platforms uploads assets via a separate blake3 upload-session. So Callout now inlines its built SPA into the worker and serves it itself, reusing the module-upload path `substrat push` already has.
+
+  - **`scripts/gen-assets.mjs`** reads `app/dist` and generates `src/assets.generated.ts` (each file inlined as UTF-8 or base64). **`src/assets.ts`** serves it: exact-file hit, else SPA fallback to `index.html`, else 404 for a missing path that looks like a file. The worker's catch-all calls `serveAsset` instead of `env.ASSETS.fetch`.
+  - **`wrangler.jsonc` `build.command`** = `pnpm --dir app build && node scripts/gen-assets.mjs`, so wrangler regenerates the UI before every bundle — including the `--dry-run` a `substrat push` runs — with no extra step. `pretypecheck` regenerates for tsc (an empty map when `app/dist` is absent, so CI stays green). The generated file is gitignored.
+  - **Dropped the `assets` binding.** The worker's only bindings are now its own `SCOPE` DO and `AUTH_DB` — both a vertical's own stores, both allowed by the §4 sandbox contract.
+  - **`wrangler.example.jsonc` brought in sync** with the CP-less design it had drifted from (it still showed `CONTROL_PLANE`, the `assets` binding, and `STANDALONE`); it now documents the push-based deploy.
+
+  Verified: `demo-callout` typechecks (node + worker), the scenario + provision suites pass (16 tests), and `wrangler deploy --dry-run` bundles the worker — build command running the app build + asset inline — with exactly `SCOPE` + `AUTH_DB` and no `ASSETS`.
+
+- 9a34950: **Scope-local permissions, Phase 3b — Callout runs CP-less (docs/design/scope-local-permissions.md).**
+
+  The first vertical on the control-plane-optional host (Phase 3a): the deployed Callout worker drops its `CONTROL_PLANE` bindings entirely and evaluates permissions from each scope's own storage. It is now a **sandbox-clean, pushable vertical** — the shape an untrusted self-serve deploy takes.
+
+  - **`hostFor` builds `new CloudflareScopeHost({ scope: env.SCOPE })`** — no control plane. `/internal/provision` calls **`provisionScopeLocal`** (migrate the scope's modules, project the role table locally, grant the owner `office-admin` at scope level); the shared plane already owns the tenant/scope directory row + entitlements (the dashboard wrote them before calling), so the vertical sets up only the scope's own state.
+  - **The request path trusts the router-asserted node.** Lifecycle is the router's gate — it resolves the hostname against the shared directory and forwards only an active scope. The connected-mode per-request `assertScopeActive` gate is gone; there is no directory to reach.
+  - **Identity goes CP-less via an injectable `IdentityDirectory`.** The node demo keeps the CP-backed directory (`resolveIdentity`/`linkIdentity`) unchanged; the worker uses a **D1-user-row directory** — `user.principal_id` (migration `0002_principal_binding.sql`) holds the id→principal binding the control plane used to. First login mints a principal, grants it `technician` at scope level (works with no control plane), and writes the binding back.
+  - **`wrangler.jsonc` is sandbox-clean:** only `SCOPE` (its own DO) + `AUTH_DB` + `ASSETS`. No `CONTROL_PLANE` DO binding, no `CONTROL_PLANE_SVC` service binding, no `ControlPlaneDO` migration class, no control-plane vars/secrets — the bindings a pushed vertical is allowed to declare (`assertSandboxContract`).
+  - **Removed `/api/seed`** (the connected-mode demo seeder — every call it made now throws under the null control plane). The demo world's canonical exercise stays the self-contained SQLite scenario test; the live path is dashboard create-instance → `/internal/provision`.
+
+  Verified: `demo-callout` typechecks under both the node and worker tsconfigs, the scenario + provision suites pass (16 tests), boundary-lint + the permission snapshot hold, and `wrangler deploy --dry-run` bundles the worker for the edge with exactly `SCOPE` / `AUTH_DB` / `ASSETS`.
+
+### Patch Changes
+
+- 847b506: **The Dashboard provisions REAL, reachable apps — the tenant-narrowed authority seam (dashboard.md §4/§6).**
+
+  M0 ran apps inside the Dashboard's own deployment and bound hostnames in its own directory, so nothing it created was reachable through the router. This wires the production path: the Dashboard provisions on the SHARED control plane the router reads, narrowed to the caller's own tenant.
+
+  - **The §4 seam** (`apps/dashboard/src/authority.ts`, new) — `TenantNarrowedControlPlane`: the control-plane API over an injected `fetch` (a service binding to `substrat-control-plane`), with `tenantId` **pinned at construction** from the caller's dashboard node. The tenant is not a parameter of any method, so operation code cannot name another — cross-tenant is impossible by construction (the #97 move). Machine auth is a shared `SERVICE_TOKEN` → the control plane's service actor. Unit-tested: pins the tenant on every route, tolerates idempotent conflicts, surfaces real failures.
+  - **`createApp` gains a connected mode** (`provision.ts`): when a control-plane seam is present it mirrors the operator console's proven create-instance sequence — `provisionScope` (directory row) → `provisionInstance` (the vertical creates the scope + grants entitlements + assigns the owner) → `activateScope` → bind `<slug>.global.substrat.run` — so the app is a real vertical instance the router resolves. Absent the seam it keeps the M0 embedded path (tests, standalone). The permission check ("can they?") runs the same in both, first.
+  - **The worker** builds the seam from a new `CONTROL_PLANE_SVC` service binding + `CP_SERVICE_TOKEN` secret, pinned to the caller's tenant; falls back to embedded when unbound.
+  - **Reaching a vertical**: the control plane + router resolve verticals **dynamically** through the WfP dispatch namespace (`resolveVertical`/`verticalFor` → `env.DISPATCH.get(deploymentRef)`); the dashboard's connected `createApp` pins the scope to the prod version (`bindScopeVersion`) so dispatch is dynamic — no per-vertical service binding, no redeploy. `demos/callout`'s `CONTROL_PLANE_URL` is neutralized (calls go over the service binding; only the `/api` path is used).
+
+  Steps 3–4 (router, `*.global.substrat.run` DNS + ACM cert) were already live; this is step 5 — the tenant-narrowed provisioning seam. Requires a deploy of the control plane + dashboard (`CP_SERVICE_TOKEN` = the control plane's `SERVICE_TOKEN`). A vertical is instantiable once it's pushed + promoted into the dispatch namespace; making Callout the first genuinely isolated, CP-less vertical is tracked in `docs/design/scope-local-permissions.md`. Verified in code (10/10 dashboard tests, typecheck, boundary-lint, wrangler dry-runs).
+
+- f2428a9: **The Dashboard UI — the tenant-facing surface, built from the design review (docs/design/dashboard-ui.md).**
+
+  "Vercel, for Substrat" as a real React app, on the same design system as the operator console.
+
+  - **Shared `@substrat-run/ui`** — the design-system primitives (Button, Input, Table, SideNav,
+    Dialog, tokens, `styles.css`, icons) EXTRACTED from `apps/console` into a source-only workspace
+    package (no build step; the Vite apps transpile it). The console now re-exports it through a thin
+    `components` barrel + `@import "@substrat-run/ui/styles.css"` — its `../components` import paths
+    are unchanged, so this is an internal refactor with no behaviour change.
+  - **`@substrat-run/dashboard-web`** — a new Vite + React SPA (`apps/dashboard/web`), hash-routed,
+    every screen from the handoff: sign-in, onboarding, Apps grid/list, Create App (Git import /
+    marketplace / CLI), App Detail (Overview + Deployments / Env Vars / Domains / Integrations /
+    Settings tabs), Team + roles matrix, Domains, Integrations, Billing, Analytics, Settings, plus
+    the ⌘K palette, notifications, an account menu, dark mode, and the shell. **M0 is wired** to the
+    real worker API (`/api/me`, `/api/catalog`, `/api/apps`); M1–M3 + future screens run on demo data
+    behind the design's honesty banners. A `VITE_DEV_MOCK` preview mode (mirroring the console's
+    `VITE_DEV_ACTOR` seam) renders the demo tenant without OIDC; `?theme=`/`?menu=` aid screenshots.
+  - **`@substrat-run/dashboard` worker** now **serves the SPA** as Workers static assets
+    (`run_worker_first: ["/api/*"]` + `single-page-application` fallback) instead of the old inline
+    page (deleted); `/api/me` also surfaces the signed-in email/name for the shell.
+  - **The catalog offers a real Callout**, not just Documents. The worker bundles the Callout
+    vertical's modules via a new worker-safe `@substrat-run/demo-callout/module` subpath (just
+    `calloutModule` + `SC_PERM`, never the seed/auth) plus `workorder` + `invoicing`. `createApp`
+    grants the three-engine SKU + the office-admin owner grants and **binds a default hostname**
+    `<slug>.<jurisdiction>.substrat.run` (K-30 → `callout.global.substrat.run`), best-effort, recorded
+    on the app row. M0 stand-in: production deploys Callout separately (dashboard.md §6 — router + DNS
+    - ACM + control-plane `provisionInstance`), and per master-plan D-33 a demo is COPIED as a
+      template, not imported.
+
+  Verified: 4/4 dashboard scenario tests (incl. a new one provisioning a real Callout scope at
+  `callout.global.substrat.run` and driving a live engine op), console + web typecheck, boundary-lint,
+  builds, `wrangler --dry-run`, and a live local worker serving the SPA + returning Callout in the
+  catalog.
+
+  **Remaining (beyond this PR):** the router reading the directory, `*.substrat.run` DNS + ACM cert,
+  and provisioning each app as a separate deployment via the control plane — until then a bound
+  hostname is recorded but does not yet resolve.
+
+- Updated dependencies [05291fa]
+- Updated dependencies [73c0cdb]
+- Updated dependencies [1dff2bd]
+- Updated dependencies [7070588]
+- Updated dependencies [66e752b]
+- Updated dependencies [cedaf1a]
+- Updated dependencies [097a3aa]
+- Updated dependencies [0de890b]
+- Updated dependencies [d5a7d5e]
+- Updated dependencies [66e752b]
+- Updated dependencies [aa786b7]
+- Updated dependencies [d83f521]
+- Updated dependencies [0ae7d0f]
+- Updated dependencies [518ea07]
+- Updated dependencies [0572a3b]
+  - @substrat-run/control-plane-api@0.12.0
+  - @substrat-run/contracts@0.12.0
+  - @substrat-run/adapter-cloudflare@0.12.0
+  - @substrat-run/adapter-sqlite@0.12.0
+  - @substrat-run/kernel@0.12.0
+  - @substrat-run/engine-protocol@0.4.3
+  - @substrat-run/engine-workorder@0.3.9
+  - @substrat-run/engine-invoicing@0.3.9
+
 ## 0.0.12
 
 ### Patch Changes
