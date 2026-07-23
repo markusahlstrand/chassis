@@ -55,10 +55,9 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // projects, approve leave/expenses, and drive onboarding contracts from day one.
   meridian: {
     name: 'Meridian',
-    // Bundled here so embedded (tests/standalone) can provision it, but NOT yet deployed
-    // to the shared control plane's dispatch namespace — so the hosted catalog hides it
-    // until it is. Flip to true (or drop) once Meridian is pushed + promoted to prod.
-    connected: false,
+    // Deployed to the shared control plane's dispatch namespace and promoted to prod, so the
+    // hosted catalog now offers it. (Was `connected: false` while it wasn't yet deployable.)
+    connected: true,
     entitlements: ['meridian', 'protocol'],
     ownerGrants: [
       HR_PERM.employeeManage, HR_PERM.absenceConfigure, HR_PERM.absenceApprove, HR_PERM.absenceRead,
