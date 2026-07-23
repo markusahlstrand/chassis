@@ -125,16 +125,23 @@ export function App() {
   const createApp = useCallback(
     async (input: { verticalSlug: string; name: string }) => {
       let name = input.name;
-      if (DEV_MOCK) {
-        const row: AppRow = { id: String(Date.now()), app_scope_id: `01J${Date.now()}`, vertical_slug: input.verticalSlug, name, status: 'provisioning', hostname: null, created_by: MOCK_ME.email!, created_at: new Date().toISOString() };
-        setApps((a) => [row, ...a]);
-      } else {
-        const row = await api.createApp(input);
-        name = row.name;
-        await reloadApps();
+      try {
+        if (DEV_MOCK) {
+          const row: AppRow = { id: String(Date.now()), app_scope_id: `01J${Date.now()}`, vertical_slug: input.verticalSlug, name, status: 'provisioning', hostname: null, created_by: MOCK_ME.email!, created_at: new Date().toISOString() };
+          setApps((a) => [row, ...a]);
+        } else {
+          const row = await api.createApp(input);
+          name = row.name;
+          await reloadApps();
+        }
+        go('#/apps');
+        setToast({ status: 'success', title: `${name} is provisioning`, detail: 'It will appear in your grid as it comes up.' });
+      } catch (e) {
+        // The row (if any) is now `failed`, not silently `provisioning` — surface why.
+        await reloadApps().catch(() => {});
+        go('#/apps');
+        setToast({ status: 'danger', title: `Couldn’t create ${name}`, detail: e instanceof Error ? e.message : String(e) });
       }
-      go('#/apps');
-      setToast({ status: 'success', title: `${name} is provisioning`, detail: 'It will appear in your grid as it comes up.' });
     },
     [reloadApps],
   );

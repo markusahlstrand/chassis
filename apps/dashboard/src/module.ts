@@ -142,6 +142,28 @@ const markAppActiveOp: OperationHandler<z.infer<typeof markAppActiveInput>, Dash
   return row;
 };
 
+const markAppFailedInput = z.object({ appScopeId: z.string().min(1) });
+
+/**
+ * Flip an app to `failed` when provisioning didn't complete (the vertical refused, a
+ * hostname wouldn't bind, …). Same authority as creating it. Guarded to only move a
+ * `provisioning` row, so it never clobbers an app that did come up. Without this a
+ * failed create leaves the row silently at `provisioning` — indistinguishable from
+ * "still coming up".
+ */
+const markAppFailedOp: OperationHandler<z.infer<typeof markAppFailedInput>, DashboardAppRow> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.provisionApp));
+  const input = markAppFailedInput.parse(raw);
+  ctx.sql.exec("UPDATE dashboard_apps SET status = 'failed' WHERE app_scope_id = ? AND status = 'provisioning'", [
+    input.appScopeId,
+  ]);
+  const row = ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps WHERE app_scope_id = ?', [
+    input.appScopeId,
+  ])[0];
+  if (!row) throw new Error(`no app for scope ${input.appScopeId}`);
+  return row;
+};
+
 /** The account's apps — a plain read, gated by `dashboard:read`. Deleted apps are hidden. */
 const listAppsOp: OperationHandler<Record<string, never>, DashboardAppRow[]> = async (ctx) => {
   assertAllowed(await ctx.check(DASHBOARD_PERM.read));
@@ -178,6 +200,7 @@ export const dashboardModule: ModuleRegistration = {
   operations: {
     'dashboard/provision-app': provisionAppOp as OperationHandler<never, unknown>,
     'dashboard/mark-app-active': markAppActiveOp as OperationHandler<never, unknown>,
+    'dashboard/mark-app-failed': markAppFailedOp as OperationHandler<never, unknown>,
     'dashboard/list-apps': listAppsOp as OperationHandler<never, unknown>,
     'dashboard/delete-app': deleteAppOp as OperationHandler<never, unknown>,
   },
