@@ -65,6 +65,15 @@ export const dashboardMigrations = [
       );
     `,
   },
+  {
+    version: '0002-app-deleted',
+    sql: `
+      -- Soft delete: deleting an app deprovisions its scope but keeps the record
+      -- (the account's audit history is retained). A non-null timestamp hides the
+      -- row from list-apps; the status enum is left alone so no table rebuild.
+      ALTER TABLE dashboard_apps ADD COLUMN deleted_at TEXT;
+    `,
+  },
 ];
 
 export interface DashboardAppRow {
@@ -76,6 +85,7 @@ export interface DashboardAppRow {
   hostname: string | null;
   created_by: string;
   created_at: string;
+  deleted_at: string | null;
 }
 
 // -- operations --------------------------------------------------------------
@@ -132,10 +142,34 @@ const markAppActiveOp: OperationHandler<z.infer<typeof markAppActiveInput>, Dash
   return row;
 };
 
-/** The account's apps — a plain read, gated by `dashboard:read`. */
+/** The account's apps — a plain read, gated by `dashboard:read`. Deleted apps are hidden. */
 const listAppsOp: OperationHandler<Record<string, never>, DashboardAppRow[]> = async (ctx) => {
   assertAllowed(await ctx.check(DASHBOARD_PERM.read));
-  return ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps ORDER BY created_at DESC');
+  return ctx.sql.query<DashboardAppRow>(
+    'SELECT * FROM dashboard_apps WHERE deleted_at IS NULL ORDER BY created_at DESC',
+  );
+};
+
+const deleteAppInput = z.object({ appScopeId: z.string().min(1) });
+
+/**
+ * Soft-delete an app's record (same authority as creating it). The scope is
+ * deprovisioned by the app layer afterwards (deprovisionApp in provision.ts); this
+ * only stamps `deleted_at` so the row drops out of `list-apps` while the record —
+ * the account's audit history — is retained. Idempotent: a second delete is a no-op.
+ */
+const deleteAppOp: OperationHandler<z.infer<typeof deleteAppInput>, DashboardAppRow> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.provisionApp));
+  const input = deleteAppInput.parse(raw);
+  ctx.sql.exec('UPDATE dashboard_apps SET deleted_at = ? WHERE app_scope_id = ? AND deleted_at IS NULL', [
+    new Date().toISOString(),
+    input.appScopeId,
+  ]);
+  const row = ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps WHERE app_scope_id = ?', [
+    input.appScopeId,
+  ])[0];
+  if (!row) throw new Error(`no app for scope ${input.appScopeId}`);
+  return row;
 };
 
 export const dashboardModule: ModuleRegistration = {
@@ -145,5 +179,6 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/provision-app': provisionAppOp as OperationHandler<never, unknown>,
     'dashboard/mark-app-active': markAppActiveOp as OperationHandler<never, unknown>,
     'dashboard/list-apps': listAppsOp as OperationHandler<never, unknown>,
+    'dashboard/delete-app': deleteAppOp as OperationHandler<never, unknown>,
   },
 };

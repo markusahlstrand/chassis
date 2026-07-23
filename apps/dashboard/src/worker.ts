@@ -24,8 +24,8 @@ import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-inv
 // D-33 — a demo is a template that is COPIED, not imported. This import is the M0 seam.
 import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
-import { dashboardModule } from './module.js';
-import { createApp, provisionDashboard, type DashboardNode } from './provision.js';
+import { dashboardModule, type DashboardAppRow } from './module.js';
+import { createApp, deprovisionApp, provisionDashboard, type DashboardNode } from './provision.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
@@ -254,6 +254,26 @@ app.post('/api/apps', async (c) => {
     tenantName: user?.name ?? user?.email ?? 'Workspace',
   });
   return c.json(appRow, 201);
+});
+
+/** Delete an app — deprovisions its scope + takes its hostname offline, in MY tenant. */
+app.delete('/api/apps/:id', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  // Resolve the app to its scope id + hostname from the caller's OWN apps only — the
+  // :id is theirs or it does not exist to them (list-apps is tenant-scoped).
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.id === c.req.param('id'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  await deprovisionApp(host, {
+    node,
+    appScopeId: scopeId.parse(appRow.app_scope_id),
+    hostname: appRow.hostname,
+    controlPlane: controlPlaneFor(c.env, node.tenantId) ?? undefined,
+  });
+  return c.body(null, 204);
 });
 
 app.onError((err, c) => {
