@@ -39,6 +39,10 @@ const STATUS_PATTERNS: readonly [RegExp, ContentfulStatusCode][] = [
   // Registry (#31): well-formed, but conflicts with a version's admission state or
   // ownership, or needs an unacknowledged change acknowledged (the two checkpoints).
   [/is already registered/, 409],
+  // claim-on-first-push (builder-plane.md): a slug's owner is fixed at first push.
+  // A staff re-registration under a different owner is a conflict; a builder is
+  // refused with 403 in the transport before it reaches this throw.
+  [/is owned by /, 409],
   [/was rejected — publish a new one/, 409],
   [/is already admitted/, 409],
   [/belongs to '/, 409],

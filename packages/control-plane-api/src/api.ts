@@ -21,7 +21,7 @@ import {
 import type { PlatformActorId, ScopeId, TenantId } from '@substrat-run/contracts';
 import type { ScopeHost } from '@substrat-run/kernel';
 import { ulid } from '@substrat-run/kernel';
-import type { PlatformActorAuth } from './auth.js';
+import type { PlatformActorAuth, BuilderAuth, Principal } from './auth.js';
 import type { VerticalClient } from './vertical-client.js';
 import { ControlPlaneError } from './client.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -61,9 +61,20 @@ export interface ControlPlaneApiOptions {
    * would eventually be deployed with it (control-plane.md §6).
    */
   authenticate: PlatformActorAuth;
+  /**
+   * Resolves a BUILDER principal — a tenant user acting on their own verticals
+   * (builder-plane.md §4). Tried only after `authenticate` declines, so staff and
+   * service auth are unchanged and remain a superset. Absent ⇒ no builder path:
+   * the surface is staff/service-only exactly as before. A builder is confined to
+   * the vertical-management routes and to the verticals their tenant owns.
+   */
+  authenticateBuilder?: BuilderAuth;
 }
 
-type Vars = { actor: PlatformActorId };
+// `actor` is the audited subject for every HostAdmin call (staff or builder alike).
+// `principal` carries the authz distinction the builder routes read. Both are set by
+// the auth middleware; keeping `actor` means every existing route is untouched.
+type Vars = { actor: PlatformActorId; principal: Principal };
 
 // -- request schemas ---------------------------------------------------------
 // Parse, don't trust: every input crosses Zod at the boundary. The ids stay
@@ -185,15 +196,50 @@ const auditLogQuery = z.object({
  *    adapter's read path, not an admin surface.
  */
 export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ Variables: Vars }> {
-  const { host, authenticate } = options;
+  const { host, authenticate, authenticateBuilder } = options;
   const admin = host.admin;
   const app = new Hono<{ Variables: Vars }>();
 
-  // Fail closed, before any route runs: no actor, no reach.
+  // Fail closed, before any route runs: no principal, no reach. Staff/service first
+  // (unchanged, a superset); a builder session only when staff declines.
   app.use('*', async (c, next) => {
-    const actor = await authenticate(c.req.raw);
-    if (!actor) return c.json({ error: 'unauthenticated' }, 401);
-    c.set('actor', actor);
+    const staff = await authenticate(c.req.raw);
+    let principal: Principal | null = staff ? { kind: 'staff', actor: staff } : null;
+    if (!principal && authenticateBuilder) {
+      const builder = await authenticateBuilder(c.req.raw);
+      if (builder) principal = { kind: 'builder', actor: builder.actor, tenantId: builder.tenantId };
+    }
+    if (!principal) return c.json({ error: 'unauthenticated' }, 401);
+    c.set('principal', principal);
+    c.set('actor', principal.actor);
+    await next();
+  });
+
+  // Confine a BUILDER to the vertical-management surface, fail-CLOSED (builder-plane.md
+  // §4). Default-deny by design: a builder reaches only the routes on this allowlist,
+  // and only for verticals its tenant owns (the per-route ownership checks below). A
+  // route not listed here 403s for a builder — forgetting to allow one costs a feature,
+  // never an escalation, which is why this is an allowlist rather than a set of guards
+  // sprinkled on the staff-only routes (a forgotten guard there would fail OPEN). Staff
+  // pass through untouched. The `versions$`/`channels$` anchors deliberately exclude the
+  // staff-only `versions/:id/{admit,reject}` and `.../instances`.
+  const SEG = '[^/]+';
+  const BUILDER_ROUTES: readonly { method: string; re: RegExp }[] = [
+    { method: 'GET', re: new RegExp(`^/verticals$`) },
+    { method: 'POST', re: new RegExp(`^/verticals$`) },
+    { method: 'GET', re: new RegExp(`^/verticals/${SEG}/versions$`) },
+    { method: 'POST', re: new RegExp(`^/verticals/${SEG}/versions$`) },
+    { method: 'GET', re: new RegExp(`^/verticals/${SEG}/channels$`) },
+    { method: 'POST', re: new RegExp(`^/verticals/${SEG}/channels/${SEG}/promote$`) },
+    { method: 'POST', re: new RegExp(`^/verticals/${SEG}/deploy$`) },
+  ];
+  app.use('*', async (c, next) => {
+    if (c.get('principal').kind === 'builder') {
+      const { method } = c.req;
+      const path = c.req.path;
+      const allowed = BUILDER_ROUTES.some((r) => r.method === method && r.re.test(path));
+      if (!allowed) return c.json({ error: 'forbidden' }, 403);
+    }
     await next();
   });
 
@@ -355,13 +401,39 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   // -- vertical + version registry (#31; orchestration.md §5.6) --------------
   // Thin pass-throughs to `HostAdmin`. Register a vertical, publish a version
   // (lands PENDING — a push is not a deploy), admit/reject at the checkpoints,
-  // promote a channel through the digest-diff gate, pin a scope to a version. The
-  // uploader that sets `deploymentRef` (the `deploy` route) is Phase 2, not here.
+  // promote a channel through the digest-diff gate, pin a scope to a version.
+  //
+  // A BUILDER (builder-plane.md §4) reaches only this subset (the confinement
+  // middleware above), and only for verticals its tenant owns. `ownerOf` reads the
+  // registry row's owner_tenant (undefined ⇒ not registered — a claimable slug).
+  // `listVerticals` returns every row (the adapter does not narrow); the transport is
+  // where per-principal filtering happens — here and on GET /verticals.
+  const ownerOf = async (
+    actor: PlatformActorId,
+    slug: string,
+  ): Promise<TenantId | null | undefined> => {
+    const v = (await admin.listVerticals(actor)).find((x) => x.slug === slug);
+    return v ? v.ownerTenant : undefined;
+  };
 
-  app.get('/verticals', async (c) => c.json(await admin.listVerticals(c.get('actor'))));
+  app.get('/verticals', async (c) => {
+    const all = await admin.listVerticals(c.get('actor'));
+    const p = c.get('principal');
+    // A builder sees only what it owns; staff see the whole registry.
+    return c.json(p.kind === 'builder' ? all.filter((v) => v.ownerTenant === p.tenantId) : all);
+  });
 
   app.post('/verticals', async (c) => {
     const input = registerVerticalInput.parse(await c.req.json());
+    const p = c.get('principal');
+    if (p.kind === 'builder') {
+      // Claim an unregistered slug, or re-register one this tenant already owns; a slug
+      // owned by another tenant is refused (claim-on-first-push, §3). Owner is stamped
+      // from the principal, never trusted from the body.
+      const owner = await ownerOf(p.actor, input.slug);
+      if (owner !== undefined && owner !== p.tenantId) return c.json({ error: 'forbidden' }, 403);
+      input.ownerTenant = p.tenantId;
+    }
     await admin.registerVertical(c.get('actor'), input);
     // Idempotent on the slug (a conflicting re-register throws below the seam), so
     // read back rather than echo the request.
@@ -369,9 +441,16 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     return c.json(registered, 201);
   });
 
-  app.get('/verticals/:slug/versions', async (c) =>
-    c.json(await admin.listVersions(c.get('actor'), c.req.param('slug'))),
-  );
+  app.get('/verticals/:slug/versions', async (c) => {
+    const slug = c.req.param('slug');
+    const p = c.get('principal');
+    // A builder reading a vertical it does not own gets 404 — indistinguishable from
+    // absent, the same fail-closed reflex K-3 uses for a cross-tenant scope.
+    if (p.kind === 'builder' && (await ownerOf(p.actor, slug)) !== p.tenantId) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    return c.json(await admin.listVersions(c.get('actor'), slug));
+  });
 
   app.post('/verticals/:slug/versions', async (c) => {
     const input = publishVersionInput.parse(await c.req.json());
@@ -380,6 +459,10 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     // a silent publish under the wrong vertical.
     if (input.verticalSlug !== c.req.param('slug')) {
       return c.json({ error: 'verticalSlug does not match the path' }, 400);
+    }
+    const p = c.get('principal');
+    if (p.kind === 'builder' && (await ownerOf(p.actor, input.verticalSlug)) !== p.tenantId) {
+      return c.json({ error: 'forbidden' }, 403);
     }
     await admin.publishVersion(c.get('actor'), input);
     const version = (await admin.listVersions(c.get('actor'), input.verticalSlug)).find(
@@ -403,13 +486,26 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     return c.json((await admin.listVersions(c.get('actor'), slug)).find((v) => v.id === id));
   });
 
-  app.get('/verticals/:slug/channels', async (c) =>
-    c.json(await admin.listChannels(c.get('actor'), c.req.param('slug'))),
-  );
+  app.get('/verticals/:slug/channels', async (c) => {
+    const slug = c.req.param('slug');
+    const p = c.get('principal');
+    if (p.kind === 'builder' && (await ownerOf(p.actor, slug)) !== p.tenantId) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    return c.json(await admin.listChannels(c.get('actor'), slug));
+  });
 
   app.post('/verticals/:slug/channels/:channel/promote', async (c) => {
     const slug = c.req.param('slug');
     const channel = channelName.parse(c.req.param('channel'));
+    const p = c.get('principal');
+    if (p.kind === 'builder') {
+      // Staff keep the prod gate (model B, §2/§4): a builder self-serves dev/staging;
+      // admission and prod promotion stay a human staff decision (the trust boundary
+      // self-serve-deploy.md §3 is explicit about). And only on verticals it owns.
+      if (channel === 'prod') return c.json({ error: 'promotion to prod is staff-only' }, 403);
+      if ((await ownerOf(p.actor, slug)) !== p.tenantId) return c.json({ error: 'forbidden' }, 403);
+    }
     const { versionId, acknowledge } = promoteVersionBody.parse(await c.req.json());
     // The blast-radius moment: refuses a changed digest without the acknowledgement,
     // and refuses a non-admitted version. Both are enforced below the seam and
@@ -428,6 +524,14 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
       return c.json({ error: 'deploy is not configured on this control plane' }, 501);
     }
     const slug = c.req.param('slug');
+    const p = c.get('principal');
+    // A builder pushes to a slug it owns, or claims an unregistered one (§3). Checked
+    // BEFORE the upload so a refused push never leaves an orphaned namespace script.
+    // `existingOwner` also lets a staff push stay ownership-idempotent (below).
+    const existingOwner = await ownerOf(c.get('actor'), slug);
+    if (p.kind === 'builder' && existingOwner !== undefined && existingOwner !== p.tenantId) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const form = await c.req.formData();
     const raw = form.get('manifest');
     if (typeof raw !== 'string') return c.json({ error: 'missing manifest part' }, 400);
@@ -476,10 +580,13 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
 
     // Register-then-publish, both idempotent-ish below the seam: a first push of a
     // slug registers it; publishVersion lands the version pending with deploymentRef.
+    // A builder push claims the slug for its tenant; a staff push preserves the existing
+    // owner (null ⇒ platform-owned for a first-party vertical) rather than clobbering it.
     await admin.registerVertical(c.get('actor'), {
       slug,
       name: manifest.name ?? slug,
       source: 'cli',
+      ownerTenant: p.kind === 'builder' ? p.tenantId : (existingOwner ?? null),
     });
     await admin.publishVersion(c.get('actor'), {
       id,

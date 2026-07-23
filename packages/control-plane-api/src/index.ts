@@ -14,6 +14,9 @@ export type {
   StaffIdentity,
   StaffSessionReader,
   StaffActorResolver,
+  BuilderIdentity,
+  BuilderAuth,
+  Principal,
 } from './auth.js';
 export { ControlPlaneClient, ControlPlaneError } from './client.js';
 export type { ControlPlaneClientOptions, ClientProvisionScopeInput } from './client.js';
