@@ -15,6 +15,9 @@ import {
   provisionDashboard,
   createApp,
   deprovisionApp,
+  retryApp,
+  CATALOG,
+  availableCatalog,
   type DashboardAppRow,
   type DashboardNode,
 } from '../src/index.js';
@@ -124,6 +127,54 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
     const apps = await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {});
     expect(apps.find((a) => a.app_scope_id === failScopeId)?.status).toBe('failed');
+  });
+
+  it('retrying a failed app tears down the failed attempt and provisions a fresh, active one', async () => {
+    const acme = await bootstrap('acme-retry');
+    const failScopeId = scopeId.parse(ulid());
+    // First attempt fails at the very first control-plane call → row is `failed`.
+    const failingCp = {
+      tenantId: acme.tenantId,
+      ensureTenant: () => Promise.reject(new Error('boom')),
+    } as unknown as Parameters<typeof createApp>[1]['controlPlane'];
+    await expect(
+      createApp(host, {
+        node: acme,
+        appScopeId: failScopeId,
+        verticalSlug: 'meridian',
+        name: 'People',
+        appEntitlements: ['meridian', 'protocol'],
+        appOwnerGrants: [HR_PERM.absenceConfigure] as PermissionKey[],
+        controlPlane: failingCp,
+      }),
+    ).rejects.toThrow('boom');
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    expect((await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {})).find((a) => a.app_scope_id === failScopeId)?.status).toBe('failed');
+
+    // Retry (embedded — no failing plane) → a fresh, active app; the failed row is gone.
+    const retried = await retryApp(host, {
+      node: acme,
+      failedScopeId: failScopeId,
+      hostname: null,
+      newScopeId: scopeId.parse(ulid()),
+      verticalSlug: 'meridian',
+      name: 'People',
+      appEntitlements: ['meridian', 'protocol'],
+      appOwnerGrants: [HR_PERM.absenceConfigure, HR_PERM.absenceRead, HR_PERM.employeeManage] as PermissionKey[],
+    });
+    expect(retried.status).toBe('active');
+    expect(retried.vertical_slug).toBe('meridian');
+
+    const apps = await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {});
+    // Only the fresh app is listed (the failed one soft-deleted on retry), and it's active.
+    expect(apps).toHaveLength(1);
+    expect(apps[0]!.app_scope_id).toBe(retried.app_scope_id);
+    expect(apps[0]!.status).toBe('active');
+
+    // ...and the fresh scope is LIVE — a real HR op resolves for the owner.
+    const appScope = await host.getScope(acme.principal, acme.tenantId, scopeId.parse(retried.app_scope_id));
+    await appScope.invoke('hr/define-leave-type', { key: 'vacation', label: 'Vacation', kind: 'vacation', annualDays: '25' });
+    expect(await appScope.invoke('hr/list-leave-types', {})).toHaveLength(1);
   });
 
   it('deleting an app deprovisions its scope and drops it from the list (record retained)', async () => {
@@ -343,5 +394,39 @@ describe('Dashboard Phase 4 — a tenant sees only its own deployments', () => {
     expect(() => assertOwned(mine, 'helpdesk')).not.toThrow();
     // billing is other's — not in acme's deployments, so a promote attempt is refused.
     expect(() => assertOwned(mine, 'billing')).toThrow(/not one of your deployments/);
+  });
+});
+
+/**
+ * The catalog only advertises verticals the running mode can actually provision — so the
+ * marketplace never offers an install that always fails (the Meridian-in-connected-mode gap).
+ */
+describe('catalog availability by mode', () => {
+  // The registry listing the catalog endpoint filters (CATALOG keys + one unknown vertical).
+  const registry = [
+    ...Object.entries(CATALOG).map(([slug, e]) => ({ slug, name: e.name })),
+    { slug: 'not-in-catalog', name: 'Mystery' },
+  ];
+
+  it('embedded mode offers every bundled catalog vertical (incl. Meridian), never an unknown one', () => {
+    const slugs = availableCatalog(registry, { connected: false }).map((v) => v.slug);
+    expect(slugs).toContain('meridian');
+    expect(slugs).toContain('callout');
+    expect(slugs).toContain('protocol');
+    expect(slugs).not.toContain('not-in-catalog');
+  });
+
+  it('connected mode hides a vertical not deployed to the shared plane (Meridian), keeps the rest', () => {
+    const slugs = availableCatalog(registry, { connected: true }).map((v) => v.slug);
+    // Meridian is bundled but `connected: false` (not on the dispatch namespace yet) → hidden.
+    expect(slugs).not.toContain('meridian');
+    // Callout + Documents are provisionable on the plane → still offered.
+    expect(slugs).toContain('callout');
+    expect(slugs).toContain('protocol');
+    expect(slugs).not.toContain('not-in-catalog');
+  });
+
+  it('Meridian is flagged not-yet-connected (flip when it is deployed + promoted to prod)', () => {
+    expect(CATALOG.meridian!.connected).toBe(false);
   });
 });

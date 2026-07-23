@@ -194,6 +194,51 @@ export async function deprovisionApp(
 }
 
 /**
+ * Retry a FAILED app: best-effort tear down the failed attempt, then re-provision
+ * fresh under a NEW scope with the same vertical + name. Composing the proven
+ * `deprovisionApp` + `createApp` (rather than re-running a half-finished sequence in
+ * place) keeps retry robust against partial state — a first attempt can leave the
+ * directory scope created but the vertical instance missing, which a naive re-run
+ * would trip over. A retry that still can't come up marks the fresh row `failed` and
+ * surfaces the real error, exactly like the first create. The deprovision is
+ * best-effort: the app already failed, so anything that won't tear down is harmless.
+ */
+export async function retryApp(
+  host: ScopeHost,
+  input: {
+    node: DashboardNode;
+    /** The failed app's current scope + hostname, to release before the fresh attempt. */
+    failedScopeId: ScopeId;
+    hostname: string | null;
+    /** The scope id the fresh attempt provisions under (minted by the caller). */
+    newScopeId: ScopeId;
+    verticalSlug: string;
+    name: string;
+    appEntitlements?: string[];
+    appOwnerGrants?: PermissionKey[];
+    controlPlane?: TenantNarrowedControlPlane;
+    tenantName?: string;
+  },
+): Promise<DashboardAppRow> {
+  await deprovisionApp(host, {
+    node: input.node,
+    appScopeId: input.failedScopeId,
+    hostname: input.hostname,
+    controlPlane: input.controlPlane,
+  }).catch(() => {});
+  return createApp(host, {
+    node: input.node,
+    appScopeId: input.newScopeId,
+    verticalSlug: input.verticalSlug,
+    name: input.name,
+    appEntitlements: input.appEntitlements,
+    appOwnerGrants: input.appOwnerGrants,
+    controlPlane: input.controlPlane,
+    tenantName: input.tenantName,
+  });
+}
+
+/**
  * CONNECTED mode: provision through the shared control plane, tenant-narrowed —
  * the production path (dashboard.md §6). Mirrors the operator console's proven
  * create-instance sequence (apps/console/src/lib/create-instance.ts): a directory
