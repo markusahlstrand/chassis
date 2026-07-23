@@ -59,9 +59,9 @@ interface Env {
   AUTH_PROVIDER?: string;
   OIDC_ISSUER?: string;
   OIDC_AUDIENCE?: string;
-  /** The built SPA is inlined into the worker (src/assets.ts) — no ASSETS binding here. */
-  BETTER_AUTH_SECRET?: string;
-  BASE_URL?: string;
+  // No BETTER_AUTH_SECRET: the IdentityDO generates its own per-tenant signing secret in
+  // its own storage, so there is no shared worker secret to set. The built SPA is inlined
+  // into the worker (src/assets.ts) — no ASSETS binding here either.
   /** Local dev only: when 'true', trust the `x-principal` header. NEVER set in prod. */
   ALLOW_DEV_HEADER?: string;
   /** Shared secret the router presents (K-26): how the vertical knows the asserted node came from the router. */

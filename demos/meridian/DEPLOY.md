@@ -29,11 +29,13 @@ against an OIDC issuer (Supabase / Auth0 / AuthHero / Keycloak) instead.
 
 ## Steps
 
-1. **Set the auth secret** (used to sign Better Auth sessions in the IdentityDO):
+1. **(nothing to set for the default provider.)** The `IdentityDO` generates its OWN session-signing
+   secret per tenant, in its own storage — so there is **no `wrangler secret put`**, and it's
+   automatically different per tenant (one worker secret would be shared across every tenant, which
+   is exactly what we're avoiding). Only for the OIDC provider do you set config:
 
    ```sh
-   wrangler secret put BETTER_AUTH_SECRET     # a random 32+ char string
-   # for the OIDC provider instead: set vars AUTH_PROVIDER=oidc, OIDC_ISSUER=…, OIDC_AUDIENCE=…
+   # OIDC instead of Better Auth: set vars AUTH_PROVIDER=oidc, OIDC_ISSUER=…, OIDC_AUDIENCE=…
    ```
 
 2. **Push** the vertical. This runs the `build` hook (`pnpm --dir app build && gen-assets`), bundles

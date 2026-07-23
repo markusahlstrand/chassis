@@ -53,17 +53,34 @@ const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS identity (scope_id TEXT NOT NULL, sub TEXT NOT NULL, principal TEXT NOT NULL, PRIMARY KEY (scope_id, sub))`,
   // The owner seat waiting to be claimed: set at provision, consumed by the first login.
   `CREATE TABLE IF NOT EXISTS pending_owner (scope_id TEXT PRIMARY KEY, principal TEXT NOT NULL)`,
+  // This DO's own config — notably its session-signing secret, generated here per tenant.
+  `CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 ];
 
-export interface IdentityDoEnv {
-  BETTER_AUTH_SECRET?: string;
-}
+// The IdentityDO needs no injected env: its signing secret is generated per tenant and
+// kept in its own storage (see below), so there is no shared worker secret to manage.
+export type IdentityDoEnv = Record<string, never>;
 
 export class IdentityDO extends DurableObject<IdentityDoEnv> {
+  /** This tenant's Better Auth signing secret — generated in this DO, never shared, never a worker binding. */
+  private authSecret!: string;
+
   constructor(ctx: DurableObjectState, env: IdentityDoEnv) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       for (const stmt of SCHEMA_STATEMENTS) ctx.storage.sql.exec(stmt);
+      // Load-or-generate this tenant's OWN signing secret. Each IdentityDO mints its own on
+      // first init and persists it here, so the secret is per-tenant, never leaves the DO,
+      // and needs no `wrangler secret put` (which would be one value shared across every
+      // tenant on the deployed script — the multi-tenant hazard we're avoiding).
+      const row = [...ctx.storage.sql.exec("SELECT value FROM config WHERE key = 'auth_secret'")][0] as { value: string } | undefined;
+      if (row) {
+        this.authSecret = row.value;
+      } else {
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        this.authSecret = btoa(String.fromCharCode(...bytes));
+        ctx.storage.sql.exec("INSERT INTO config (key, value) VALUES ('auth_secret', ?)", this.authSecret);
+      }
     });
   }
 
@@ -98,7 +115,8 @@ export class IdentityDO extends DurableObject<IdentityDoEnv> {
     return betterAuth({
       database: drizzleAdapter(db, { provider: 'sqlite', schema }),
       emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 8 },
-      secret: this.env.BETTER_AUTH_SECRET ?? 'dev-only-secret-substrat-vertical-auth-32chars',
+      // Per-tenant, generated + persisted in THIS DO (see the constructor) — never shared.
+      secret: this.authSecret,
       baseURL: origin,
       trustedOrigins: [origin],
     });
