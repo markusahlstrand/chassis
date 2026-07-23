@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { instant, slug } from './ids.js';
+import { instant, slug, tenantId } from './ids.js';
 
 /**
  * The vertical + version registry (#31 step 1; D-33's milestone one).
@@ -21,12 +21,24 @@ export const vertical = z.object({
   slug, // stable, human-readable, and what a scope row denormalizes for display
   name: z.string().min(1),
   source: verticalSource,
+  /**
+   * The tenant that OWNS this vertical (builder-plane.md). `null` = platform-owned —
+   * a first-party vertical (Callout, the dashboard). A builder-pushed vertical is owned
+   * by the pushing tenant, and its slug is prefixed `<tenant>/<name>`. Ownership is the
+   * gate for who may push new versions of it + manage its non-prod channels (Phase 2).
+   */
+  ownerTenant: tenantId.nullable(),
   createdAt: instant,
 });
 export type Vertical = z.infer<typeof vertical>;
 
-export const registerVerticalInput = vertical.pick({ slug: true, name: true, source: true });
-export type RegisterVerticalInput = z.infer<typeof registerVerticalInput>;
+export const registerVerticalInput = vertical.pick({ slug: true, name: true, source: true }).extend({
+  // Optional on input — a staff/platform push omits it (⇒ platform-owned).
+  ownerTenant: tenantId.nullable().default(null),
+});
+// `z.input`, not `z.infer`: `ownerTenant` is optional for a caller (the default fills
+// it), so an existing platform-owned registration keeps passing `{slug, name, source}`.
+export type RegisterVerticalInput = z.input<typeof registerVerticalInput>;
 
 /**
  * Whether a version may be bound to a scope.
