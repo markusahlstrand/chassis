@@ -84,6 +84,17 @@ export interface AppRow {
   created_at: string;
 }
 
+/** One entry in an app's audit trail (Activity panel) — a lifecycle transition. */
+export interface AppEvent {
+  id: string;
+  app_scope_id: string;
+  kind: 'created' | 'active' | 'failed' | 'deleted';
+  /** Failure reason / bound hostname / the vertical slug — depending on `kind`. */
+  detail: string | null;
+  actor: string;
+  created_at: string;
+}
+
 /** One version of a deployed vertical — mirrors the worker's DeploymentVersion. */
 export interface DeploymentVersion {
   id: string;
@@ -202,6 +213,7 @@ export const api = {
     call<AppRow>('/apps', { method: 'POST', body: JSON.stringify(input) }),
   deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   retryApp: (scopeId: string) => call<AppRow>(`/apps/${encodeURIComponent(scopeId)}/retry`, { method: 'POST' }),
+  appEvents: (scopeId: string) => call<AppEvent[]>(`/apps/${encodeURIComponent(scopeId)}/events`),
   listDeployments: () => call<Deployment[]>('/deployments'),
   /** The tenant's GitHub-import state — connection status + the repos it can see. */
   gitRepos: () => call<GitReposResult>('/github/repos'),

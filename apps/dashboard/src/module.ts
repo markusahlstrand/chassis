@@ -145,6 +145,24 @@ export const dashboardMigrations = [
       );
     `,
   },
+  {
+    version: '0004-app-events',
+    sql: `
+      -- The per-app audit trail: one append-only row per lifecycle transition of a
+      -- provisioned app (created / active / failed / deleted). This is what the app's
+      -- Activity panel shows — REAL events, including a failed provision's REASON, so a
+      -- 'no deployment is bound' error is recorded here rather than only flashing as a toast.
+      CREATE TABLE dashboard_app_events (
+        id           TEXT PRIMARY KEY,
+        app_scope_id TEXT NOT NULL,
+        kind         TEXT NOT NULL CHECK (kind IN ('created','active','failed','deleted')),
+        detail       TEXT,           -- failure reason / bound hostname / null
+        actor        TEXT NOT NULL,  -- the principal that caused the transition
+        created_at   TEXT NOT NULL
+      );
+      CREATE INDEX dashboard_app_events_by_app ON dashboard_app_events (app_scope_id, created_at);
+    `,
+  },
 ];
 
 export interface DashboardAppRow {
@@ -157,6 +175,30 @@ export interface DashboardAppRow {
   created_by: string;
   created_at: string;
   deleted_at: string | null;
+}
+
+/** One row of the app's audit trail — a lifecycle transition. */
+export interface DashboardAppEventRow {
+  id: string;
+  app_scope_id: string;
+  kind: 'created' | 'active' | 'failed' | 'deleted';
+  detail: string | null;
+  actor: string;
+  created_at: string;
+}
+
+/** Append a lifecycle event for an app — the real Activity trail (created/active/failed/deleted). */
+function recordAppEvent(
+  ctx: OperationContext,
+  appScopeId: string,
+  kind: DashboardAppEventRow['kind'],
+  detail?: string | null,
+): void {
+  ctx.sql.exec(
+    `INSERT INTO dashboard_app_events (id, app_scope_id, kind, detail, actor, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [ulid(), appScopeId, kind, detail ?? null, ctx.principal, new Date().toISOString()],
+  );
 }
 
 // -- operations --------------------------------------------------------------
@@ -187,6 +229,7 @@ const provisionAppOp: OperationHandler<z.infer<typeof provisionAppInput>, Dashbo
      VALUES (?, ?, ?, ?, 'provisioning', NULL, ?, ?)`,
     [id, input.appScopeId, input.verticalSlug, input.name, ctx.principal, new Date().toISOString()],
   );
+  recordAppEvent(ctx, input.appScopeId, 'created', input.verticalSlug);
   return ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps WHERE id = ?', [id])[0]!;
 };
 
@@ -206,6 +249,7 @@ const markAppActiveOp: OperationHandler<z.infer<typeof markAppActiveInput>, Dash
     `UPDATE dashboard_apps SET status = 'active', hostname = COALESCE(?, hostname) WHERE app_scope_id = ?`,
     [input.hostname ?? null, input.appScopeId],
   );
+  recordAppEvent(ctx, input.appScopeId, 'active', input.hostname ?? null);
   const row = ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps WHERE app_scope_id = ?', [
     input.appScopeId,
   ])[0];
@@ -213,7 +257,11 @@ const markAppActiveOp: OperationHandler<z.infer<typeof markAppActiveInput>, Dash
   return row;
 };
 
-const markAppFailedInput = z.object({ appScopeId: z.string().min(1) });
+const markAppFailedInput = z.object({
+  appScopeId: z.string().min(1),
+  /** Why it failed — recorded on the app's audit trail (e.g. "no deployment is bound"). */
+  reason: z.string().optional(),
+});
 
 /**
  * Flip an app to `failed` when provisioning didn't complete (the vertical refused, a
@@ -228,6 +276,7 @@ const markAppFailedOp: OperationHandler<z.infer<typeof markAppFailedInput>, Dash
   ctx.sql.exec("UPDATE dashboard_apps SET status = 'failed' WHERE app_scope_id = ? AND status = 'provisioning'", [
     input.appScopeId,
   ]);
+  recordAppEvent(ctx, input.appScopeId, 'failed', input.reason ?? null);
   const row = ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps WHERE app_scope_id = ?', [
     input.appScopeId,
   ])[0];
@@ -254,15 +303,33 @@ const deleteAppInput = z.object({ appScopeId: z.string().min(1) });
 const deleteAppOp: OperationHandler<z.infer<typeof deleteAppInput>, DashboardAppRow> = async (ctx, raw) => {
   assertAllowed(await ctx.check(DASHBOARD_PERM.provisionApp));
   const input = deleteAppInput.parse(raw);
+  const wasLive = ctx.sql.query<{ deleted_at: string | null }>(
+    'SELECT deleted_at FROM dashboard_apps WHERE app_scope_id = ?',
+    [input.appScopeId],
+  )[0];
   ctx.sql.exec('UPDATE dashboard_apps SET deleted_at = ? WHERE app_scope_id = ? AND deleted_at IS NULL', [
     new Date().toISOString(),
     input.appScopeId,
   ]);
+  // Only record on the transition (first delete), not on an idempotent repeat.
+  if (wasLive && !wasLive.deleted_at) recordAppEvent(ctx, input.appScopeId, 'deleted');
   const row = ctx.sql.query<DashboardAppRow>('SELECT * FROM dashboard_apps WHERE app_scope_id = ?', [
     input.appScopeId,
   ])[0];
   if (!row) throw new Error(`no app for scope ${input.appScopeId}`);
   return row;
+};
+
+const appEventsInput = z.object({ appScopeId: z.string().min(1) });
+
+/** The app's audit trail — newest first. A plain read, gated by `dashboard:read`. */
+const appEventsOp: OperationHandler<z.infer<typeof appEventsInput>, DashboardAppEventRow[]> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.read));
+  const input = appEventsInput.parse(raw);
+  return ctx.sql.query<DashboardAppEventRow>(
+    'SELECT * FROM dashboard_app_events WHERE app_scope_id = ? ORDER BY created_at DESC, id DESC',
+    [input.appScopeId],
+  );
 };
 
 // -- team + members ----------------------------------------------------------
@@ -508,6 +575,7 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/provision-app': provisionAppOp as OperationHandler<never, unknown>,
     'dashboard/mark-app-active': markAppActiveOp as OperationHandler<never, unknown>,
     'dashboard/mark-app-failed': markAppFailedOp as OperationHandler<never, unknown>,
+    'dashboard/app-events': appEventsOp as OperationHandler<never, unknown>,
     'dashboard/list-apps': listAppsOp as OperationHandler<never, unknown>,
     'dashboard/delete-app': deleteAppOp as OperationHandler<never, unknown>,
     'dashboard/init-team': initTeamOp as OperationHandler<never, unknown>,

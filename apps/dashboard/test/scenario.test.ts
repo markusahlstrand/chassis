@@ -273,6 +273,40 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     expect(await appScope.invoke('hr/roster', {})).toHaveLength(1);
   });
 
+  it('records a per-app audit trail — created + active on success, created + failed(reason) on failure', async () => {
+    const acme = await bootstrap('acme-audit');
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    type Ev = { kind: string; detail: string | null };
+
+    // Success: a `created` then an `active` event.
+    const okScope = scopeId.parse(ulid());
+    await createApp(host, {
+      node: acme, appScopeId: okScope, verticalSlug: 'protocol', name: 'Docs',
+      appEntitlements: ['protocol'], appOwnerGrants: [PROTOCOL_PERM.read] as PermissionKey[],
+    });
+    const okEvents = await dash.invoke<Ev[]>('dashboard/app-events', { appScopeId: okScope });
+    expect(okEvents).toHaveLength(2);
+    expect(okEvents.map((e) => e.kind).sort()).toEqual(['active', 'created']);
+
+    // Failure: a `created` then a `failed` event carrying the REASON (not just a toast).
+    const failScope = scopeId.parse(ulid());
+    const failingCp = {
+      tenantId: acme.tenantId,
+      ensureTenant: () => Promise.reject(new Error("no deployment is bound for vertical 'meridian'")),
+    } as unknown as Parameters<typeof createApp>[1]['controlPlane'];
+    await expect(
+      createApp(host, {
+        node: acme, appScopeId: failScope, verticalSlug: 'meridian', name: 'HR',
+        appEntitlements: ['meridian', 'protocol'], appOwnerGrants: [HR_PERM.absenceRead] as PermissionKey[],
+        controlPlane: failingCp,
+      }),
+    ).rejects.toThrow('no deployment is bound');
+    const failEvents = await dash.invoke<Ev[]>('dashboard/app-events', { appScopeId: failScope });
+    expect(failEvents).toHaveLength(2);
+    expect(failEvents.map((e) => e.kind).sort()).toEqual(['created', 'failed']);
+    expect(failEvents.find((e) => e.kind === 'failed')?.detail).toContain('no deployment is bound');
+  });
+
   it('a principal without dashboard:provision-app is refused — before anything is provisioned', async () => {
     const acme = await bootstrap('acme2');
     const stranger = principalId.parse(ulid()); // holds no role in acme
