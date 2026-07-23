@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Button, Dialog, Input, Tabs } from '@substrat-run/ui';
-import { api, type AppRow, type AppEvent } from '../lib/api';
-import { verticalMeta, APP_TABS, DEPLOYMENTS, ENV_VARS, INTEGRATIONS, ENV_OPTS, type EnvVar } from '../lib/demo';
-import { DEV_MOCK } from '../lib/mock';
+import { api, type AppRow, type AppEvent, type Deployment } from '../lib/api';
+import { verticalMeta, APP_TABS, ENV_VARS, INTEGRATIONS, ENV_OPTS, type EnvVar } from '../lib/demo';
+import { DEV_MOCK, MOCK_DEPLOYMENTS } from '../lib/mock';
 import { relativeTime, shortDate, shortId } from '../lib/format';
 import { Ic } from '../lib/icons';
 import { Page } from '../components/layout';
@@ -53,7 +53,7 @@ export function AppDetail({
       />
 
       {tab === 'overview' && <Overview app={app} meta={meta} statusKind={statusKind} statusLabel={statusLabel} />}
-      {tab === 'deployments' && <Deployments />}
+      {tab === 'deployments' && <Deployments app={app} />}
       {tab === 'env' && <EnvVars />}
       {tab === 'domains' && <AppDomains />}
       {tab === 'integrations' && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 16 }}>{INTEGRATIONS.slice(0, 2).map((i) => <IntegrationCard key={i.name} integ={i} />)}</div>}
@@ -184,26 +184,68 @@ function Timeline({ items }: { items: Array<{ dot: TimelineDot; body: React.Reac
   );
 }
 
-function Deployments() {
-  const COLS = '1fr 1.4fr 1fr 1.4fr 1.4fr 120px';
+function Deployments({ app }: { app: AppRow }) {
+  const [dep, setDep] = useState<Deployment | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (DEV_MOCK) {
+      setDep(MOCK_DEPLOYMENTS[0] ?? null);
+      return;
+    }
+    let live = true;
+    api
+      .appDeployments(app.app_scope_id)
+      .then((d) => live && setDep(d))
+      .catch((e) => live && setErr(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [app.app_scope_id]);
+
+  if (err) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--status-danger-fg)' }}>Couldn’t load deployments — {err}</div>;
+  if (!dep) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>Loading deployments…</div>;
+
+  const channelsOf = (versionId: string) => dep.channels.filter((c) => c.versionId === versionId).map((c) => c.channel);
+  const prod = dep.channels.find((c) => c.channel === 'prod');
+  const running = prod ? dep.versions.find((v) => v.id === prod.versionId) : undefined;
+  const COLS = '1fr 1.2fr 1.6fr 1.4fr';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <HonestyBanner>Version history comes from the registry — promote and rollback go live when its API is surfaced. Nothing here is faked.</HonestyBanner>
-      <div style={{ ...card, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 36, padding: '0 16px', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
-          <span>Version</span><span>Source</span><span>Status</span><span>Promoted</span><span>By</span><span />
-        </div>
-        {DEPLOYMENTS.map((d, i) => (
-          <div key={d.version} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 40, padding: '0 16px', fontSize: 13, borderBottom: i === DEPLOYMENTS.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>{d.version}</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>{d.source}</span>
-            <span>{d.status === 'current' ? <Pill kind="info" style={{ background: 'var(--surface-brand-subtle)', color: 'var(--text-brand)' }}>Current</Pill> : <span style={{ color: 'var(--text-tertiary)', fontSize: 12.5 }}>Previous</span>}</span>
-            <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{d.promoted}</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>{d.by}</span>
-            <span>{d.status === 'previous' && <Button variant="ghost" size="sm" disabled>Rollback</Button>}</span>
-          </div>
-        ))}
+      <div style={{ ...card, padding: 20, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <Eyebrow>Running</Eyebrow>
+        {running ? (
+          <>
+            <MonoTag>{running.version}</MonoTag>
+            <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>on the <b>prod</b> channel of <MonoTag>{dep.displaySlug}</MonoTag></span>
+          </>
+        ) : (
+          <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>No <b>prod</b> version promoted yet — a pushed version must be admitted and promoted to serve.</span>
+        )}
       </div>
+      <HonestyBanner>Read live from the registry. Versions for this vertical are managed by the Substrat team; promotion to prod is a staff action.</HonestyBanner>
+      {dep.versions.length === 0 ? (
+        <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>No versions pushed to the registry yet.</div>
+      ) : (
+        <div style={{ ...card, overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 36, padding: '0 16px', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
+            <span>Version</span><span>Admission</span><span>Channels</span><span>Pushed</span>
+          </div>
+          {dep.versions.map((v, i) => {
+            const chans = channelsOf(v.id);
+            return (
+              <div key={v.id} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', minHeight: 40, padding: '8px 16px', fontSize: 13, borderBottom: i === dep.versions.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>{v.version}</span>
+                <span><Pill kind={v.admission === 'admitted' ? 'success' : v.admission === 'rejected' ? 'danger' : 'warning'}>{v.admission}</Pill></span>
+                <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {chans.length === 0 ? <span style={{ color: 'var(--text-tertiary)' }}>—</span> : chans.map((ch) => <Pill key={ch} kind={ch === 'prod' ? 'success' : ch === 'staging' ? 'info' : 'neutral'}>{ch}</Pill>)}
+                </span>
+                <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{v.createdAt ? relativeTime(v.createdAt) : '—'}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

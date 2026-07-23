@@ -21,7 +21,7 @@ import {
   type DashboardAppRow,
   type DashboardNode,
 } from '../src/index.js';
-import { listDeploymentsFromHost, assertOwned } from '../src/deployments.js';
+import { listDeploymentsFromHost, verticalDeploymentFromHost, assertOwned } from '../src/deployments.js';
 
 /**
  * M0 — the central claim of docs/design/dashboard.md, cashed out: a tenant admin
@@ -418,6 +418,26 @@ describe('Dashboard Phase 4 — a tenant sees only its own deployments', () => {
 
     // The other tenant sees only its own.
     expect((await listDeploymentsFromHost(host, staff, other)).map((d) => d.slug)).toEqual(['billing']);
+  });
+
+  it('per-app: a PLATFORM vertical (not tenant-owned) shows its versions + the prod one it runs', async () => {
+    // The per-app Deployments tab keys by the app's vertical SLUG, not ownership — so an app
+    // running a platform vertical (owner null, which the tenant-level list hides) still sees
+    // which version it runs. This is the "am I on 0.0.9?" question.
+    await host.admin.registerVertical(staff, { slug: 'meridian', name: 'Meridian', source: 'builtin' });
+    const v9 = ulid();
+    const v10 = ulid();
+    await publish('meridian', '0.0.9', v9);
+    await publish('meridian', '0.0.10', v10);
+    await host.admin.admitVersion(staff, v9);
+    await host.admin.admitVersion(staff, v10);
+    await host.admin.promoteVersion(staff, 'meridian', 'prod', v9); // prod is still 0.0.9
+
+    const dep = await verticalDeploymentFromHost(host, staff, 'meridian');
+    expect(dep.versions.map((v) => v.version)).toEqual(['0.0.10', '0.0.9']); // newest first
+    // The app runs the PROD version — 0.0.9 — even though 0.0.10 exists but wasn't promoted.
+    const prod = dep.channels.find((c) => c.channel === 'prod');
+    expect(dep.versions.find((v) => v.id === prod?.versionId)?.version).toBe('0.0.9');
   });
 
   it('refuses to treat a slug the tenant does not own as promotable', async () => {

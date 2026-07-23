@@ -108,6 +108,19 @@ export async function listDeploymentsFromCp(cp: TenantNarrowedControlPlane): Pro
 }
 
 /**
+ * ONE vertical's deployment record (versions + channels) by slug — for the per-app
+ * Deployments tab. Unlike the tenant-level lists above, this is keyed by the app's own
+ * vertical (which may be a platform vertical the tenant doesn't "own"), so the app can
+ * show which version it runs (the `prod` channel) and what else exists in the registry.
+ */
+export async function verticalDeploymentFromCp(cp: TenantNarrowedControlPlane, slug: string): Promise<Deployment> {
+  return shape({ slug, name: slug, source: 'builtin', ownerTenant: null }, await cp.listVersions(slug), await cp.listChannels(slug));
+}
+export async function verticalDeploymentFromHost(host: ScopeHost, actor: PlatformActorId, slug: string): Promise<Deployment> {
+  return shape({ slug, name: slug, source: 'builtin', ownerTenant: null }, await host.admin.listVersions(actor, slug), await host.admin.listChannels(actor, slug));
+}
+
+/**
  * The security check every promotion needs: the slug being promoted MUST be one the
  * caller's tenant owns. The dashboard acts on the shared plane with a staff-level service
  * token, so without this a customer could name another tenant's vertical. Throws if not.

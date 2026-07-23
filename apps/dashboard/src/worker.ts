@@ -31,7 +31,7 @@ import { CATALOG, ensureCatalog, availableCatalog } from './catalog.js';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
 import { createApp, deprovisionApp, retryApp, provisionDashboard, reconcileRoles, type DashboardNode } from './provision.js';
-import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './deployments.js';
+import { listDeploymentsFromCp, listDeploymentsFromHost, verticalDeploymentFromCp, verticalDeploymentFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 import { transportFor, senderFor, teamInviteEmail } from './email.js';
 import { githubConfig, installUrl, installationAccount, listInstallationRepos } from './github.js';
@@ -736,6 +736,28 @@ app.get('/api/apps/:scopeId/events', async (c) => {
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
   return c.json(await dash.invoke('dashboard/app-events', { appScopeId: c.req.param('scopeId') }));
+});
+
+/**
+ * One app's Deployments tab — its vertical's REAL version registry + which version each
+ * channel points at (the `prod` one is what the app runs). Read-only: for a platform
+ * vertical the versions are managed by the Substrat team; this just surfaces the truth
+ * (so "am I on 0.0.9?" is answerable). The app must be the caller's own.
+ */
+app.get('/api/apps/:scopeId/deployments', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  const cp = controlPlaneFor(c.env, node.tenantId);
+  return c.json(
+    cp
+      ? await verticalDeploymentFromCp(cp, appRow.vertical_slug)
+      : await verticalDeploymentFromHost(host, STAFF, appRow.vertical_slug),
+  );
 });
 
 /** Create an app — provisioned into MY tenant (from the session), authorized in-scope. */
