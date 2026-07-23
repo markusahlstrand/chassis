@@ -144,6 +144,34 @@ export class TenantNarrowedControlPlane {
   }
 
   /**
+   * The verticals this tenant OWNS (builder-plane.md Phase 4). The shared registry is
+   * staff-wide over the service token, so filter to `ownerTenant === this.tenantId` here —
+   * the dashboard's Deployments view shows a customer only their own pushed verticals.
+   */
+  async listVerticals(): Promise<
+    Array<{ slug: string; name: string; source: string; ownerTenant: TenantId | null }>
+  > {
+    const all =
+      (await this.call<Array<{ slug: string; name: string; source: string; ownerTenant: TenantId | null }>>(
+        '/verticals',
+      )) ?? [];
+    return all.filter((v) => v.ownerTenant === this.tenantId);
+  }
+
+  /** A vertical's versions (admission state + deploymentRef). `[]` if it has none/unknown. */
+  async listVersions(
+    verticalSlug: string,
+  ): Promise<
+    Array<{ id: string; version: string; admission: string; admissionNote: string | null; deploymentRef: string | null; createdAt: string }>
+  > {
+    try {
+      return (await this.call(`/verticals/${encodeURIComponent(verticalSlug)}/versions`)) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * The vertical's release channels. Empty when it has no registered/promoted
    * versions — a static-binding vertical (like platform-owned Callout today), in
    * which case there is nothing to pin. `[]` on any non-200 so callers can treat
@@ -155,6 +183,19 @@ export class TenantNarrowedControlPlane {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Point a channel at a version (builder-plane.md Phase 4). The dashboard only ever calls
+   * this for `dev`/`staging` — `prod` stays a staff decision (model B), enforced at the
+   * worker endpoint. Over the service token the shared plane treats this as a staff
+   * promotion, so the caller's ownership of the slug must be checked FIRST (`assertOwned`).
+   */
+  promote(verticalSlug: string, channel: string, versionId: string): Promise<void> {
+    return this.post(
+      `/verticals/${encodeURIComponent(verticalSlug)}/channels/${encodeURIComponent(channel)}/promote`,
+      { versionId },
+    );
   }
 
   /**

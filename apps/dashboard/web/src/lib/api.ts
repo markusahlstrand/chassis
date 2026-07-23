@@ -40,6 +40,26 @@ export interface AppRow {
   created_at: string;
 }
 
+/** One version of a deployed vertical — mirrors the worker's DeploymentVersion. */
+export interface DeploymentVersion {
+  id: string;
+  version: string;
+  admission: 'pending' | 'admitted' | 'rejected' | string;
+  admissionNote: string | null;
+  deploymentRef: string | null;
+  createdAt: string;
+}
+
+/** A vertical this tenant pushed — the Deployments view's row (builder-plane.md Phase 4). */
+export interface Deployment {
+  slug: string; // full registry id, e.g. `acme-co/helpdesk`
+  displaySlug: string; // bare name for display, `helpdesk`
+  name: string;
+  source: string;
+  versions: DeploymentVersion[];
+  channels: Array<{ channel: string; versionId: string }>;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -78,6 +98,12 @@ export const api = {
   createApp: (input: { verticalSlug: string; name: string }) =>
     call<AppRow>('/apps', { method: 'POST', body: JSON.stringify(input) }),
   deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listDeployments: () => call<Deployment[]>('/deployments'),
+  promoteDeployment: (slug: string, channel: 'dev' | 'staging', versionId: string) =>
+    call<void>(`/deployments/${encodeURIComponent(slug)}/promote`, {
+      method: 'POST',
+      body: JSON.stringify({ channel, versionId }),
+    }),
 };
 
 /** Auth is a full-page redirect — the OIDC round-trip needs a real navigation. */

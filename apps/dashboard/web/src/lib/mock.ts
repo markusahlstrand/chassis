@@ -1,4 +1,4 @@
-import type { AppRow, CatalogEntry, Me } from './api';
+import type { AppRow, CatalogEntry, Deployment, Me } from './api';
 
 /**
  * Dev-preview mode — the Dashboard's analogue of the console's `VITE_DEV_ACTOR`
@@ -19,6 +19,34 @@ export const MOCK_ME: Me = {
 };
 
 export const MOCK_CATALOG: CatalogEntry[] = [{ slug: 'protocol', name: 'Documents' }];
+
+export const MOCK_DEPLOYMENTS: Deployment[] = [
+  {
+    slug: 'acme/helpdesk',
+    displaySlug: 'helpdesk',
+    name: 'Helpdesk',
+    source: 'cli',
+    versions: [
+      { id: '01J2Q8Z3V9K4W7X2M5N6P7V300', version: '0.3.0', admission: 'admitted', admissionNote: null, deploymentRef: 'acme-helpdesk-01j2q8z3v9k4w7x2m5n6p7v300', createdAt: '2026-07-22T12:00:00Z' },
+      { id: '01J2Q8Z3V9K4W7X2M5N6P7V200', version: '0.2.0', admission: 'admitted', admissionNote: null, deploymentRef: 'acme-helpdesk-01j2q8z3v9k4w7x2m5n6p7v200', createdAt: '2026-07-20T12:00:00Z' },
+      { id: '01J2Q8Z3V9K4W7X2M5N6P7V100', version: '0.1.0', admission: 'pending', admissionNote: null, deploymentRef: 'acme-helpdesk-01j2q8z3v9k4w7x2m5n6p7v100', createdAt: '2026-07-18T12:00:00Z' },
+    ],
+    channels: [
+      { channel: 'prod', versionId: '01J2Q8Z3V9K4W7X2M5N6P7V200' },
+      { channel: 'staging', versionId: '01J2Q8Z3V9K4W7X2M5N6P7V300' },
+    ],
+  },
+  {
+    slug: 'acme/reports',
+    displaySlug: 'reports',
+    name: 'Reports',
+    source: 'cli',
+    versions: [
+      { id: '01J2Q8Z3V9K4W7X2M5N6P7R100', version: '1.0.0', admission: 'pending', admissionNote: null, deploymentRef: 'acme-reports-01j2q8z3v9k4w7x2m5n6p7r100', createdAt: '2026-07-21T12:00:00Z' },
+    ],
+    channels: [],
+  },
+];
 
 const now = Date.parse('2026-07-22T18:00:00Z');
 const ago = (ms: number) => new Date(now - ms).toISOString();

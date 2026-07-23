@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Toast } from '@substrat-run/ui';
-import { api, signOut, ApiError, type AppRow, type CatalogEntry, type Me } from './lib/api';
-import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_ME } from './lib/mock';
+import { api, signOut, ApiError, type AppRow, type CatalogEntry, type Deployment, type Me } from './lib/api';
+import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_DEPLOYMENTS, MOCK_ME } from './lib/mock';
 import { verticalMeta } from './lib/demo';
 import { DashShell, type Crumb, type NavKey } from './components/DashShell';
 import { CommandPalette } from './components/CommandPalette';
 import { NotificationsPopover } from './components/NotificationsPopover';
 import { SignIn, Interstitial } from './views/SignIn';
 import { Apps } from './views/Apps';
+import { Deployments } from './views/Deployments';
 import { CreateApp } from './views/CreateApp';
 import { AppDetail } from './views/AppDetail';
 import { Team } from './views/Team';
@@ -29,7 +30,7 @@ function parseHash(): Route {
   const parts = h.split('/').filter(Boolean);
   if (parts[0] === 'apps' && parts[1] === 'new') return { section: 'new' };
   if (parts[0] === 'apps' && parts[1]) return { section: 'apps', app: parts[1], tab: parts[2] ?? 'overview' };
-  const known: NavKey[] = ['overview', 'apps', 'domains', 'team', 'integrations', 'analytics', 'billing', 'settings'];
+  const known: NavKey[] = ['overview', 'apps', 'deployments', 'domains', 'team', 'integrations', 'analytics', 'billing', 'settings'];
   const section = (known.includes(parts[0] as NavKey) ? parts[0] : 'overview') as NavKey;
   return { section };
 }
@@ -48,6 +49,8 @@ export function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [apps, setApps] = useState<AppRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [promoting, setPromoting] = useState(false);
   const [route, setRoute] = useState<Route>(parseHash);
   const [dark, setDark] = useState(() => {
     // `?theme=dark|light` wins on load (handy for demos + screenshots); otherwise
@@ -91,13 +94,19 @@ export function App() {
     setApps(await api.listApps());
   }, []);
 
-  // Session check → on sign-in, load apps + catalog. Dev-preview mode short-
-  // circuits to the demo tenant so the UI renders without the OIDC round-trip.
+  const reloadDeployments = useCallback(async () => {
+    if (DEV_MOCK) return;
+    setDeployments(await api.listDeployments());
+  }, []);
+
+  // Session check → on sign-in, load apps + catalog + deployments. Dev-preview mode
+  // short-circuits to the demo tenant so the UI renders without the OIDC round-trip.
   useEffect(() => {
     if (DEV_MOCK) {
       setMe(MOCK_ME);
       setApps(MOCK_APPS);
       setCatalog(MOCK_CATALOG);
+      setDeployments(MOCK_DEPLOYMENTS);
       return;
     }
     let live = true;
@@ -105,10 +114,11 @@ export function App() {
       if (!live) return;
       setMe(m);
       if (m) {
-        const [a, c] = await Promise.all([api.listApps(), api.catalog()]);
+        const [a, c, d] = await Promise.all([api.listApps(), api.catalog(), api.listDeployments().catch(() => [])]);
         if (!live) return;
         setApps(a);
         setCatalog(c);
+        setDeployments(d);
       }
     });
     return () => {
@@ -175,6 +185,33 @@ export function App() {
     [reloadApps],
   );
 
+  const promoteDeployment = useCallback(
+    async (slug: string, versionId: string, channel: 'dev' | 'staging') => {
+      if (promoting) return;
+      setPromoting(true);
+      try {
+        if (DEV_MOCK) {
+          setDeployments((ds) =>
+            ds.map((d) =>
+              d.slug !== slug
+                ? d
+                : { ...d, channels: [...d.channels.filter((c) => c.channel !== channel), { channel, versionId }] },
+            ),
+          );
+        } else {
+          await api.promoteDeployment(slug, channel, versionId);
+          await reloadDeployments();
+        }
+        setToast({ status: 'success', title: `Promoted to ${channel}`, detail: `${slug} now serves ${channel} from this version.` });
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Promotion failed', detail: e instanceof Error ? e.message : String(e) });
+      } finally {
+        setPromoting(false);
+      }
+    },
+    [promoting, reloadDeployments],
+  );
+
   const openApp = useMemo(() => (route.app ? apps.find((a) => a.app_scope_id === route.app) : undefined), [apps, route.app]);
 
   // Session mode: checking → interstitial; signed out → sign-in.
@@ -191,7 +228,7 @@ export function App() {
   if (route.section === 'apps' || route.section === 'new') crumbs.push({ label: 'Apps', onClick: () => go('#/apps') });
   if (route.section === 'new') crumbs.push({ label: 'New app' });
   if (route.section === 'apps' && openApp) crumbs.push({ label: openApp.name });
-  if (['domains', 'team', 'integrations', 'analytics', 'billing', 'settings'].includes(route.section)) {
+  if (['deployments', 'domains', 'team', 'integrations', 'analytics', 'billing', 'settings'].includes(route.section)) {
     crumbs.push({ label: route.section.charAt(0).toUpperCase() + route.section.slice(1) });
   }
 
@@ -222,6 +259,8 @@ export function App() {
         <NotFound label="That app could not be found." onBack={() => go('#/apps')} />
       ) : route.section === 'overview' || route.section === 'apps' ? (
         <Apps apps={apps} onCreate={() => go('#/apps/new')} onOpen={(s) => go(`#/apps/${s}/overview`)} onRetry={(s) => setToast({ status: 'danger', title: 'Retry not wired yet', detail: s })} />
+      ) : route.section === 'deployments' ? (
+        <Deployments deployments={deployments} onPromote={(slug, vid, ch) => void promoteDeployment(slug, vid, ch)} busy={promoting} />
       ) : route.section === 'team' ? (
         <Team />
       ) : route.section === 'domains' ? (

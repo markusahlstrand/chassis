@@ -26,6 +26,7 @@ import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
 import { createApp, deprovisionApp, provisionDashboard, type DashboardNode } from './provision.js';
+import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
@@ -187,6 +188,12 @@ const createAppBody = z.object({
   name: z.string().min(1),
 });
 
+// A builder self-serves dev/staging only; prod is refused in the handler (model B).
+const promoteBody = z.object({
+  channel: z.enum(['dev', 'staging', 'prod']),
+  versionId: z.string().min(1),
+});
+
 const app = new Hono<{ Bindings: Env }>();
 
 // The Dashboard SPA (apps/dashboard/web) is served by the Workers Assets binding
@@ -276,10 +283,53 @@ app.delete('/api/apps/:id', async (c) => {
   return c.body(null, 204);
 });
 
+/**
+ * My deployments (builder-plane.md Phase 4) — the verticals THIS tenant pushed, with
+ * their versions + channels. Connected mode reads the shared plane (tenant-filtered);
+ * embedded reads the local host. Either way the tenant is the caller's own, from session.
+ */
+app.get('/api/deployments', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const cp = controlPlaneFor(c.env, node.tenantId);
+  const deployments = cp
+    ? await listDeploymentsFromCp(cp)
+    : await listDeploymentsFromHost(host, STAFF, node.tenantId);
+  return c.json(deployments);
+});
+
+/**
+ * Promote one of MY verticals to a NON-PROD channel. `prod` is refused here — production
+ * promotion + admission stay a staff decision (model B, self-serve-deploy.md §3). The slug
+ * is verified to be one of the caller's own deployments before anything is promoted.
+ */
+app.post('/api/deployments/:slug/promote', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const body = promoteBody.parse(await c.req.json());
+  if (body.channel === 'prod') {
+    throw new HTTPException(403, { message: 'production is promoted by the Substrat team' });
+  }
+  const slug = c.req.param('slug');
+  const cp = controlPlaneFor(c.env, node.tenantId);
+  if (cp) {
+    assertOwned(await listDeploymentsFromCp(cp), slug); // your vertical, or 4xx
+    await cp.promote(slug, body.channel, body.versionId);
+  } else {
+    assertOwned(await listDeploymentsFromHost(host, STAFF, node.tenantId), slug);
+    await host.admin.promoteVersion(STAFF, slug, body.channel, body.versionId);
+  }
+  return c.body(null, 204);
+});
+
 app.onError((err, c) => {
   const status = err instanceof HTTPException ? err.status : 400;
   const m = err instanceof Error ? err.message : String(err);
   if (status === 400 && /permission denied/.test(m)) return c.json({ error: m }, 403);
+  // A slug that isn't the caller's own deployment reads as not-found, not a leak.
+  if (status === 400 && /not one of your deployments/.test(m)) return c.json({ error: m }, 404);
   return c.json({ error: m }, status);
 });
 
