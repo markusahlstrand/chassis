@@ -146,9 +146,10 @@ type CreateAppInput = Parameters<typeof createApp>[1];
 
 /**
  * Delete an app: authorize + soft-delete the account's record, then take its scope
- * offline (the mirror of createApp). Suspend — not destroy — so it is reversible and
- * the audit history is retained; the hostname goes to `failed` so the router stops
- * resolving it. Connected: on the shared plane, tenant-narrowed. Embedded: this host.
+ * offline (the mirror of createApp). ARCHIVE — the terminal delete state: the record is
+ * retained (audit history) but the scope releases its slug so the name can be reused,
+ * and the hostname goes to `failed` so the router stops resolving it. Connected: on the
+ * shared plane, tenant-narrowed. Embedded: this host.
  */
 export async function deprovisionApp(
   host: ScopeHost,
@@ -166,11 +167,11 @@ export async function deprovisionApp(
 
   // 2. Take the app scope offline in the caller's own tenant (ambient, never a request arg).
   if (input.controlPlane) {
-    await input.controlPlane.suspendScope(input.appScopeId);
+    await input.controlPlane.archiveScope(input.appScopeId);
     if (input.hostname) await input.controlPlane.setHostnameStatus(input.hostname, 'failed', 'app deleted');
   } else {
     const staff = platformActorId.parse(ulid());
-    await host.admin.suspendScope(staff, input.node.tenantId, input.appScopeId);
+    await host.admin.archiveScope(staff, input.node.tenantId, input.appScopeId);
     if (input.hostname) await host.admin.setHostnameStatus(staff, input.hostname, 'failed');
   }
 }

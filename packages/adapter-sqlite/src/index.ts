@@ -932,9 +932,10 @@ export class SqliteScopeHost implements ScopeHost {
     if (!existing) {
       // The `scopes_tenant_slug` UNIQUE index makes this fail closed either way;
       // checking first is what turns a SQLITE_CONSTRAINT into a sentence naming
-      // the scope that already holds the slug.
+      // the scope that already holds the slug. An `archived` scope (a deleted app) has
+      // released its name — it is excluded so the slug can be reclaimed by a new scope.
       const slugOwner = this.directory
-        .prepare('SELECT scope_id FROM scopes WHERE tenant_id = ? AND slug = ?')
+        .prepare("SELECT scope_id FROM scopes WHERE tenant_id = ? AND slug = ? AND status != 'archived'")
         .get(input.tenantId, record.slug) as { scope_id: string } | undefined;
       if (slugOwner) {
         throw new Error(
@@ -1877,11 +1878,16 @@ export class SqliteScopeHost implements ScopeHost {
           throw new Error(`unknown scope ${parsed.scopeId} in tenant ${parsed.tenantId}`);
         }
         const existing = this.directory
-          .prepare('SELECT scope_id FROM hostnames WHERE hostname = ?')
-          .get(parsed.hostname) as { scope_id: string } | undefined;
-        if (existing && existing.scope_id !== parsed.scopeId) {
+          .prepare(
+            `SELECT h.scope_id AS scope_id, s.status AS scope_status
+               FROM hostnames h LEFT JOIN scopes s ON s.scope_id = h.scope_id
+              WHERE h.hostname = ?`,
+          )
+          .get(parsed.hostname) as { scope_id: string; scope_status: string | null } | undefined;
+        if (existing && existing.scope_id !== parsed.scopeId && existing.scope_status !== 'archived') {
           // A hostname is globally unique and routes to exactly one place. Silently
-          // rebinding it would move another tenant's traffic.
+          // rebinding it would move another tenant's traffic. Exception: the holder is
+          // ARCHIVED (a deleted app) — it released the name, so the rebind reclaims it.
           throw new Error(`hostname '${parsed.hostname}' is already bound to another scope`);
         }
         // Exactly one canonical per (scope, surface): "which one do certs and
@@ -2370,7 +2376,10 @@ export class SqliteScopeHost implements ScopeHost {
       unsuspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unsuspendScope', tenantId, scopeId, ['suspended'], 'active'),
       archiveScope: async (actor, tenantId, scopeId) =>
-        transitionScope(actor, 'archiveScope', tenantId, scopeId, ['active', 'suspended'], 'archived'),
+        // Also from `provisioning`: a scope whose provisioning never completed (a failed
+        // create) must be abandonable, or its slug is stranded forever (it can't reach a
+        // terminal state that frees the name).
+        transitionScope(actor, 'archiveScope', tenantId, scopeId, ['provisioning', 'active', 'suspended'], 'archived'),
       unarchiveScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unarchiveScope', tenantId, scopeId, ['archived'], 'active'),
       grantEntitlement: async (actor: PlatformActorId, tenantId: TenantId, entitlementKey: string) => {

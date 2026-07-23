@@ -622,8 +622,10 @@ export class ControlPlaneDO extends DurableObject {
     const existed =
       this.sql.exec('SELECT 1 FROM scopes WHERE scope_id = ?', scopeId).toArray()[0] !== undefined;
     if (!existed) {
+      // An `archived` scope (a deleted app) has released its name — excluded so the slug
+      // can be reclaimed by a new scope.
       const slugOwner = this.sql
-        .exec('SELECT scope_id FROM scopes WHERE tenant_id = ? AND slug = ?', tenantId, record.slug)
+        .exec("SELECT scope_id FROM scopes WHERE tenant_id = ? AND slug = ? AND status != 'archived'", tenantId, record.slug)
         .toArray()[0] as { scope_id: string } | undefined;
       if (slugOwner) {
         throw new Error(
@@ -879,7 +881,7 @@ export class ControlPlaneDO extends DurableObject {
     // joins: a scope with no bound version resolves with deployment_ref = null.
     return this.sql
       .exec(
-        `SELECT h.*, vv.deployment_ref AS deployment_ref
+        `SELECT h.*, vv.deployment_ref AS deployment_ref, s.status AS scope_status
            FROM hostnames h
            LEFT JOIN scopes s ON s.scope_id = h.scope_id
            LEFT JOIN vertical_versions vv ON vv.id = s.vertical_version_id
