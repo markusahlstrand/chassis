@@ -42,11 +42,24 @@ Login is [AuthHero OIDC](/concepts/identity#two-real-choices-made-differently) t
 gate, the Dashboard does a **JIT tenant bootstrap**: a new user's first sign-in provisions their
 own tenant and dashboard scope, and makes them its owner.
 
+## Deployments
+
+For a customer who *builds* a vertical (not just instantiates one from the catalog), the
+**Deployments** tab is the builder-facing mirror of the staff [console](/platform/console)'s
+Verticals view — narrowed to the verticals **this workspace owns** (the ones it
+[pushed with the CLI](/guide/deploying)). Per vertical: each version's admission state, and
+which channel points where. A builder self-serves `dev`/`staging` promotion right here;
+`prod` is shown read-only, because production promotion and admission stay a platform decision
+(model B). The tenant is ambient from the session, and every read and promotion is checked to
+be one of the caller's own verticals — the dashboard's shared-plane credential can't be turned
+into a lever on another tenant's deployment.
+
 ## Status
 
 Built and connected — self-service sign-up bootstraps a tenant, the catalog offers a real
 [Callout](/verticals/callout) entry, and provisioning runs through the tenant-narrowed control-plane
-seam (an app becomes a live scope; deleting one deprovisions it for real). It is served as a React
-SPA bundled into its worker. The full designed surface (members, domains, connections, billing) is
-the roadmap the [design note](https://github.com/substrat-run/substrat/blob/main/docs/design/dashboard.md)
-lays out; provisioning and the app lifecycle are the parts that exist today.
+seam (an app becomes a live scope; deleting one deprovisions it for real). Builders manage their
+pushed verticals in the Deployments tab (above). It is served as a React SPA bundled into its
+worker. The full designed surface (members, domains, connections, billing) is the roadmap the
+[design note](https://github.com/substrat-run/substrat/blob/main/docs/design/dashboard.md) lays
+out; provisioning, the app lifecycle, and builder deployments are the parts that exist today.

@@ -143,6 +143,7 @@ function guideSidebar() {
         { text: '@substrat-run/adapter-cloudflare', link: '/reference/adapter-cloudflare' },
         { text: '@substrat-run/contract-tests', link: '/reference/contract-tests' },
         { text: '@substrat-run/oidc-rp', link: '/reference/oidc-rp' },
+        { text: '@substrat-run/cli', link: '/reference/cli' },
       ],
     },
   ];
