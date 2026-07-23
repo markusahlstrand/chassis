@@ -1,4 +1,4 @@
-import type { AppRow, CatalogEntry, Deployment, Me } from './api';
+import type { AppRow, CatalogEntry, Deployment, Me, Member } from './api';
 
 /**
  * Dev-preview mode — the Dashboard's analogue of the console's `VITE_DEV_ACTOR`
@@ -16,9 +16,21 @@ export const MOCK_ME: Me = {
   dashboardScope: '01J2Q8Z3V9K4W7X2M5N6P7DASH' as Me['dashboardScope'],
   email: 'dana@acme.com',
   name: 'Dana',
+  // Two teams so the switcher is exercised in dev-preview (one login, several teams).
+  currentTeamId: '01J2Q8Z3V9K4W7X2M5N6P7TNT0' as Me['currentTeamId'],
+  teams: [
+    { id: '01J2Q8Z3V9K4W7X2M5N6P7TNT0' as Me['tenant'], name: 'Acme', slug: 'acme' },
+    { id: '01J2Q8Z3V9K4W7X2M5N6P7TNT1' as Me['tenant'], name: 'Northwind', slug: 'northwind' },
+  ],
 };
 
 export const MOCK_CATALOG: CatalogEntry[] = [{ slug: 'protocol', name: 'Documents' }];
+
+export const MOCK_MEMBERS: Member[] = [
+  { id: 'm1', principal: MOCK_ME.principal, email: 'dana@acme.com', role_key: 'owner', status: 'active', invitation_id: null, invited_by: 'system', invited_at: '2026-03-02T10:00:00Z', joined_at: '2026-03-02T10:00:00Z' },
+  { id: 'm2', principal: '01J2Q8Z3V9K4W7X2M5N6P7ADMN', email: 'jonas@acme.com', role_key: 'admin', status: 'active', invitation_id: null, invited_by: 'dana@acme.com', invited_at: '2026-04-11T10:00:00Z', joined_at: '2026-04-12T09:00:00Z' },
+  { id: 'm3', principal: null, email: 'priya@acme.com', role_key: 'member', status: 'invited', invitation_id: 'inv-priya', invited_by: 'dana@acme.com', invited_at: '2026-07-20T10:00:00Z', joined_at: null },
+];
 
 export const MOCK_DEPLOYMENTS: Deployment[] = [
   {

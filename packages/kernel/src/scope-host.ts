@@ -379,6 +379,16 @@ export interface HostAdmin {
    */
   listRoles(actor: PlatformActorId, filter?: RoleFilter): Promise<TenantRole[]>;
   assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
+  /**
+   * Revoke a role assignment — the inverse of `assignRole`, same `RoleAssignment`
+   * shape. Tombstones the role tuple (K-21, never DELETE), so the checker stops
+   * resolving it and the assignment stays visible to audit; a later `assignRole`
+   * of the same (principal, role, node) reactivates it. Idempotent: unassigning a
+   * role that was never assigned (or already revoked) is a silent no-op. Takes a
+   * `PlatformActorId` like every admin mutation — the caller's own authority to do
+   * this is decided above the kernel (e.g. the dashboard's manage-members check).
+   */
+  unassignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
   grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
   /**
@@ -782,6 +792,18 @@ export interface HostAdmin {
   ): Promise<{ key: string; value: unknown }[]>;
 
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
+
+  /**
+   * Remove a principal's identity link(s) in a tenant — the inverse of `linkIdentity`,
+   * keyed by principal (not external id) so a caller who removed a member can sever
+   * their login from the team without knowing their external subject. After this,
+   * `listIdentityTenants` no longer returns the tenant for that person and
+   * `resolveIdentity` no longer resolves — so the team disappears from their switcher.
+   * A DELETE, not a tombstone: the identity map is current operational state (the audit
+   * is the admin log), and re-inviting must be able to re-link a fresh principal.
+   * Idempotent: unlinking a principal with no link is a silent no-op.
+   */
+  unlinkIdentity(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId): Promise<void>;
 
   /**
    * Register an identity pool and its topology (K-23). A provider must be registered

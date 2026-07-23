@@ -393,6 +393,32 @@ export function defineScopeDO(
       });
     }
 
+    /** Tombstone a scope tuple (K-21) — the row stays, the walk skips it. Returns
+     *  whether anything changed so a repeat revoke is a silent no-op. */
+    async revokeTuple(subject: string, relation: string, object: string, at: string): Promise<boolean> {
+      return this.queue.enqueue(() => {
+        const before = this.sql
+          .exec(
+            `SELECT 1 FROM _substrat_tuples
+             WHERE subject = ? AND relation = ? AND object = ? AND revoked_at IS NULL`,
+            subject,
+            relation,
+            object,
+          )
+          .toArray();
+        if (before.length === 0) return false;
+        this.sql.exec(
+          `UPDATE _substrat_tuples SET revoked_at = ?
+           WHERE subject = ? AND relation = ? AND object = ? AND revoked_at IS NULL`,
+          at,
+          subject,
+          relation,
+          object,
+        );
+        return true;
+      });
+    }
+
     async invoke(
       operation: string,
       input: unknown,

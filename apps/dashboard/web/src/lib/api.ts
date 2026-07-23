@@ -13,20 +13,64 @@ import type { PrincipalId, ScopeId, TenantId } from '@substrat-run/contracts';
  * lib/demo.ts) with the honesty banners the design calls for.
  */
 
-/** Who the authenticated customer is — their tenant, dashboard scope, owner principal. */
-export interface Me {
-  principal: PrincipalId;
-  tenant: TenantId;
-  dashboardScope: ScopeId;
-  /** From the OIDC session — shown in the shell (footer, user pill, org label). */
+/** One team (tenant) the signed-in user belongs to — drives the team switcher. */
+export interface Team {
+  id: TenantId;
+  name: string;
+  slug: string;
+}
+
+/** Authenticated, but not in any team yet — the app shows the onboarding screen. */
+export interface Onboarding {
+  needsOnboarding: true;
   email?: string | null;
   name?: string | null;
+}
+
+/** The `/api/me` result: either a resolved account, or a teamless login to onboard. */
+export type MeResult = Me | Onboarding;
+
+/** Narrow a `MeResult` to the teamless onboarding state. */
+export function needsOnboarding(m: MeResult): m is Onboarding {
+  return (m as Onboarding).needsOnboarding === true;
+}
+
+/** Who the authenticated customer is — their current team, dashboard scope, principal. */
+export interface Me {
+  principal: PrincipalId;
+  /** The currently-selected team (tenant) this session is scoped to. */
+  tenant: TenantId;
+  dashboardScope: ScopeId;
+  /** From the OIDC session — shown in the shell (footer, user pill). */
+  email?: string | null;
+  name?: string | null;
+  /** Every team this login belongs to — one user can span several teams. */
+  teams: Team[];
+  /** The selected team's id (mirrors `tenant`); drives the switcher's checkmark. */
+  currentTeamId: TenantId;
 }
 
 export interface CatalogEntry {
   slug: string;
   name: string;
 }
+
+/** A team roster entry — an active member or an outstanding invite. Mirrors the worker's row. */
+export interface Member {
+  id: string;
+  /** The kernel principal once accepted; null while still 'invited'. */
+  principal: string | null;
+  email: string;
+  role_key: string;
+  status: 'active' | 'invited' | 'revoked';
+  invitation_id: string | null;
+  invited_by: string;
+  invited_at: string;
+  joined_at: string | null;
+}
+
+/** The role a new member can be invited at (owner is the un-invitable first member). */
+export type InviteRole = 'admin' | 'member' | 'viewer';
 
 /** One provisioned app — mirrors the worker's `DashboardAppRow` (module.ts). */
 export interface AppRow {
@@ -84,16 +128,42 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  /** `null` when there is no session (the worker answers 401). */
-  me: async (): Promise<Me | null> => {
+  /** `null` when there is no session (the worker answers 401); onboarding when teamless. */
+  me: async (): Promise<MeResult | null> => {
     try {
-      return await call<Me>('/me');
+      return await call<MeResult>('/me');
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return null;
       throw e;
     }
   },
+  /** Create a team (first team or another); the server switches to it, so reload after. */
+  createTeam: (name: string) =>
+    call<{ teamId: string }>('/teams', { method: 'POST', body: JSON.stringify({ name }) }),
+  /** Switch the active team; the server pins it in a cookie, so the caller reloads after. */
+  switchTeam: (teamId: string) =>
+    call<void>('/teams/switch', { method: 'POST', body: JSON.stringify({ teamId }) }),
   catalog: () => call<CatalogEntry[]>('/catalog'),
+  /** The current team's roster (active members + outstanding invites). */
+  listMembers: () => call<Member[]>('/members'),
+  /** Invite someone at a role; returns a shareable accept link (no email delivery yet). */
+  inviteMember: (email: string, roleKey: InviteRole) =>
+    call<{ invitationId: string; acceptUrl: string }>('/members/invite', {
+      method: 'POST',
+      body: JSON.stringify({ email, roleKey }),
+    }),
+  /** Withdraw a pending invite. */
+  revokeInvite: (invitationId: string) =>
+    call<void>('/members/revoke-invite', { method: 'POST', body: JSON.stringify({ invitationId }) }),
+  /** Remove an active member (revokes their role). The owner cannot be removed. */
+  removeMember: (memberId: string) =>
+    call<void>('/members/remove', { method: 'POST', body: JSON.stringify({ memberId }) }),
+  /** Accept an invite token; the server switches to the team, so the caller reloads after. */
+  acceptInvite: (token: string) =>
+    call<{ teamId: string; already?: boolean }>('/invites/accept', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
   listApps: () => call<AppRow[]>('/apps'),
   createApp: (input: { verticalSlug: string; name: string }) =>
     call<AppRow>('/apps', { method: 'POST', body: JSON.stringify(input) }),

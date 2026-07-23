@@ -16,6 +16,7 @@
     "@substrat-run/adapter-cloudflare": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/demo-callout": "workspace:^",
+    "@substrat-run/engine-invites": "workspace:^",
     "@substrat-run/engine-invoicing": "workspace:^",
     "@substrat-run/engine-protocol": "workspace:^",
     "@substrat-run/engine-workorder": "workspace:^",

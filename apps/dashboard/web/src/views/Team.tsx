@@ -1,55 +1,139 @@
 import { useState } from 'react';
-import { Button, Dialog, Select, Switch, Tag } from '@substrat-run/ui';
-import { MEMBERS, ROLE_MATRIX, ROLE_OPTS, type Member } from '../lib/demo';
+import { Button, Dialog, Input, Select } from '@substrat-run/ui';
+import { ROLE_MATRIX } from '../lib/demo';
+import type { InviteRole, Member } from '../lib/api';
 import { Ic } from '../lib/icons';
 import { Avatar } from '../components/DashShell';
 import { Page } from '../components/layout';
-import { card, MonoTag, PageTitle, Pill, RowActions } from '../components/ui';
+import { card, MonoTag, PageTitle, Pill } from '../components/ui';
 
-const COLS = '2.4fr 1fr 1fr 1fr 40px';
+const COLS = '2.4fr 1fr 1fr 1fr 90px';
 const STATUS: Record<Member['status'], { kind: 'success' | 'warning' | 'neutral'; label: string }> = {
   active: { kind: 'success', label: 'Active' },
   invited: { kind: 'warning', label: 'Invited' },
   revoked: { kind: 'neutral', label: 'Revoked' },
 };
+const ROLE_OPTS: { value: InviteRole; label: string }[] = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'member', label: 'Member' },
+  { value: 'viewer', label: 'Viewer' },
+];
+const AVATAR_TONE: Record<string, 'brand' | 'cyan' | 'amber' | 'muted'> = {
+  owner: 'brand',
+  admin: 'cyan',
+  member: 'amber',
+  viewer: 'muted',
+};
 
-/** Team roster + roles matrix (screens 1m, 1n). Demo — an invite is a grant. */
-export function Team() {
-  const [showRevoked, setShowRevoked] = useState(true);
+function fmtDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+}
+
+/**
+ * Team roster + invite. The roster is the dashboard's own projection (there is no
+ * kernel "who holds a role here" query); an invite composes the invites engine and,
+ * on accept, becomes a kernel role assignment. Email delivery is a later connector,
+ * so an invite hands back a shareable link.
+ */
+export function Team({
+  members,
+  meEmail,
+  canManage,
+  onInvite,
+  onRevoke,
+  onRemove,
+}: {
+  members: Member[];
+  meEmail: string;
+  canManage: boolean;
+  onInvite: (email: string, roleKey: InviteRole) => Promise<{ acceptUrl: string } | void>;
+  onRevoke: (invitationId: string) => void;
+  onRemove: (memberId: string) => void;
+}) {
   const [invite, setInvite] = useState(false);
-  const [matrixOpen, setMatrixOpen] = useState(true);
-  const rows = MEMBERS.filter((m) => showRevoked || m.status !== 'revoked');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<InviteRole>('member');
+  const [sending, setSending] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [matrixOpen, setMatrixOpen] = useState(false);
+
+  const rows = members.filter((m) => m.status !== 'revoked');
+
+  const reset = () => {
+    setInvite(false);
+    setEmail('');
+    setRole('member');
+    setLink(null);
+    setCopied(false);
+  };
+  const send = async () => {
+    if (!email.trim() || sending) return;
+    setSending(true);
+    try {
+      const res = await onInvite(email.trim(), role);
+      if (res && 'acceptUrl' in res) setLink(res.acceptUrl);
+      else reset();
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <Page>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-        <PageTitle title="Team" subtitle="An invitation is a grant — every change here lands in the audit log." />
+        <PageTitle title="Team" subtitle="An invitation is a grant — accepted invites become a role at the tenant, in the audit log." />
         <div style={{ flex: 1 }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>
-          Show revoked <Switch checked={showRevoked} onChange={setShowRevoked} />
-        </label>
-        <Button icon={<Ic name="plus" />} onClick={() => setInvite(true)}>Invite</Button>
+        {canManage && <Button icon={<Ic name="plus" />} onClick={() => setInvite(true)}>Invite</Button>}
       </div>
 
       <div style={{ ...card, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 36, padding: '0 16px', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
           <span>Member</span><span>Role</span><span>Status</span><span>Added</span><span />
         </div>
+        {rows.length === 0 && (
+          <div style={{ padding: '20px 16px', fontSize: 13, color: 'var(--text-tertiary)' }}>No members yet.</div>
+        )}
         {rows.map((m, i) => {
           const s = STATUS[m.status];
+          const you = m.email === meEmail;
+          const name = m.email.split('@')[0] ?? m.email;
           return (
-            <div key={m.email} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 48, padding: '0 16px', fontSize: 13, borderBottom: i === rows.length - 1 ? 'none' : '1px solid var(--border-subtle)', opacity: m.status === 'revoked' ? 0.55 : 1 }}>
+            <div key={m.id} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 48, padding: '0 16px', fontSize: 13, borderBottom: i === rows.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Avatar seed={m.name} tone={m.avatar} size={26} />
+                <Avatar seed={name} tone={AVATAR_TONE[m.role_key] ?? 'muted'} size={26} />
                 <span style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{m.name} {m.you && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 400 }}>(you)</span>}</span>
+                  <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{name} {you && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 400 }}>(you)</span>}</span>
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>{m.email}</span>
                 </span>
               </span>
-              <span><MonoTag>{m.role}</MonoTag></span>
+              <span><MonoTag>{m.role_key}</MonoTag></span>
               <span><Pill kind={s.kind}>{s.label}</Pill></span>
-              <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{m.added}</span>
-              <RowActions />
+              <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{fmtDate(m.joined_at ?? m.invited_at)}</span>
+              <span style={{ textAlign: 'right' }}>
+                {canManage && m.status === 'invited' && m.invitation_id && (
+                  <button
+                    type="button"
+                    onClick={() => onRevoke(m.invitation_id!)}
+                    style={{ border: 0, background: 'transparent', color: 'var(--status-danger-fg)', fontSize: 12.5, cursor: 'pointer', padding: 4 }}
+                  >
+                    Revoke
+                  </button>
+                )}
+                {canManage && m.status === 'active' && m.role_key !== 'owner' && !you && (
+                  <button
+                    type="button"
+                    onClick={() => onRemove(m.id)}
+                    style={{ border: 0, background: 'transparent', color: 'var(--status-danger-fg)', fontSize: 12.5, cursor: 'pointer', padding: 4 }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </span>
             </div>
           );
         })}
@@ -79,22 +163,45 @@ export function Team() {
         )}
       </div>
 
-      <Dialog open={invite} title="Invite people to Acme" confirmLabel="Send invite" onCancel={() => setInvite(false)} onConfirm={() => setInvite(false)} width={480}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: -8 }}>They’ll get an email with a link to join your workspace.</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-secondary)' }}>Email addresses</div>
-            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, minHeight: 40, padding: '6px 10px', border: '1px solid var(--border-default)', borderRadius: 6, background: 'var(--surface-card)' }}>
-              <Tag mono onRemove={() => {}}>priya@acme.com</Tag>
-              <span style={{ fontSize: 13, color: 'var(--text-placeholder)' }}>Add another…</span>
+      <Dialog
+        open={invite}
+        title="Invite to your team"
+        confirmLabel={link ? 'Done' : sending ? 'Sending…' : 'Create invite'}
+        cancelLabel={link ? 'Invite another' : 'Cancel'}
+        confirmDisabled={!link && (!email.trim() || sending)}
+        onConfirm={() => (link ? reset() : void send())}
+        onCancel={() => (link ? (setLink(null), setEmail(''), setCopied(false)) : reset())}
+        width={480}
+      >
+        {link ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+              Invite created. Email delivery is coming — for now, share this link with them:
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Input value={link} mono style={{ flex: 1 }} onChange={() => {}} />
+              <Button
+                variant="secondary"
+                onClick={() => { void navigator.clipboard?.writeText(link); setCopied(true); }}
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+              The link works only for the invited email, and expires in 14 days.
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Select label="Role" options={ROLE_OPTS} value="Member" style={{ width: 220 }} />
-            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Members can use apps and edit content, but can’t manage apps, domains, or people.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <Input label="Email address" placeholder="colleague@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Select label="Role" options={ROLE_OPTS} value={role} onChange={(e) => setRole(e.target.value as InviteRole)} style={{ width: 220 }} />
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                You can only grant a role whose permissions you already hold.
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', background: 'var(--surface-inset)', borderRadius: 6, padding: '8px 12px' }}>Per-app access is coming — today an invite grants a workspace-wide role.</div>
-        </div>
+        )}
       </Dialog>
     </Page>
   );

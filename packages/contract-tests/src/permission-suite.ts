@@ -185,6 +185,24 @@ export function permissionContractSuite(
       expect(typeof withRevoked[0]!.revokedAt).toBe('string');
     });
 
+    it('unassigning a role stops it granting (K-21), is idempotent, and re-assign restores it', async () => {
+      const ivan: PrincipalId = principalId.parse(ulid());
+      await host.admin.assignRole(staff, { principalId: ivan, roleKey: 'tech', node: { tenantId: t1, scopeId: null } });
+      await expect(probe(ivan, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
+
+      // The inverse of assignRole — the walk skips the tombstoned tuple, access gone.
+      await host.admin.unassignRole(staff, { principalId: ivan, roleKey: 'tech', node: { tenantId: t1, scopeId: null } });
+      await expect(probe(ivan, s1, PERM_READ)).resolves.toMatchObject({ allowed: false });
+
+      // Idempotent: unassigning a role that isn't assigned is a silent no-op.
+      await host.admin.unassignRole(staff, { principalId: ivan, roleKey: 'tech', node: { tenantId: t1, scopeId: null } });
+      await host.admin.unassignRole(staff, { principalId: principalId.parse(ulid()), roleKey: 'tech', node: { tenantId: t1, scopeId: null } });
+
+      // Re-assigning the same (principal, role, node) reactivates it — the tombstone clears.
+      await host.admin.assignRole(staff, { principalId: ivan, roleKey: 'tech', node: { tenantId: t1, scopeId: null } });
+      await expect(probe(ivan, s1, PERM_READ)).resolves.toMatchObject({ allowed: true });
+    });
+
     it('enumerates live members of an org', async () => {
       const gina: PrincipalId = principalId.parse(ulid());
       const hank: PrincipalId = principalId.parse(ulid());

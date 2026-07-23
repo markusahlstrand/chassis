@@ -11,13 +11,14 @@
  */
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { getCookie } from 'hono/cookie';
-import { principalId, scopeId, tenantId, platformActorId, z, type PermissionKey } from '@substrat-run/contracts';
+import { getCookie, setCookie } from 'hono/cookie';
+import { principalId, scopeId, tenantId, orgId, platformActorId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
 import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+import { invitesModule } from '@substrat-run/engine-invites';
 // The worker-safe subpath: the Callout domain module + perms only, never the demo's
 // seed/auth (node + better-auth). M0 bundles the vertical here as a stand-in; the
 // production model deploys Callout separately (dashboard.md §6) and — per master-plan
@@ -32,11 +33,29 @@ import { TenantNarrowedControlPlane } from './authority.js';
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
 const PROVIDER = 'authhero';
 
+/**
+ * The selected-team cookie. Identity (who you are) lives on `sb_session`; this
+ * carries only WHICH of your teams the portal is currently scoped to — kept
+ * separate so a team switch never touches the login. It is NOT a security
+ * boundary: every read re-verifies the named team is one the caller actually
+ * belongs to (`listIdentityTenants`), so a forged value can only ever name a
+ * team you are already a member of, and otherwise falls back to your default.
+ */
+const TEAM_COOKIE = 'sb_team';
+const TEAM_COOKIE_MAXAGE = 60 * 60 * 24 * 365;
+const teamCookieOpts = (origin: string) => ({
+  httpOnly: true,
+  secure: origin.startsWith('https:'),
+  sameSite: 'Lax' as const,
+  path: '/',
+  maxAge: TEAM_COOKIE_MAXAGE,
+});
+
 // The app binary: the Dashboard vertical + the verticals an app can run. M0 bundles
 // the app verticals into this deployment's ScopeDO (see the file header), so every
 // module a catalog entry needs must be here: Documents (protocol) and Callout —
 // the field-service vertical composing workorder + invoicing + protocol.
-const MODULES = [dashboardModule, protocolModule, workorderModule, invoicingModule, calloutModule];
+const MODULES = [dashboardModule, invitesModule, protocolModule, workorderModule, invoicingModule, calloutModule];
 export const ScopeDO = defineScopeDO(MODULES, {});
 export { ControlPlaneDO };
 
@@ -120,66 +139,163 @@ function hostFor(env: Env): CloudflareScopeHost {
   return host;
 }
 
-/** A URL-safe account slug from the email + a bit of the user id (unique across the platform). */
-function slugFor(email: string | null | undefined, userId: string): string {
-  const base =
-    (email?.split('@')[0] ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') ||
-    'account';
-  // OIDC subjects carry a provider prefix + separator (e.g. `auth0|46906645…`), so the
-  // raw id is not slug-safe. Strip to [a-z0-9] and take the unique tail — the leading
-  // provider prefix is constant across users; the tail is what disambiguates.
-  const suffix = userId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-6) || 'x';
-  return `${base}-${suffix}`;
+/** A globally-unique, URL-safe team slug from its name + the tenant id tail. */
+function teamSlug(name: string, tenantId: string): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'team';
+  // The tenant ULID is unique, so its tail disambiguates two teams sharing a name.
+  const tail = tenantId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-6) || 'x';
+  return `${base}-${tail}`;
+}
+
+// -- signed invite token -----------------------------------------------------
+// The invite link carries WHERE to accept (which tenant/scope/invitation) in an
+// HMAC-signed token (Web Crypto, SESSION_SECRET — the same secret oidc-rp signs
+// with). The token is routing, not the secret: the real gate is the invites
+// engine re-hashing the recipient's verified email at accept, so a tampered or
+// leaked token can only ever accept an invitation sent to the holder's own email.
+// Signing just stops the tenant/scope fields being forged to probe other scopes.
+
+interface InviteClaim {
+  tenantId: string;
+  scopeId: string;
+  invitationId: string;
+  exp: number;
+}
+
+const b64url = (bytes: Uint8Array): string =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64urlToBytes = (s: string): Uint8Array =>
+  Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
+
+function hmacKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify'],
+  );
+}
+
+async function signInviteToken(env: Env, claim: Omit<InviteClaim, 'exp'>): Promise<string> {
+  const payload: InviteClaim = { ...claim, exp: Date.now() + 14 * 24 * 60 * 60 * 1000 };
+  const body = b64url(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = new Uint8Array(
+    await crypto.subtle.sign('HMAC', await hmacKey(env.SESSION_SECRET), new TextEncoder().encode(body)),
+  );
+  return `${body}.${b64url(sig)}`;
+}
+
+async function verifyInviteToken(env: Env, token: string): Promise<InviteClaim | null> {
+  const [body, sig] = token.split('.');
+  if (!body || !sig) return null;
+  const ok = await crypto.subtle.verify(
+    'HMAC',
+    await hmacKey(env.SESSION_SECRET),
+    b64urlToBytes(sig),
+    new TextEncoder().encode(body),
+  );
+  if (!ok) return null;
+  try {
+    const claim = JSON.parse(new TextDecoder().decode(b64urlToBytes(body))) as InviteClaim;
+    return claim.exp > Date.now() ? claim : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One team the signed-in user belongs to — a tenant, named for the switcher. */
+interface Team {
+  id: TenantId;
+  name: string;
+  slug: string;
+}
+
+/** The teams a login belongs to, resolved to display names for the switcher. */
+async function listTeams(host: ScopeHost, tenants: readonly TenantId[]): Promise<Team[]> {
+  const teams: Team[] = [];
+  for (const t of tenants) {
+    const tenant = await host.admin.getTenant(STAFF, t);
+    if (tenant) teams.push({ id: t, name: tenant.name, slug: tenant.slug });
+  }
+  return teams;
+}
+
+/**
+ * Resolve the caller's node for one of their teams — the selected team if they are
+ * genuinely a member of it (verified: `selectedTeamId` must be in `tenants`), else
+ * their first/default team. `null` when the caller belongs to no team, or the
+ * chosen team has no resolvable principal/dashboard scope. `tenants` is passed in
+ * (already fetched) so the caller reads the directory once.
+ */
+async function resolveNode(
+  host: ScopeHost,
+  tenants: readonly TenantId[],
+  userId: string,
+  selectedTeamId: string | undefined,
+): Promise<DashboardNode | null> {
+  const t = tenants.find((x) => x === selectedTeamId) ?? tenants[0];
+  if (!t) return null;
+  const mapped = await host.admin.resolveIdentity(t, PROVIDER, userId);
+  const dash = (await host.admin.listScopes(STAFF, { tenantId: t, vertical: 'dashboard' }))[0];
+  if (!mapped || !dash) return null;
+  return { tenantId: t, scopeId: dash.id, principal: mapped.principal };
 }
 
 /**
  * The authenticated customer's account node — the tenant, their dashboard scope,
- * and their owner principal. Derived from the OIDC session (the ID token `sub`),
- * NOT the URL.
+ * and their principal in that tenant. Derived from the OIDC session (the ID token
+ * `sub`) plus the selected-team cookie, NOT the URL.
  *
- * First login **bootstraps the account** (their own tenant + dashboard scope +
- * owner, linked) — self-service sign-up. Returning logins resolve to it. `null`
- * when there is no session.
+ * A login can belong to several teams (tenants), so `selectedTeamId` picks which
+ * one this request is scoped to; the selection can never name a team you are not
+ * in. `null` when there is no session OR the login belongs to no team yet — a
+ * teamless login is routed to onboarding by `/api/me`, never here. This resolver
+ * is READ-ONLY: teams are created explicitly (`createTeam` / `POST /api/teams`),
+ * not as a side effect of resolving who you are.
  */
 async function resolveAccount(
   host: ScopeHost,
   env: Env,
   sessionToken: string | undefined,
+  selectedTeamId?: string,
 ): Promise<DashboardNode | null> {
   const user = await verifySession(env, sessionToken);
   if (!user) return null;
-  const userId = user.id;
-
   // The pool must exist before we can ask which tenants a login is in (central topology).
   await host.admin.registerIdentityPool(STAFF, { provider: PROVIDER, topology: 'central', tenantId: null });
-  const tenants = await host.admin.listIdentityTenants(STAFF, PROVIDER, userId);
+  const tenants = await host.admin.listIdentityTenants(STAFF, PROVIDER, user.id);
+  return resolveNode(host, tenants, user.id, selectedTeamId);
+}
 
-  if (tenants.length > 0) {
-    const t = tenants[0]!;
-    const mapped = await host.admin.resolveIdentity(t, PROVIDER, userId);
-    const dash = (await host.admin.listScopes(STAFF, { tenantId: t, vertical: 'dashboard' }))[0];
-    if (!mapped || !dash) return null;
-    return { tenantId: t, scopeId: dash.id, principal: mapped.principal };
-  }
-
-  // Sign-up: this login is a new customer → bootstrap their own account.
+/**
+ * Create a NEW team for the signed-in user: a tenant, a dashboard scope, and the
+ * user as its owner, with their identity linked into it. Used for both the first
+ * team (signup onboarding) and additional teams ("New team") — the same move, since
+ * the identity directory keys a login's principal per-tenant (K-22), so the same
+ * `sub` becomes the owner of each team it creates. Bootstrapping ONE team is the
+ * only action that cannot be tenant-narrowed (there is no tenant yet), so it stays
+ * a controlled platform action, gated by the authenticated session.
+ */
+async function createTeam(host: ScopeHost, user: { id: string; email?: string | null }, name: string): Promise<DashboardNode> {
+  await host.admin.registerIdentityPool(STAFF, { provider: PROVIDER, topology: 'central', tenantId: null });
   const t = tenantId.parse(ulid());
   const s = scopeId.parse(ulid());
   const owner = principalId.parse(ulid());
-  await provisionDashboard(host, {
-    tenantId: t,
-    scopeId: s,
-    owner,
-    slug: slugFor(user.email, userId),
-    name: user.name ?? user.email ?? 'Account',
-  });
+  await provisionDashboard(host, { tenantId: t, scopeId: s, owner, slug: teamSlug(name, t), name });
   await host.admin.linkIdentity(STAFF, {
     provider: PROVIDER,
-    externalId: userId,
+    externalId: user.id,
     principal: owner,
     tenantId: t,
     scopeId: s,
   });
+  // Seed the roster: one default org to key invitations on, and the owner as the
+  // first (active) member. Invoked in-scope as the owner (who holds every key).
+  const org = orgId.parse(ulid());
+  await host.admin.createOrg(STAFF, { id: org, tenantId: t, slug: 'team', name });
+  const scope = await host.getScope(owner, t, s);
+  await scope.invoke('dashboard/init-team', { orgId: org, ownerEmail: user.email ?? '' });
   return { tenantId: t, scopeId: s, principal: owner };
 }
 
@@ -213,27 +329,203 @@ app.get('/api/catalog', async (c) => {
   return c.json(verticals.filter((v) => CATALOG[v.slug]).map((v) => ({ slug: v.slug, name: v.name })));
 });
 
-/** Who am I — and, on first call, bootstraps my account. */
+/**
+ * Who am I — three states: no session ⇒ 401; a session with no team yet ⇒
+ * `{ needsOnboarding }` (the app shows "name your first team"); otherwise my
+ * current team, my teams, and my dashboard node. Resolving is READ-ONLY — a
+ * teamless login is NOT silently bootstrapped; it must create a team explicitly.
+ */
 app.get('/api/me', async (c) => {
-  const token = getCookie(c, SESSION_COOKIE);
-  const node = await resolveAccount(hostFor(c.env), c.env, token);
+  const host = hostFor(c.env);
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  await host.admin.registerIdentityPool(STAFF, { provider: PROVIDER, topology: 'central', tenantId: null });
+  const tenants = await host.admin.listIdentityTenants(STAFF, PROVIDER, user.id);
+  if (tenants.length === 0) {
+    return c.json({ needsOnboarding: true, email: user.email ?? null, name: user.name ?? null });
+  }
+  const node = await resolveNode(host, tenants, user.id, getCookie(c, TEAM_COOKIE));
   if (!node) return c.json({ error: 'unauthorized' }, 401);
-  // The dashboard scope carries no display identity — the Dashboard shell shows
-  // the signed-in email/name, which live on the OIDC session, so surface them.
-  const user = await verifySession(c.env, token);
+  // The dashboard scope carries no display identity — the shell shows the signed-in
+  // email/name, which live on the OIDC session, so surface them alongside the teams.
   return c.json({
     principal: node.principal,
     tenant: node.tenantId,
     dashboardScope: node.scopeId,
-    email: user?.email ?? null,
-    name: user?.name ?? null,
+    email: user.email ?? null,
+    name: user.name ?? null,
+    teams: await listTeams(host, tenants),
+    currentTeamId: node.tenantId,
   });
+});
+
+/**
+ * Create a team — the signup-onboarding move AND the in-app "New team" action share
+ * this one endpoint. The new team is provisioned with the caller as owner and their
+ * identity linked, then the `sb_team` cookie is pointed at it so the portal opens on
+ * the new team after the client reloads.
+ */
+const createTeamBody = z.object({ name: z.string().trim().min(1).max(100) });
+app.post('/api/teams', async (c) => {
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) throw new HTTPException(401, { message: 'unauthorized' });
+  const { name } = createTeamBody.parse(await c.req.json());
+  const host = hostFor(c.env);
+  const node = await createTeam(host, user, name);
+  setCookie(c, TEAM_COOKIE, node.tenantId, teamCookieOpts(new URL(c.req.url).protocol));
+  return c.json({ teamId: node.tenantId }, 201);
+});
+
+/**
+ * Switch the current team — validates the caller is a member, then pins the choice
+ * in the `sb_team` cookie. The whole portal (apps, domains, billing) re-scopes to
+ * the selected tenant on the next load, because every handler resolves the node
+ * from this cookie. Naming a team you are not in is refused, not silently ignored.
+ */
+const switchTeamBody = z.object({ teamId: z.string().min(1) });
+app.post('/api/teams/switch', async (c) => {
+  const token = getCookie(c, SESSION_COOKIE);
+  const user = await verifySession(c.env, token);
+  if (!user) throw new HTTPException(401, { message: 'unauthorized' });
+  const { teamId } = switchTeamBody.parse(await c.req.json());
+  const host = hostFor(c.env);
+  await host.admin.registerIdentityPool(STAFF, { provider: PROVIDER, topology: 'central', tenantId: null });
+  const tenants = await host.admin.listIdentityTenants(STAFF, PROVIDER, user.id);
+  if (!tenants.some((t) => t === teamId)) {
+    throw new HTTPException(403, { message: 'not a member of that team' });
+  }
+  setCookie(c, TEAM_COOKIE, teamId, teamCookieOpts(new URL(c.req.url).protocol));
+  return c.body(null, 204);
+});
+
+/** The current team's roster — active members + outstanding invites. */
+app.get('/api/members', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  return c.json(await scope.invoke('dashboard/list-members', {}));
+});
+
+/**
+ * Invite a member to the current team at a role. The in-scope op enforces the §5.1
+ * bound (invite only at a role you already hold) and composes the invites engine.
+ * Returns a shareable accept link — email delivery is a later connector, so for now
+ * the inviter passes the link along.
+ */
+const inviteMemberBody = z.object({
+  email: z.string().trim().min(1),
+  roleKey: z.enum(['admin', 'member', 'viewer']),
+});
+app.post('/api/members/invite', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const body = inviteMemberBody.parse(await c.req.json());
+  const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const { invitationId } = (await scope.invoke('dashboard/invite-member', body)) as { invitationId: string };
+  const token = await signInviteToken(c.env, {
+    tenantId: node.tenantId,
+    scopeId: node.scopeId,
+    invitationId,
+  });
+  return c.json({ invitationId, acceptUrl: `${new URL(c.req.url).origin}/invite/${token}` }, 201);
+});
+
+/** Withdraw a pending invite from the current team. */
+app.post('/api/members/revoke-invite', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const { invitationId } = z.object({ invitationId: z.string().min(1) }).parse(await c.req.json());
+  const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  await scope.invoke('dashboard/revoke-invite', { invitationId });
+  return c.body(null, 204);
+});
+
+/**
+ * Remove an active member: mark the roster row revoked AND revoke their kernel role
+ * (`unassignRole`) so access is actually cut — the projection alone would not. The
+ * op authorizes (manage-members) and returns the principal + role to unassign; the
+ * owner cannot be removed. Their identity link is left, so the team still appears in
+ * their own switcher but resolves to no permissions (fully hiding it needs a kernel
+ * `unlinkIdentity` — a follow-up).
+ */
+app.post('/api/members/remove', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const { memberId } = z.object({ memberId: z.string().min(1) }).parse(await c.req.json());
+  const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const removed = (await scope.invoke('dashboard/remove-member', { memberId })) as { principal: string; roleKey: string } | null;
+  if (removed) {
+    const principal = principalId.parse(removed.principal);
+    // Cut access (revoke the role) AND sever their login from the team, so it also
+    // disappears from their own switcher rather than lingering as a dead entry.
+    await host.admin.unassignRole(DASHBOARD_CP_ACTOR, {
+      principalId: principal,
+      roleKey: removed.roleKey,
+      node: { tenantId: node.tenantId, scopeId: null },
+    });
+    await host.admin.unlinkIdentity(STAFF, node.tenantId, principal);
+  }
+  return c.body(null, 204);
+});
+
+/**
+ * Accept an invitation. The recipient is logged in (verified email), presents the
+ * signed token. We mint their principal, accept in-scope (the engine re-hashes their
+ * email — the real gate), then effect access: assign the invited role at the tenant
+ * node and link their identity so future logins resolve into this team. Idempotent:
+ * an already-member just switches; a re-used/settled invitation fails at the engine.
+ */
+app.post('/api/invites/accept', async (c) => {
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) throw new HTTPException(401, { message: 'unauthorized' });
+  const { token } = z.object({ token: z.string().min(1) }).parse(await c.req.json());
+  const claim = await verifyInviteToken(c.env, token);
+  if (!claim) throw new HTTPException(400, { message: 'this invite link is invalid or has expired' });
+  const t = tenantId.parse(claim.tenantId);
+  const s = scopeId.parse(claim.scopeId);
+
+  const host = hostFor(c.env);
+  await host.admin.registerIdentityPool(STAFF, { provider: PROVIDER, topology: 'central', tenantId: null });
+  // Already in this team? Nothing to accept — just switch to it (idempotent link click).
+  if (await host.admin.resolveIdentity(t, PROVIDER, user.id)) {
+    setCookie(c, TEAM_COOKIE, t, teamCookieOpts(new URL(c.req.url).protocol));
+    return c.json({ teamId: t, already: true });
+  }
+
+  const principal = principalId.parse(ulid());
+  const scope = await host.getScope(principal, t, s);
+  // The engine verifies the hash of the recipient's VERIFIED email; a mismatch throws.
+  const { roleKey } = (await scope.invoke('dashboard/accept-invite', {
+    invitationId: claim.invitationId,
+    identifier: user.email ?? '',
+  })) as { roleKey: string };
+
+  // Effect access: the role at the tenant node (§5.1 was enforced when it was sent),
+  // and the identity link so future logins land in this team.
+  await host.admin.assignRole(DASHBOARD_CP_ACTOR, {
+    principalId: principal,
+    roleKey,
+    node: { tenantId: t, scopeId: null },
+  });
+  await host.admin.linkIdentity(STAFF, {
+    provider: PROVIDER,
+    externalId: user.id,
+    principal,
+    tenantId: t,
+    scopeId: s,
+  });
+  setCookie(c, TEAM_COOKIE, t, teamCookieOpts(new URL(c.req.url).protocol));
+  return c.json({ teamId: t });
 });
 
 /** My apps. */
 app.get('/api/apps', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
   return c.json(await dash.invoke('dashboard/list-apps', {}));
@@ -242,7 +534,7 @@ app.get('/api/apps', async (c) => {
 /** Create an app — provisioned into MY tenant (from the session), authorized in-scope. */
 app.post('/api/apps', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const body = createAppBody.parse(await c.req.json());
   const entry = CATALOG[body.verticalSlug];
@@ -266,7 +558,7 @@ app.post('/api/apps', async (c) => {
 /** Delete an app — deprovisions its scope + takes its hostname offline, in MY tenant. */
 app.delete('/api/apps/:id', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   // Resolve the app to its scope id + hostname from the caller's OWN apps only — the
   // :id is theirs or it does not exist to them (list-apps is tenant-scoped).
@@ -290,7 +582,7 @@ app.delete('/api/apps/:id', async (c) => {
  */
 app.get('/api/deployments', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const cp = controlPlaneFor(c.env, node.tenantId);
   const deployments = cp
@@ -306,7 +598,7 @@ app.get('/api/deployments', async (c) => {
  */
 app.post('/api/deployments/:slug/promote', async (c) => {
   const host = hostFor(c.env);
-  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE));
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const body = promoteBody.parse(await c.req.json());
   if (body.channel === 'prod') {
