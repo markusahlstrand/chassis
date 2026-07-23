@@ -37,6 +37,29 @@ async function get<T>(path: string): Promise<T> {
   return body;
 }
 
+/**
+ * Better Auth (via the worker → the tenant's IdentityDO). A successful call sets the
+ * same-origin session cookie, so the app just reloads afterward and `/api/me` resolves.
+ * On a fresh instance the first sign-in CLAIMS the owner seat (→ hr-admin).
+ */
+async function authPost(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`/api/auth/${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new ApiError(b.message ?? b.error ?? `Sign-in failed (${res.status})`, res.status);
+  }
+}
+
+export const auth = {
+  signUp: (email: string, password: string, name: string) => authPost('sign-up/email', { email, password, name }),
+  signIn: (email: string, password: string) => authPost('sign-in/email', { email, password }),
+  signOut: () => authPost('sign-out', {}),
+};
+
 // -- shapes (subset the app renders) ----------------------------------------
 
 export interface Me {
