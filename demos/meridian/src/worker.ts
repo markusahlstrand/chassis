@@ -203,11 +203,40 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
   return hostFor(c.env).getScope(result.principal, node.tenantId, node.scopeId);
 }
 
+/**
+ * Who am I, in the shape the SPA centres on: `{ key, display, role, country, employeeId }`.
+ * The principal comes from the auth seam; the role hint + linked employee come from the
+ * scope itself (`hr/whoami`), so a real hosted owner (holding `hr-admin`) lands on the
+ * admin surface and an employee on their own work — the same shape the dev server serves.
+ */
 app.get('/api/me', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
   const result = await resolvePrincipal(adaptersFor(c.env, c.req.raw), c.req.raw.headers);
   if (!result) return c.json({ error: 'unauthorized' }, 401);
-  return c.json({ principal: result.principal, via: result.via, display: result.display });
+  const scope = await hostFor(c.env).getScope(result.principal, node.tenantId, node.scopeId);
+  const who = (await scope.invoke('hr/whoami', undefined)) as {
+    role: string;
+    country: 'SE' | 'ES';
+    employeeId: string | null;
+  };
+  return c.json({
+    key: result.principal,
+    // Better Auth carries a name; the dev-header path carries none — default so the
+    // shape the SPA consumes is always total.
+    display: result.display ?? 'You',
+    role: who.role,
+    country: who.country,
+    employeeId: who.employeeId,
+  });
 });
+
+/**
+ * The persona switcher is a DEV affordance (the demo's cast of characters). A real hosted
+ * instance has one signed-in user and no cast, so this is empty — the app hides the
+ * switcher when the cast is empty. Kept as an explicit route (rather than a 404 the SPA
+ * catch-all would swallow) so the client gets clean JSON.
+ */
+app.get('/api/cast', (c) => c.json([]));
 
 // Generic invoke: the kernel checks the permission inside every operation, so a generic
 // route is exactly as safe as an explicit table — and far less code.

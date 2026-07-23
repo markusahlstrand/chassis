@@ -405,6 +405,34 @@ const rosterOp: OperationHandler<undefined, RosterRow[]> = async (ctx) => {
   );
 };
 
+/**
+ * "Who am I" for the app shell — the caller's own role hint + linked employee, resolved
+ * from THIS scope. No permission gate: every principal in the scope may ask about
+ * themselves (it reveals only their own role + own employee id, both already theirs). The
+ * role is a UI hint derived by probing the caller's own grants — the kernel still enforces
+ * the real permission on every operation regardless of what this returns. `country` is a
+ * per-instance display default (currency + labels) until a scope carries its own; the
+ * demo's SE/ES split is a per-scope seed concern, not a field here.
+ */
+export interface WhoAmI {
+  role: 'hr-admin' | 'manager' | 'employee' | 'none';
+  country: 'SE' | 'ES';
+  employeeId: string | null;
+}
+const whoamiOp: OperationHandler<undefined, WhoAmI> = async (ctx) => {
+  const employeeId =
+    ctx.sql.query<{ id: string }>('SELECT id FROM hr_employees WHERE principal_ref = ? LIMIT 1', [ctx.principal])[0]?.id ??
+    null;
+  const role: WhoAmI['role'] = (await ctx.check(HR_PERM.employeeManage)).allowed
+    ? 'hr-admin'
+    : (await ctx.check(HR_PERM.absenceApprove)).allowed
+      ? 'manager'
+      : employeeId
+        ? 'employee'
+        : 'none';
+  return { role, country: 'SE', employeeId };
+};
+
 // ---------------------------------------------------------------------------
 // Leave types + accrual (HR admin)
 // ---------------------------------------------------------------------------
@@ -1119,6 +1147,7 @@ export const meridianModule: ModuleRegistration = {
     'hr/create-employee': createEmployeeOp as never,
     'hr/list-employees': listEmployeesOp as never,
     'hr/roster': rosterOp as never,
+    'hr/whoami': whoamiOp as never,
     'hr/define-leave-type': defineLeaveTypeOp as never,
     'hr/list-leave-types': listLeaveTypesOp as never,
     'hr/accrue': accrueOp as never,
