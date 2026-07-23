@@ -84,10 +84,21 @@ describe('CloudflareEmailTransport', () => {
 
     expect(result).toEqual({ delivered: ['invitee@example.com'], queued: [], bounced: [] });
     expect(binding.calls[0]).toMatchObject({
-      to: [{ email: 'invitee@example.com' }],
+      // A nameless recipient is a bare STRING, not `{ email }` — the workerd
+      // EmailAddress runtime rejects an object whose `name` is absent.
+      to: ['invitee@example.com'],
       from: { email: 'no-reply@substrat.run', name: 'Substrat' },
-      replyTo: { email: 'support@substrat.run' },
+      replyTo: 'support@substrat.run',
       subject: 'You have been invited to Acme',
+    });
+  });
+
+  it('serializes nameless addresses as bare strings and named ones as objects', async () => {
+    const binding = fakeBinding({ delivered: [], queued: [], permanent_bounces: [] });
+    const mail = new CloudflareEmailTransport(binding);
+    await mail.send(invite({ to: ['plain@example.com', { email: 'named@example.com', name: 'Named' }] }));
+    expect(binding.calls[0]).toMatchObject({
+      to: ['plain@example.com', { email: 'named@example.com', name: 'Named' }],
     });
   });
 
