@@ -118,8 +118,9 @@ host.defineOperation('acme/create-order', async (ctx, input) => {
 | [Bookings](/engines/booking/) | `@substrat-run/engine-booking` | allocation against capacity over an interval — no double-booking, holds and their expiry |
 | [Invoicing](/engines/invoicing/) | `@substrat-run/engine-invoicing` | invoice-basis accumulation from billable events, immutability on export |
 | [Protocols](/engines/protocol/) | `@substrat-run/engine-protocol` | protocols/checklists with the sign → immutable invariant, verifiable content hash |
+| [Invites](/engines/invites/) | `@substrat-run/engine-invites` | single-use invitations to join an org with a role — pending → accepted, hash never stored |
 
-All four are **product seeds**, extracted from the demo verticals — small deliberately,
+All five are **product seeds**, extracted from the demo verticals — small deliberately,
 hardened as real verticals consume them.
 
 The booking engine is the one **second invariant shape**: where a work order is a *state

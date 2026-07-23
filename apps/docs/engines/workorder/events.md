@@ -19,7 +19,7 @@ events: {
 | `workorder.started` | 1 | none | order id |
 | `workorder.time-reported` | 1 | pseudonymous | order id, entry id, hours |
 | `workorder.material-reported` | 1 | none | order id, line id, article, qty |
-| `workorder.completed` | 1 | none | order id, number, customer, **billable lines + total** |
+| `workorder.completed` | 1 | none | order id, number, facility, customer, **billable lines + total** |
 | `workorder.closed` | 1 | none | order id |
 
 ## `workorder.completed` — the contract that matters
@@ -29,7 +29,7 @@ travels in the payload, so a consumer never needs a cross-module read.
 
 ```ts
 {
-  orderId, number, customer: EntityRef,
+  orderId, number, facility: EntityRef, customer: EntityRef,
   billable: [{ article, description, qty, unit, unitPrice: Money, lineTotal: Money,
                sourceType: 'time' | 'material', sourceId }],
   total: Money,

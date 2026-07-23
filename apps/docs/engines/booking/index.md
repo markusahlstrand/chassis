@@ -29,7 +29,8 @@ opening hours, or who is allowed to book — all of which are the vertical's.
   lapsed hold simply stops counting, with no sweeper to run and nothing to go wrong if one
   never runs.
 - **The state machine cannot skip.** `held → confirmed → in_service → completed`, plus
-  `held → expired` and `confirmed → cancelled | no_show`. Invalid transitions throw.
+  `held → expired`, `{held | confirmed} → cancelled`, and `{confirmed | in_service} → completed | no_show`.
+  Invalid transitions throw.
 - **Participants are append-only.** Leaving sets `left_at`; the row survives, so the record
   of who was on a booking stays intact.
 

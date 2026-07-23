@@ -82,12 +82,20 @@ Substrat is pre-release (0.x). What exists today:
 | Kernel interfaces (scope host, permission checker) | [`@substrat-run/kernel`](/reference/kernel) | Working |
 | Pure-SQLite scope host (local dev, CI, self-host) | [`@substrat-run/adapter-sqlite`](/reference/adapter-sqlite) | Working |
 | Adapter conformance suite | [`@substrat-run/contract-tests`](/reference/contract-tests) | Working |
-| Cloudflare scope host (Durable Objects, production) | [`@substrat-run/adapter-cloudflare`](/reference/adapter-cloudflare) | Working — same suite, real workerd |
+| Cloudflare scope host (Durable Objects, production) | [`@substrat-run/adapter-cloudflare`](/reference/adapter-cloudflare) | Working — same suite, real workerd; scope-local permissions + the router landed |
 | Work-order engine | [`@substrat-run/engine-workorder`](/engines/workorder/) | Seed |
+| Booking engine | [`@substrat-run/engine-booking`](/engines/booking/) | Seed |
 | Invoicing engine | [`@substrat-run/engine-invoicing`](/engines/invoicing/) | Seed |
 | Protocol / checklist engine | [`@substrat-run/engine-protocol`](/engines/protocol/) | Seed |
-| Callout vertical — runs on both adapters, deployed on Cloudflare | [`demos/callout`](https://github.com/substrat-run/substrat/tree/main/demos/callout) | Working |
-| Meridian (HR) vertical — leave/absence, time, expenses, onboarding; one role-adaptive app (employee mobile + manager web) | [`demos/meridian`](https://github.com/substrat-run/substrat/tree/main/demos/meridian) | Working |
+| Invites engine | [`@substrat-run/engine-invites`](/engines/invites/) | Seed |
+| Scrive connector (e-signing, BankID) | [`@substrat-run/connector-scrive`](/connectors/scrive) | Published `0.1.0` |
+| The `substrat` CLI — authenticated deploy (`login`, `push`) | [`@substrat-run/cli`](/guide/deploying) | Working |
+| Platform surfaces — [control plane](/platform/control-plane), [console](/platform/console), [router](/platform/router), [dashboard](/platform/dashboard) | private deployments | Working (self-serve deploy foundation) |
+| Callout (field service) — the canonical composition; first CP-less pushable vertical | [`demos/callout`](/verticals/callout) | Working |
+| Handlebar (bike workshop) — engine reuse under new vocabulary | [`demos/handlebar`](/verticals/handlebar) | Working |
+| RallyPoint (padel club) — the booking invariant shape | [`demos/rally`](/verticals/rallypoint) | Working |
+| Kallkälla (coffee shop) — two audiences, one API; commerce | [`demos/shop`](/verticals/shop) | Working |
+| Meridian (HR) — leave/absence, time, expenses, onboarding; one role-adaptive app | [`demos/meridian`](/verticals/meridian) | Working |
 
 Interfaces change without notice until the first vertical ships.
 

@@ -182,6 +182,8 @@ log.
 
 ## Next steps
 
+- [Deploying a vertical](/guide/deploying) — when the local loop is working, ship it: the
+  `substrat` CLI, `push`, and the admission gate that lets a scope serve it.
 - [Tenants & scopes](/concepts/tenancy) — the tenancy tree and how scopes are addressed.
 - [Permissions](/concepts/permissions) — roles, grants, and proof-carrying decisions.
 - [Events & audit](/concepts/events) — the envelope, PII classes, and consumers.

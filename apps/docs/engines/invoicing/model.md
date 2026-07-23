@@ -34,6 +34,7 @@ the producer's types. When a work order completes, the consumer:
    ```ts
    const completedPayload = z.object({
      orderId: z.string().min(1),
+     number: z.number().int(),
      customer: entityRef,
      billable: z.array(z.object({ article, description, qty, unit,
                                   unitPrice: money, lineTotal: money, sourceType, sourceId })),

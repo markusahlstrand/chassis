@@ -137,10 +137,11 @@ way to change the local world:
 
 ## Adding another application
 
-A "new application" is a new **vertical**. Today each vertical ships its own dev server
-(the shop demo has its own; Callout is `demos/callout/src/server.ts`), and each composes its
-engines + module into a host. To scaffold one, use the process in
-[Getting started](/guide/getting-started) and the engines you need.
+A "new application" is a new **vertical**. Today each of the five demo verticals
+(`demos/{callout,handlebar,meridian,rally,shop}`) ships its own dev server — Callout's is
+`demos/callout/src/server.ts` — and each composes its engines + module into a host. To
+scaffold one, follow [Getting started](/guide/getting-started) with the engines you need, and
+[Deploying a vertical](/guide/deploying) when it's ready to ship.
 
 What is **not** wired yet is running several verticals against **one** shared console
 locally — that needs each vertical to register into a *separate* control-plane process over
@@ -201,6 +202,10 @@ each vertical is a **separate deployment**, all reaching one durable directory �
 surfaces you see here, split across processes and hosts. The SQLite adapter you run locally
 and the Cloudflare adapter you deploy on are the same kernel above
 [the scope-host contract](/concepts/scope-host); only the composition root changes.
+
+Getting a vertical from this laptop to that production topology is its own step — the
+`substrat` CLI pushes a bundle, and an admission in the console lets a scope serve it. See
+[Deploying a vertical](/guide/deploying).
 
 ## Next steps
 

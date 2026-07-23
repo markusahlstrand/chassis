@@ -91,14 +91,31 @@ derivation algebra**:
 No negation, no configurable rewrite rules. Verticals never see or author tuples — roles
 and grants remain the only authored surface.
 
-**Where tuples live.** Scope and entity tuples (rules 2 and 3) live in the scope's own
-database and are evaluated inside its serialization domain, so there is no
-distributed-consistency problem for them. Tenant-level tuples — role assignments and org
-membership (rules 1 and 4) — live in the **directory** instead, because they are
-tenant-wide facts rather than scope-local ones. On the Cloudflare adapter that means a
-separate Durable Object the checker reads over RPC. The distinction matters when you are
-extending the kernel: a write path that is same-transaction for entity edges is not
-same-transaction for membership.
+**Where tuples live — a scope reads only its own state.** Scope and entity tuples (rules 2
+and 3) live in the scope's own database and are evaluated inside its serialization domain, so
+there is no distributed-consistency problem for them. Tenant-level facts — role *definitions*,
+role assignments, tenant grants, and org membership (rules 1 and 4) — are tenant-wide, so the
+**directory** (the control plane) is their authority. But the checker never reads the directory
+on a request: the control plane **projects** those facts into scope-local tables
+(`_substrat_roles`, `_substrat_tenant_tuples`) at *write* time, and the checker reads the
+projection exactly as it reads scope tuples.
+
+This is the important shift, and it is deliberate: **the control plane is a write-time
+authority that projects into scopes; it is never a read-time dependency on the request path.**
+Cost moves from the read path (every request) to the write path (rare role/grant changes) —
+the correct direction for a read-heavy multi-tenant system, and what makes a scope genuinely
+isolated: it can run as its own Cloudflare Worker with *no* control-plane binding at all. (For
+the earlier per-request model and why it was replaced — scaling, isolation, and the
+untrusted-vertical requirement — see the
+[scope-local permissions design note](https://github.com/substrat-run/substrat/blob/main/docs/design/scope-local-permissions.md).)
+
+The consistency consequence is small and one-directional. Scope-level grants/roles stay
+synchronous and immediately consistent ("no zookies") — the checker runs in the scope's own
+serialization domain. Only **tenant-level** changes are now eventually consistent across a
+tenant's scopes, bounded by the write-time fan-out and a reconciliation sweep. An **absent or
+empty projection is a deny**, byte-for-byte the normal deny path, so missing data can only ever
+*remove* authority, never grant it. Revocation still fans out as tombstones (below) — now into
+every scope the tuple was projected to.
 
 ## Revocation: tuples tombstone, they never disappear
 

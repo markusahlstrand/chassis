@@ -20,10 +20,17 @@ you care *which* unit, model separate resources.
 
 ```
 held ──confirm──▶ confirmed ──start──▶ in_service ──complete──▶ completed
-  │                   │
-  └──expire──▶ expired └──cancel──▶ cancelled
-                       └──no-show──▶ no_show
+  │
+  └──expire──▶ expired
 ```
+
+That is the happy path; the terminal branches are wider than it, and each is guarded by
+`requireState`, so the exact legal source states matter:
+
+- **cancel** → `cancelled`, from `held` **or** `confirmed`
+- **complete** → `completed`, from `confirmed` **or** `in_service` (you can complete a booking
+  that was never explicitly started)
+- **no-show** → `no_show`, from `confirmed` **or** `in_service`
 
 States that consume capacity: `held` (unexpired), `confirmed`, `in_service`. Terminal states
 release it.

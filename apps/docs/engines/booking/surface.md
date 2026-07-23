@@ -32,6 +32,8 @@ it.
 
 ```ts
 createResource(ctx, { kind, name, capacity? })            → Resource
+setResourceActive(ctx, { resourceId, active })            → Resource
+listResources(ctx, kind?)                                 → Resource[]
 holdReservation(ctx, { resourceId, startsAt, endsAt,
                        expiresAt, quantity?, fillTarget? }) → Reservation  // throws SlotUnavailable
 confirmReservation(ctx, { reservationId })                → Reservation
@@ -42,7 +44,7 @@ moveReservation(ctx, { reservationId, resourceId?,
                        startsAt?, endsAt? })              → Reservation  // throws SlotUnavailable
 openReservation(ctx, { reservationId, fillTarget })       → Reservation  // null closes it again
 cancelReservation · startReservation · completeReservation · markNoShow
-getReservation(ctx, id)      → { reservation, participants }
+getReservation(ctx, reservationId, now?)  → { reservation, participants }
 listReservations(ctx, { resourceId?, from?, to? }) → Reservation[]
 availability(ctx, { resourceId, from, to })        → FreeInterval[]
 effectiveStateOf(state, expiresAt, now)            → ReservationState

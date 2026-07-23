@@ -1,9 +1,11 @@
 # Scope-local permissions — taking the control plane off the request hot path
 
-**Status:** design, not built. Prerequisite for genuinely isolated, self-serve, untrusted
-verticals (dashboard.md §6 step 5; self-serve-deploy.md — "the untrusted trust model").
-Touches the permission trust core, so it lands staged, behind the two human checkpoints
-(permission diff, migration diff).
+**Status:** **built.** All three stages of §8 have shipped — the pluggable local reader (#163),
+projection-on-write (#165), and CP-less verticals with Callout as the first (#166/#167). The
+design below is preserved as the rationale; `scopeLocalPermissions` / `provisionScopeLocal` on
+`CloudflareScopeHost` are the landed surface. Prerequisite for genuinely isolated, self-serve,
+untrusted verticals (dashboard.md §6 step 5; self-serve-deploy.md — "the untrusted trust
+model"). It landed staged, behind the two human checkpoints (permission diff, migration diff).
 
 ## 1. The problem — one global DO on every check
 

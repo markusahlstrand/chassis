@@ -1,6 +1,9 @@
 # Self-serve vertical deploy — the untrusted trust model
 
-**Status:** design / RFC. Not built. Extends [orchestration](orchestration.md), whose
+**Status:** foundation **built** (§7.1 / §8) — `substrat push` + the deploy endpoint land a
+pending version that admission gates; the `substrat` CLI (`packages/cli`) ships it and Callout
+deploys through it. The untrusted-builder models B/A (§3) remain design. Extends
+[orchestration](orchestration.md), whose
 Phases 1–3 are the **platform-owned** (trusted-author) deploy: *we* build and upload *our*
 verticals. This doc is the piece orchestration.md §9 and
 [generated-verticals](generated-verticals.md) §1 deferred: letting a **builder** (D-33's

@@ -3,14 +3,16 @@
 Turns a signature request from the [protocol engine](/engines/protocol/) into a real signing
 flow at **Scrive**, authenticated with Swedish **BankID**.
 
-::: warning Both halves are built; it is unpublished because nothing schedules it yet
-The kernel seams the inbound half needed have landed, and both halves now work: a request becomes
-a started Scrive document (**outbound**), and a completed signature is recorded back into the
-scope (**inbound**, via `reconcileScriveDispatch` on the [authority seam](/connectors/#the-seam-a-connector-plugs-into)).
-It stays `private` and unpublished for two reasons, neither in the connector: **no deployment runs
-the poll on a timer yet** (the [scheduler](https://github.com/substrat-run/substrat/blob/main/docs/design/scheduler.md)'s
-call site), and **BankID-to-sign is disabled on the testbed account**, so the real signing
-round-trip is unverified. See [What's missing](#what-s-missing).
+::: warning Published (0.1.0), with two honest caveats a consumer must own
+Both halves work and it now ships as a public package: a request becomes a started Scrive document
+(**outbound**, verified against `api-testbed.scrive.com`), and a completed signature is recorded
+back into the scope (**inbound**, via `reconcileScriveDispatch` on the [authority seam](/connectors/#the-seam-a-connector-plugs-into)).
+It is a `0.x` release, which already signals an unstable surface, and two caveats travel with it —
+neither in the connector code: **the consuming vertical must schedule the poll on a timer**
+(`sweepScriveReconciliations` via `startPlatformSweeper` on node, a Cron / DO alarm on Workers —
+see the [scheduler](https://github.com/substrat-run/substrat/blob/main/docs/design/scheduler.md)),
+and **BankID-to-sign is disabled on the testbed account**, so the real signing round-trip is
+unverified. See [What's missing](#what-s-missing).
 :::
 
 ## At a glance
@@ -19,8 +21,8 @@ round-trip is unverified. See [What's missing](#what-s-missing).
 |---|---|
 | **Provider** | Scrive eSign, `se_bankid` authentication-to-sign |
 | **Category** | E-signing & identity |
-| **Status** | Both halves built (outbound + return path + poll); unpublished — no deployment schedules it, BankID off on testbed |
-| **Package** | `@substrat-run/connector-scrive` (private, unpublished) |
+| **Status** | Published `0.1.0` — both halves built (outbound + return path + poll driver); two caveats: the vertical must schedule the poll, and BankID is off on the testbed |
+| **Package** | `@substrat-run/connector-scrive` (published, `0.1.0`, public) |
 | **Consumes** | `protocol.signatures-requested` |
 | **Registered with** | `registerConnector('scrive', 'protocol.signatures-requested', …)` |
 
