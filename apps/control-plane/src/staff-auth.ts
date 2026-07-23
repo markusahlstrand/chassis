@@ -1,5 +1,5 @@
 import type { StaffSessionReader } from '@substrat-run/control-plane-api';
-import { sessionFromHeaders, type OidcEnv } from '@substrat-run/oidc-rp';
+import { sessionFromHeaders, verifySession, type OidcEnv } from '@substrat-run/oidc-rp';
 
 /**
  * The control plane's STAFF authentication on the edge: an OIDC session against the
@@ -18,6 +18,22 @@ import { sessionFromHeaders, type OidcEnv } from '@substrat-run/oidc-rp';
 export function oidcStaffSessionReader(env: OidcEnv): StaffSessionReader {
   return async (headers) => {
     const user = await sessionFromHeaders(env, headers);
+    return user?.email ? { email: user.email } : null;
+  };
+}
+
+/**
+ * The same staff authentication, but for a NON-browser caller (the CLI): the session
+ * token arrives as `Authorization: Bearer <token>` rather than the `sb_session` cookie.
+ * It is the identical signed session `verifySession` accepts — the CLI obtained it
+ * through the login broker (cli-auth.ts) — so this only changes where the token is read
+ * from. The roster (`d1StaffRoster`) remains the single gate, exactly as for the cookie.
+ */
+export function oidcStaffBearerReader(env: OidcEnv): StaffSessionReader {
+  return async (headers) => {
+    const header = headers.get('authorization') ?? '';
+    const token = /^bearer /i.test(header) ? header.slice(7).trim() : undefined;
+    const user = await verifySession(env, token);
     return user?.email ? { email: user.email } : null;
   };
 }

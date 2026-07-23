@@ -107,12 +107,17 @@ const redirectUri = (env: OidcEnv, origin: string): string =>
 export async function beginLogin(
   env: OidcEnv,
   origin: string,
+  opts: { returnTo?: string } = {},
 ): Promise<{ location: string; flow: string }> {
   const d = await discover(env.OIDC_ISSUER);
   const verifier = randomB64url(32);
   const state = randomB64url(16);
   const nonce = randomB64url(16);
-  const flow = await new SignJWT({ v: verifier, s: state, n: nonce })
+  // `rt` (an already-validated same-origin path) rides the signed, short-lived flow
+  // cookie so the callback can send the browser back where login began.
+  const claims: Record<string, unknown> = { v: verifier, s: state, n: nonce };
+  if (opts.returnTo) claims.rt = opts.returnTo;
+  const flow = await new SignJWT(claims)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(`${FLOW_MAXAGE}s`)
@@ -140,7 +145,7 @@ export async function completeLogin(
   origin: string,
   url: URL,
   flowCookie: string | undefined,
-): Promise<{ user: SessionUser; session: string }> {
+): Promise<{ user: SessionUser; session: string; returnTo?: string }> {
   const oauthError = url.searchParams.get('error');
   if (oauthError) throw new Error(`authorization error: ${oauthError}`);
   const code = url.searchParams.get('code');
@@ -148,7 +153,7 @@ export async function completeLogin(
   if (!code || !state) throw new Error('missing code or state');
   if (!flowCookie) throw new Error('missing login flow cookie');
 
-  let flow: { v: string; s: string; n: string };
+  let flow: { v: string; s: string; n: string; rt?: string };
   try {
     flow = (await jwtVerify(flowCookie, signingKey(env))).payload as unknown as typeof flow;
   } catch {
@@ -186,13 +191,27 @@ export async function completeLogin(
   if (payload.nonce !== flow.n) throw new Error('nonce mismatch');
 
   const user = userFromClaims(payload);
-  const session = await new SignJWT({ email: user.email, name: user.name })
+  const session = await mintSession(env, user);
+  return { user, session, returnTo: typeof flow.rt === 'string' ? flow.rt : undefined };
+}
+
+/**
+ * Mint a signed session token for a user — the same HS256/`SESSION_SECRET` token the
+ * login callback sets as the `sb_session` cookie, and that `verifySession` accepts.
+ * Exported so a non-browser caller (the CLI login broker) can be handed a session to
+ * carry as a bearer, rather than a cookie.
+ */
+export async function mintSession(
+  env: OidcEnv,
+  user: SessionUser,
+  maxAgeSec: number = SESSION_MAXAGE,
+): Promise<string> {
+  return new SignJWT({ email: user.email, name: user.name })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(user.id)
     .setIssuedAt()
-    .setExpirationTime(`${SESSION_MAXAGE}s`)
+    .setExpirationTime(`${maxAgeSec}s`)
     .sign(signingKey(env));
-  return { user, session };
 }
 
 function userFromClaims(payload: { sub?: unknown; email?: unknown; name?: unknown }): SessionUser {
@@ -201,6 +220,37 @@ function userFromClaims(payload: { sub?: unknown; email?: unknown; name?: unknow
     email: typeof payload.email === 'string' ? payload.email : undefined,
     name: typeof payload.name === 'string' ? payload.name : undefined,
   };
+}
+
+/**
+ * PKCE S256: the base64url SHA-256 of a verifier — the value a caller sends as
+ * `code_challenge` and the server later recomputes from the verifier to bind an
+ * exchange to the client that began it. Exported so the CLI login broker can use the
+ * same construction the OIDC flow already uses internally.
+ */
+export function pkceS256(verifier: string): Promise<string> {
+  return pkceChallenge(verifier);
+}
+
+/**
+ * Sign / verify a short-lived HS256 token with `SESSION_SECRET` — the generic
+ * primitive behind the flow cookie and the CLI login `code`. Not a session (no `sub`
+ * contract); just a tamper-proof, expiring envelope for a handful of claims.
+ */
+export function signEphemeral(env: OidcEnv, claims: Record<string, unknown>, maxAgeSec: number): Promise<string> {
+  return new SignJWT(claims)
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(`${maxAgeSec}s`)
+    .sign(signingKey(env));
+}
+
+export async function verifyEphemeral(env: OidcEnv, token: string): Promise<Record<string, unknown> | null> {
+  try {
+    return (await jwtVerify(token, signingKey(env))).payload as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 /** Verify the session cookie value. `null` for no/invalid/expired session. */
@@ -250,6 +300,16 @@ export interface MountOptions {
 }
 
 /**
+ * A same-origin absolute path, or undefined. Guards the `returnTo` redirect against
+ * open-redirect: only a path beginning with a single `/` (no scheme, no `//` network
+ * path, no backslash) is allowed — never an absolute URL to another host.
+ */
+export function safePath(p: string | null | undefined): string | undefined {
+  if (!p || !p.startsWith('/') || p.startsWith('//') || p.includes('\\')) return undefined;
+  return p;
+}
+
+/**
  * Mount `/api/auth/login`, `/api/auth/callback`, `/api/auth/logout` on a Hono app.
  * Both platform apps wire the routes identically — cookie flags, redirects and the
  * PKCE round-trip — so the only per-app difference is what happens *after* the
@@ -262,7 +322,7 @@ export function mountOidcRoutes<B extends OidcEnv>(app: Hono<{ Bindings: B }>, o
 
   app.get('/api/auth/login', async (c) => {
     const origin = new URL(c.req.url).origin;
-    const { location, flow } = await beginLogin(c.env, origin);
+    const { location, flow } = await beginLogin(c.env, origin, { returnTo: safePath(c.req.query('returnTo')) });
     setCookie(c, FLOW_COOKIE, flow, cookieOpts(origin, FLOW_MAXAGE));
     return c.redirect(location);
   });
@@ -272,9 +332,9 @@ export function mountOidcRoutes<B extends OidcEnv>(app: Hono<{ Bindings: B }>, o
     const flow = getCookie(c, FLOW_COOKIE);
     deleteCookie(c, FLOW_COOKIE, { path: '/' });
     try {
-      const { session } = await completeLogin(c.env, origin, new URL(c.req.url), flow);
+      const { session, returnTo } = await completeLogin(c.env, origin, new URL(c.req.url), flow);
       setCookie(c, SESSION_COOKIE, session, cookieOpts(origin, SESSION_MAXAGE));
-      return c.redirect(onSuccess);
+      return c.redirect(safePath(returnTo) ?? onSuccess);
     } catch (err) {
       // Never swallow silently: a failing login round-trip is undiagnosable in prod
       // otherwise. The reason (token-exchange status, state/nonce mismatch, JWKS

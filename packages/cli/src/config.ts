@@ -10,6 +10,9 @@ import { join } from 'node:path';
  */
 export interface CliConfig {
   controlPlaneUrl?: string;
+  /** A browser-login session (sent as `Authorization: Bearer`) — per-human, from `substrat login`. */
+  bearerToken?: string;
+  /** A shared machine credential (sent as `x-service-token`) — for CI, from `substrat login --token`. */
   serviceToken?: string;
 }
 
@@ -39,23 +42,37 @@ export function saveConfig(cfg: CliConfig): string {
 
 export interface ResolvedAuth {
   controlPlaneUrl: string;
-  serviceToken: string;
+  /** The auth header to send with an authenticated request. */
+  header: Record<string, string>;
+  /** Human description of how we authenticated (for the CLI to print). */
+  as: string;
 }
 
 /**
- * Resolve the control-plane URL + service token, in precedence order:
- * explicit flag → environment → stored config. Throws a clear, actionable error
- * (pointing at `substrat login`) when either is missing, rather than a 401 later.
+ * Resolve the control-plane URL + the auth header, in precedence order:
+ *   URL:   flag → SUBSTRAT_CP_URL → config
+ *   auth:  explicit service token (flag/env, for CI) → stored browser session → stored service token
+ * A browser session is sent as `Authorization: Bearer` (per-human, roster-gated); a
+ * service token as `x-service-token` (the platform service actor). Throws a clear,
+ * actionable error pointing at `substrat login` rather than surfacing a 401 later.
  */
 export function resolveAuth(flags: { cp?: string; token?: string }): ResolvedAuth {
   const cfg = loadConfig();
-  const controlPlaneUrl = flags.cp ?? process.env.SUBSTRAT_CP_URL ?? cfg.controlPlaneUrl;
-  const serviceToken = flags.token ?? process.env.SUBSTRAT_SERVICE_TOKEN ?? cfg.serviceToken;
-  if (!controlPlaneUrl) {
+  const raw = flags.cp ?? process.env.SUBSTRAT_CP_URL ?? cfg.controlPlaneUrl;
+  if (!raw) {
     throw new Error('no control-plane URL — pass --cp, set SUBSTRAT_CP_URL, or run `substrat login`');
   }
-  if (!serviceToken) {
-    throw new Error('no service token — pass --token, set SUBSTRAT_SERVICE_TOKEN, or run `substrat login`');
+  const controlPlaneUrl = raw.replace(/\/$/, '');
+
+  const explicitService = flags.token ?? process.env.SUBSTRAT_SERVICE_TOKEN;
+  if (explicitService) {
+    return { controlPlaneUrl, header: { 'x-service-token': explicitService }, as: 'service token' };
   }
-  return { controlPlaneUrl: controlPlaneUrl.replace(/\/$/, ''), serviceToken };
+  if (cfg.bearerToken) {
+    return { controlPlaneUrl, header: { authorization: `Bearer ${cfg.bearerToken}` }, as: 'browser session' };
+  }
+  if (cfg.serviceToken) {
+    return { controlPlaneUrl, header: { 'x-service-token': cfg.serviceToken }, as: 'service token' };
+  }
+  throw new Error('not authenticated — run `substrat login` (browser), or pass --token / set SUBSTRAT_SERVICE_TOKEN for CI');
 }
