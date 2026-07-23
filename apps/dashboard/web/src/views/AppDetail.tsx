@@ -259,7 +259,8 @@ function Settings({ app, onDeleted }: { app: AppRow; onDeleted: () => void }) {
         danger
         confirmLabel="Delete app"
         onCancel={() => { setOpen(false); setConfirm(''); }}
-        onConfirm={confirm === app.name ? onDeleted : undefined}
+        confirmDisabled={confirm !== app.name}
+        onConfirm={onDeleted}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ background: 'var(--status-danger-bg)', borderRadius: 6, padding: '12px 14px', fontSize: 12.5, color: 'var(--status-danger-fg)', lineHeight: 1.6 }}>

@@ -10,6 +10,8 @@ export interface DialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   onConfirm?: () => void;
+  /** Disable the confirm button (e.g. a type-to-confirm guard not yet satisfied). */
+  confirmDisabled?: boolean;
   onCancel?: () => void;
   /** Optional form body. */
   children?: ReactNode;
@@ -24,6 +26,7 @@ export function Dialog({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   onConfirm,
+  confirmDisabled,
   onCancel,
   children,
   width = 440,
@@ -85,7 +88,7 @@ export function Dialog({
           <Button variant="secondary" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
+          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm} disabled={confirmDisabled || !onConfirm}>
             {confirmLabel}
           </Button>
         </div>
