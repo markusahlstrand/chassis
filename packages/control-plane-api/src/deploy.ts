@@ -128,7 +128,12 @@ export function assertSandboxContract(m: DeployManifest): void {
  * label the RFC sketched, because **it is a Cloudflare Worker script name** — no `@`
  * or `.`, only `[a-z0-9_-]`. A lowercased ULID is valid by construction and unique per
  * version; the human-readable label lives on the version record's `version` field.
+ *
+ * A builder-owned vertical's slug is `<tenant>/<name>` (builder-plane.md) — the `/` is
+ * not script-name-safe, so it (and any other stray char) is flattened to `-`. A bare
+ * platform slug is unaffected (`callout-<id>`), so this is backward-compatible.
  */
 export function deploymentRefFor(slug: string, versionId: string): string {
-  return `${slug}-${versionId.toLowerCase()}`;
+  const safe = slug.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return `${safe}-${versionId.toLowerCase()}`;
 }
