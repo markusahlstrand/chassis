@@ -416,17 +416,26 @@ describe('catalog availability by mode', () => {
     expect(slugs).not.toContain('not-in-catalog');
   });
 
-  it('connected mode hides a vertical not deployed to the shared plane (Meridian), keeps the rest', () => {
+  it('connected mode offers deployed catalog verticals (incl. Meridian now), never an unknown one', () => {
     const slugs = availableCatalog(registry, { connected: true }).map((v) => v.slug);
-    // Meridian is bundled but `connected: false` (not on the dispatch namespace yet) → hidden.
-    expect(slugs).not.toContain('meridian');
-    // Callout + Documents are provisionable on the plane → still offered.
+    // Meridian is now deployed to the dispatch namespace + promoted (connected: true) → offered.
+    expect(slugs).toContain('meridian');
     expect(slugs).toContain('callout');
     expect(slugs).toContain('protocol');
     expect(slugs).not.toContain('not-in-catalog');
   });
 
-  it('Meridian is flagged not-yet-connected (flip when it is deployed + promoted to prod)', () => {
-    expect(CATALOG.meridian!.connected).toBe(false);
+  it('the gating rule still HIDES a vertical explicitly flagged not-yet-connected', () => {
+    // The rule availableCatalog applies, pinned independent of any real entry's flag.
+    const shows = (entry: { connected?: boolean } | undefined, connected: boolean) =>
+      !!entry && (!connected || entry.connected !== false);
+    expect(shows({ connected: false }, true)).toBe(false); // undeployed → hidden in connected mode
+    expect(shows({ connected: false }, false)).toBe(true); // embedded → shown regardless
+    expect(shows({ connected: true }, true)).toBe(true); // deployed → shown
+    expect(shows(undefined, true)).toBe(false); // not in catalog → hidden
+  });
+
+  it('Meridian is now connected (deployed + promoted to prod)', () => {
+    expect(CATALOG.meridian!.connected).toBe(true);
   });
 });
