@@ -197,11 +197,43 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
   return hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
 }
 
+/**
+ * Who am I, in the shape the SPA centres on: `{ key, display, role, country, employeeId }`.
+ * The principal comes from the auth seam; the role hint + linked employee come from the
+ * scope itself (`hr/whoami`), so a real hosted owner (holding `hr-admin`) lands on the
+ * admin surface and an employee on their own work — the same shape the dev server serves.
+ */
 app.get('/api/me', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  // Resolve the caller via the configured provider (Better-Auth-DO / OIDC), mapping the
+  // subject → principal (claiming the owner seat on first login).
   const principal = await principalFor(c.env, c.req.raw);
   if (!principal) return c.json({ error: 'unauthorized' }, 401);
-  return c.json({ principal });
+  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  const who = (await scope.invoke('hr/whoami', undefined)) as {
+    role: string;
+    country: 'SE' | 'ES';
+    employeeId: string | null;
+  };
+  // A display name when the provider carries one (the dev-header path carries none) — the
+  // subject is cheap to re-resolve and keeps the SPA shape total.
+  const subject = await authProviderFor(c.env, c.req.raw).resolve(c.req.raw.headers).catch(() => null);
+  return c.json({
+    key: principal,
+    display: subject?.name ?? subject?.email ?? 'You',
+    role: who.role,
+    country: who.country,
+    employeeId: who.employeeId,
+  });
 });
+
+/**
+ * The persona switcher is a DEV affordance (the demo's cast of characters). A real hosted
+ * instance has one signed-in user and no cast, so this is empty — the app hides the
+ * switcher when the cast is empty. Kept as an explicit route (rather than a 404 the SPA
+ * catch-all would swallow) so the client gets clean JSON.
+ */
+app.get('/api/cast', (c) => c.json([]));
 
 // Generic invoke: the kernel checks the permission inside every operation, so a generic
 // route is exactly as safe as an explicit table — and far less code.
