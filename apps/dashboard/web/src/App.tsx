@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Toast } from '@substrat-run/ui';
-import { api, signOut, type AppRow, type CatalogEntry, type Me } from './lib/api';
+import { api, signOut, ApiError, type AppRow, type CatalogEntry, type Me } from './lib/api';
 import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_ME } from './lib/mock';
 import { verticalMeta } from './lib/demo';
 import { DashShell, type Crumb, type NavKey } from './components/DashShell';
@@ -139,8 +139,12 @@ export function App() {
     [reloadApps],
   );
 
+  const deletingRef = useRef(false);
   const deleteApp = useCallback(
     async (app: AppRow) => {
+      // Guard the double-click: ignore a second delete while one is already in flight.
+      if (deletingRef.current) return;
+      deletingRef.current = true;
       try {
         if (DEV_MOCK) setApps((a) => a.filter((x) => x.id !== app.id));
         else {
@@ -150,7 +154,15 @@ export function App() {
         go('#/apps');
         setToast({ status: 'success', title: `${app.name} deleted`, detail: 'Its hostname is offline; audit history is retained.' });
       } catch (e) {
-        setToast({ status: 'danger', title: 'Delete failed', detail: e instanceof Error ? e.message : String(e) });
+        // Already gone (e.g. a slipped double-submit) is the state we wanted, not an error.
+        if (e instanceof ApiError && e.status === 404) {
+          await reloadApps();
+          go('#/apps');
+        } else {
+          setToast({ status: 'danger', title: 'Delete failed', detail: e instanceof Error ? e.message : String(e) });
+        }
+      } finally {
+        deletingRef.current = false;
       }
     },
     [reloadApps],
