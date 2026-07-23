@@ -8,7 +8,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "cf:deploy": "wrangler deploy",
     "dry-run": "wrangler deploy --dry-run --outdir dist-worker"
   },
   "dependencies": {

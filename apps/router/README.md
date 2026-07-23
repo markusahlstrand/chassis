@@ -52,7 +52,7 @@ before setting its own, by prefix rather than by name.
 
 ```sh
 wrangler secret put ROUTER_SECRET          # same value on each vertical
-pnpm --filter @substrat-run/router run deploy
+pnpm --filter @substrat-run/router cf:deploy
 ```
 
 Then bind a hostname and make it active — until then the router answers 404, because a

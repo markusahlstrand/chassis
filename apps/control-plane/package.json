@@ -9,7 +9,7 @@
     "test": "vitest run",
     "build:console": "pnpm --filter @substrat-run/console build",
     "dev": "wrangler dev --var ALLOW_DEV_ACTOR:true",
-    "deploy": "node ../../tools/preflight-migrations.mjs && pnpm run build:console && wrangler deploy",
+    "cf:deploy": "node ../../tools/preflight-migrations.mjs && pnpm run build:console && wrangler deploy",
     "dry-run": "pnpm run build:console && wrangler deploy --dry-run --outdir dist-worker"
   },
   "dependencies": {

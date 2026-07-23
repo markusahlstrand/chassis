@@ -74,5 +74,5 @@ put apps/router ROUTER_SECRET "$ROUTER_SECRET"
 
 echo
 echo "✓ shared secrets set consistently. Next:"
-echo "    pnpm --filter @substrat-run/control-plane run deploy      # injector picks up the new values"
+echo "    pnpm --filter @substrat-run/control-plane cf:deploy      # injector picks up the new values"
 echo "    pnpm substrat push demos/callout --slug callout --version <next>   # vertical re-gets the injected secrets"
