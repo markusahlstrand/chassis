@@ -79,6 +79,22 @@ describe('GitHub App client', () => {
     expect(verdict.iss).toBe('123456');
   });
 
+  it('accepts a private key stored as a single line with literal \\n escapes', async () => {
+    // The Cloudflare-secret failure mode: a multi-line PEM pasted as one line, its
+    // newlines encoded as the two characters backslash+n. The client must normalize
+    // these or atob chokes on the leftover backslash.
+    const singleLinePem = privateKeyPem.replace(/\n/g, '\\n');
+    const { calls, fetchImpl } = fakeGithub();
+    const cfg = githubConfig(
+      { GITHUB_APP_ID: '123456', GITHUB_APP_SLUG: 'substrat-import', GITHUB_APP_PRIVATE_KEY: singleLinePem },
+      fetchImpl,
+    )!;
+    const account = await installationAccount(cfg, '987');
+    expect(account).toBe('acme-inc');
+    const verdict = await jwtIsValidRs256(calls[0]!.authorization!.slice('Bearer '.length));
+    expect(verdict.ok).toBe(true);
+  });
+
   it('mints an installation token, then lists repos with it', async () => {
     const { calls, fetchImpl } = fakeGithub();
     const repos = await listInstallationRepos(cfgFor(fetchImpl), '987');

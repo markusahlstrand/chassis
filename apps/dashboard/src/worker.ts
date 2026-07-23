@@ -35,6 +35,7 @@ import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './d
 import { TenantNarrowedControlPlane } from './authority.js';
 import { transportFor, senderFor, teamInviteEmail } from './email.js';
 import { githubConfig, installUrl, installationAccount, listInstallationRepos } from './github.js';
+import { b64url, b64urlToBytes } from './b64.js';
 import type { SendEmailBinding } from '@substrat-run/adapter-email';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
@@ -155,11 +156,6 @@ interface InviteClaim {
   invitationId: string;
   exp: number;
 }
-
-const b64url = (bytes: Uint8Array): string =>
-  btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const b64urlToBytes = (s: string): Uint8Array =>
-  Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
 
 function hmacKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(

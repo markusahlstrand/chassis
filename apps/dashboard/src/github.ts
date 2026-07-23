@@ -54,8 +54,11 @@ const b64url = (bytes: ArrayBuffer | Uint8Array): string => {
 /** Import a PKCS#8 PEM as an RS256 signing key (Web Crypto — same in Workers and Node). */
 async function importKey(pem: string): Promise<CryptoKey> {
   const der = pem
-    .replace(/-----BEGIN PRIVATE KEY-----/, '')
-    .replace(/-----END PRIVATE KEY-----/, '')
+    // Single-line secrets often carry literal "\n"/"\r" escape sequences rather than
+    // real newlines; drop them BEFORE stripping whitespace so no stray char survives
+    // into the base64 (a leftover backslash would make atob throw "invalid base64").
+    .replace(/\\[rn]/g, '')
+    .replace(/-----[^-]+-----/g, '') // BEGIN/END markers (PKCS#8 "PRIVATE KEY")
     .replace(/\s+/g, '');
   const bytes = Uint8Array.from(atob(der), (ch) => ch.charCodeAt(0));
   return crypto.subtle.importKey('pkcs8', bytes, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
