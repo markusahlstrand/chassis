@@ -71,10 +71,10 @@ no service binding, so it passes `assertSandboxContract`.
 
 ## Known follow-ups (not blockers for provisioning, but for full hosted UX)
 
-- **App data contract.** The SPA expects `/api/me` as `{ key, role, country, employeeId }` (+ a
-  `/api/cast`), but this branch's `/api/me` returns just `{ principal }`. Fold the `hr/whoami` shape
-  back in (it lives on the unmerged data-contract branch) so the owner lands on the Admin/setup
-  surface. Owner **login-linking is done** — the first sign-in claims the owner seat (`hr-admin`).
+- **App data contract — done.** `/api/me` returns the SPA shape (`{ key, display, role, country,
+  employeeId }`) via `hr/whoami`, and owner **login-linking is done** — the first sign-in claims the
+  owner seat (`hr-admin`), so a real signed-up owner lands on the Admin/setup surface. (Reconciled
+  in from the data-contract change.)
 - **Dead files.** `src/auth.ts` + `src/auth-schema.ts` (the old D1 Better Auth) and the D1 auth
   migrations are now unused (auth moved to the IdentityDO); safe to remove in a cleanup pass.
 - **Scrive reconcile.** The poll-path cron cannot run as a dispatch user-worker, so Scrive e-sign
