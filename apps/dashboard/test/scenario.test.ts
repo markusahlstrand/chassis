@@ -96,6 +96,34 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     expect(apps[0]!.status).toBe('active');
   });
 
+  it('a failed provision marks the app failed, not silently provisioning', async () => {
+    const acme = await bootstrap('acme-fail');
+    const failScopeId = scopeId.parse(ulid());
+    // A control-plane seam whose very first call fails → the effect (step 2) throws
+    // after the row is recorded (step 1, 'provisioning').
+    const failingCp = {
+      tenantId: acme.tenantId,
+      ensureTenant: () => Promise.reject(new Error('boom')),
+    } as unknown as Parameters<typeof createApp>[1]['controlPlane'];
+
+    await expect(
+      createApp(host, {
+        node: acme,
+        appScopeId: failScopeId,
+        verticalSlug: 'protocol',
+        name: 'Broken',
+        appEntitlements: ['protocol'],
+        appOwnerGrants: [PROTOCOL_PERM.read] as PermissionKey[],
+        controlPlane: failingCp,
+      }),
+    ).rejects.toThrow('boom');
+
+    // ...but its row is FAILED, not left silently at 'provisioning'.
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    const apps = await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {});
+    expect(apps.find((a) => a.app_scope_id === failScopeId)?.status).toBe('failed');
+  });
+
   it('deleting an app deprovisions its scope and drops it from the list (record retained)', async () => {
     const acme = await bootstrap('acme-del');
     const appScopeId = scopeId.parse(ulid());

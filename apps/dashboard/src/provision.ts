@@ -130,10 +130,18 @@ export async function createApp(
 
   // 2. Effect the app scope IN THE CALLER'S OWN TENANT (node.tenantId, ambient —
   //    never a request argument). Connected: on the shared plane, tenant-narrowed.
-  //    Embedded: in this deployment's own host.
-  const hostname = input.controlPlane
-    ? await provisionOnSharedPlane(input.controlPlane, input)
-    : await provisionEmbedded(host, input);
+  //    Embedded: in this deployment's own host. On failure (the vertical refused, a
+  //    hostname wouldn't bind, …) mark the row `failed` so it doesn't sit silently at
+  //    `provisioning`, then re-throw the original error (the caller surfaces it).
+  let hostname: string | null;
+  try {
+    hostname = input.controlPlane
+      ? await provisionOnSharedPlane(input.controlPlane, input)
+      : await provisionEmbedded(host, input);
+  } catch (e) {
+    await scope.invoke('dashboard/mark-app-failed', { appScopeId: input.appScopeId }).catch(() => {});
+    throw e;
+  }
 
   // 3. Flip the account's record to active, recording the hostname if one bound.
   return scope.invoke('dashboard/mark-app-active', {
