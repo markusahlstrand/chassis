@@ -14,6 +14,13 @@ export interface CliConfig {
   bearerToken?: string;
   /** A shared machine credential (sent as `x-service-token`) — for CI, from `substrat login --token`. */
   serviceToken?: string;
+  /**
+   * The tenant a builder acts for (builder-plane.md §5) — the id or slug the control plane
+   * prefixes onto a bare `--slug` to form `<tenantSlug>/<name>`. Stored by `substrat login`
+   * (the sole/selected workspace); `--tenant` overrides per command. Sent as
+   * `x-substrat-tenant`, and only with a browser session (a service token is not a builder).
+   */
+  defaultTenant?: string;
 }
 
 const configDir = (): string => join(homedir(), '.substrat');
@@ -56,7 +63,7 @@ export interface ResolvedAuth {
  * service token as `x-service-token` (the platform service actor). Throws a clear,
  * actionable error pointing at `substrat login` rather than surfacing a 401 later.
  */
-export function resolveAuth(flags: { cp?: string; token?: string }): ResolvedAuth {
+export function resolveAuth(flags: { cp?: string; token?: string; tenant?: string }): ResolvedAuth {
   const cfg = loadConfig();
   const raw = flags.cp ?? process.env.SUBSTRAT_CP_URL ?? cfg.controlPlaneUrl;
   if (!raw) {
@@ -69,7 +76,12 @@ export function resolveAuth(flags: { cp?: string; token?: string }): ResolvedAut
     return { controlPlaneUrl, header: { 'x-service-token': explicitService }, as: 'service token' };
   }
   if (cfg.bearerToken) {
-    return { controlPlaneUrl, header: { authorization: `Bearer ${cfg.bearerToken}` }, as: 'browser session' };
+    // A builder acts for a tenant: `--tenant` → SUBSTRAT_TENANT → the stored default.
+    // Sent only with a browser session — a service token is the platform, not a builder.
+    const tenant = flags.tenant ?? process.env.SUBSTRAT_TENANT ?? cfg.defaultTenant;
+    const header: Record<string, string> = { authorization: `Bearer ${cfg.bearerToken}` };
+    if (tenant) header['x-substrat-tenant'] = tenant;
+    return { controlPlaneUrl, header, as: tenant ? `browser session (tenant ${tenant})` : 'browser session' };
   }
   if (cfg.serviceToken) {
     return { controlPlaneUrl, header: { 'x-service-token': cfg.serviceToken }, as: 'service token' };

@@ -2,8 +2,9 @@ import { SELF, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { DEV_ACTOR_HEADER } from '@substrat-run/control-plane-api';
-import { platformActorId } from '@substrat-run/contracts';
+import { platformActorId, principalId, tenantId } from '@substrat-run/contracts';
 import { ulid } from '@substrat-run/kernel';
+import { mintSession, type OidcEnv } from '@substrat-run/oidc-rp';
 import { d1StaffRoster, listStaff } from '../src/staff-roster.js';
 
 /**
@@ -157,5 +158,99 @@ describe('no public account surface (OIDC)', () => {
       body: JSON.stringify({ email: 'stranger@example.com', password: 'hunter2hunter2' }),
     });
     expect(res.ok).toBe(false);
+  });
+});
+
+/**
+ * The live BUILDER path (builder-plane.md §4/§5), end-to-end in workerd: a NON-staff
+ * session resolves — via the shared identity directory — to a builder principal, and the
+ * control plane forms `<tenantSlug>/<name>` from the authenticated tenant. What's under
+ * test: self-serve with no vetting roster, the prefix the builder never types, and that a
+ * user with no workspace is declined (fail-closed).
+ *
+ * In THIS file (not its own) on purpose: storage is shared across files
+ * (isolatedStorage: false), so seeding a tenant elsewhere would pollute the "empty
+ * registry" test above. Here the seed runs after it, in guaranteed document order.
+ */
+describe('builder auth — live self-serve path', () => {
+  const oidcEnv = { SESSION_SECRET: env.SESSION_SECRET } as unknown as OidcEnv;
+  const PROVIDER = 'authhero';
+  // The same fixed resolver actor builder-auth.ts uses to read the directory.
+  const RESOLVER = platformActorId.parse('01JZ000000000000000000BDR1');
+  const userId = ulid();
+  const email = 'builder@acme.example';
+
+  const sessionFor = (id: string, mail: string): Promise<string> =>
+    mintSession(oidcEnv, { id, email: mail, name: 'Builder' });
+
+  beforeAll(async () => {
+    // The staff roster table must exist so staff auth fails closed (returns null, not
+    // throws) and the request falls through to the BUILDER path. Empty: the builder is
+    // deliberately not staff. In prod this table is a migration; here we seed it.
+    await env.AUTH_DB.exec(
+      'CREATE TABLE IF NOT EXISTS staff_actor (email TEXT PRIMARY KEY, actor TEXT NOT NULL, name TEXT, added_at TEXT NOT NULL, revoked_at TEXT)',
+    );
+    // Seed a tenant + link the OIDC identity to it, the way dashboard sign-up would.
+    const host = new CloudflareScopeHost({ scope: env.SCOPE, controlPlane: env.CONTROL_PLANE });
+    const t = tenantId.parse(ulid());
+    await host.admin.createTenant(RESOLVER, { id: t, slug: 'acme-co', name: 'Acme Co' });
+    await host.admin.registerIdentityPool(RESOLVER, { provider: PROVIDER, topology: 'central', tenantId: null });
+    await host.admin.linkIdentity(RESOLVER, {
+      tenantId: t,
+      provider: PROVIDER,
+      externalId: userId,
+      principal: principalId.parse(ulid()),
+    });
+    await host.close();
+  });
+
+  it('whoami resolves the session to its tenants', async () => {
+    const token = await sessionFor(userId, email);
+    const res = await SELF.fetch('https://cp.test/api/auth/whoami', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: { id: string } | null; tenants: { slug: string }[] };
+    expect(body.user?.id).toBe(userId);
+    expect(body.tenants.map((t) => t.slug)).toContain('acme-co');
+  });
+
+  it('whoami is empty for no session', async () => {
+    const res = await SELF.fetch('https://cp.test/api/auth/whoami');
+    expect(await res.json()).toEqual({ user: null, tenants: [] });
+  });
+
+  it('a builder pushes a BARE slug and the control plane forms <tenantSlug>/<name>', async () => {
+    const token = await sessionFor(userId, email);
+    // Register (claim) a bare `helpdesk`; the id comes back prefixed — the builder never
+    // typed `acme-co/`.
+    const res = await SELF.fetch('https://cp.test/api/verticals', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'helpdesk', name: 'Helpdesk', source: 'cli' }),
+    });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ slug: 'acme-co/helpdesk' });
+
+    // The list is filtered to the builder's own namespace.
+    const list = (await (
+      await SELF.fetch('https://cp.test/api/verticals', { headers: { authorization: `Bearer ${token}` } })
+    ).json()) as { slug: string }[];
+    expect(list.map((v) => v.slug)).toContain('acme-co/helpdesk');
+
+    // Staff-only surfaces stay closed to a builder (default-deny confinement).
+    const tenants = await SELF.fetch('https://cp.test/api/tenants', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(tenants.status).toBe(403);
+  });
+
+  it('declines a signed-in user who has no workspace yet (fail closed)', async () => {
+    const token = await sessionFor(ulid(), 'nobody@example.com'); // never seeded
+    const res = await SELF.fetch('https://cp.test/api/verticals', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    // No builder tenant → the reader declines → the API falls through to 401.
+    expect(res.status).toBe(401);
   });
 });

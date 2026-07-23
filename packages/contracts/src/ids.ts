@@ -53,3 +53,16 @@ export const permissionKey = z
 export type PermissionKey = z.infer<typeof permissionKey>;
 
 export const slug = z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+
+/**
+ * A VERTICAL's registry id (builder-plane.md §2). A bare `slug`, optionally prefixed by
+ * an owning tenant's slug: `<tenantSlug>/<name>`. The prefix makes a customer-chosen name
+ * globally unique BY CONSTRUCTION — no claim race on the bare word — while a platform
+ * vertical (owner_tenant = null) stays bare (`callout`). Exactly ONE `/` is allowed: both
+ * halves are plain slugs. A builder never types the prefix; the control plane forms it
+ * from the authenticated tenant (§5). It flows into `deploymentRefFor`, which flattens the
+ * `/` to stay a valid CF script name; hostnames are per-instance and never carry it.
+ */
+export const verticalSlug = z
+  .string()
+  .regex(/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\/)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
