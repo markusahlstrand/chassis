@@ -24,7 +24,11 @@ export const MOCK_ME: Me = {
   ],
 };
 
-export const MOCK_CATALOG: CatalogEntry[] = [{ slug: 'protocol', name: 'Documents' }];
+export const MOCK_CATALOG: CatalogEntry[] = [
+  { slug: 'meridian', name: 'Meridian' },
+  { slug: 'callout', name: 'Callout' },
+  { slug: 'protocol', name: 'Documents' },
+];
 
 export const MOCK_MEMBERS: Member[] = [
   { id: 'm1', principal: MOCK_ME.principal, email: 'dana@acme.com', role_key: 'owner', status: 'active', invitation_id: null, invited_by: 'system', invited_at: '2026-03-02T10:00:00Z', joined_at: '2026-03-02T10:00:00Z' },

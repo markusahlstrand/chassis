@@ -27,6 +27,9 @@ const VERTICAL_META: Record<string, VerticalMeta> = {
   dashboard: { label: 'Dashboard', accent: LAYER.kernel },
   workorder: { label: 'Work Orders', accent: LAYER.engine },
   callout: { label: 'Callout', accent: LAYER.engine },
+  // Meridian's core (leave, time, expenses) is vertical code on the kernel with no
+  // engine behind it — the kernel accent marks that "the kernel carries the domain".
+  meridian: { label: 'Meridian', accent: LAYER.kernel },
   invoicing: { label: 'Invoicing', accent: LAYER.kernel },
 };
 
@@ -246,6 +249,7 @@ export interface MarketplaceRow {
   slug: string;
 }
 export const MARKETPLACE: MarketplaceRow[] = [
+  { name: 'Meridian — HR', meta: 'Directory, leave & absence, time, expenses, onboarding', accent: LAYER.kernel, slug: 'meridian' },
   { name: 'Callout — field service', meta: 'Work orders, time & material, self-inspection', accent: LAYER.engine, slug: 'callout' },
   { name: 'Kallkälla Kaffe — e-commerce', meta: 'Catalog, cart, stock, discounts, orders', accent: LAYER.vertical, slug: 'protocol' },
   { name: 'Handlebar — bike workshop', meta: 'The same engines, re-vocabularied to a workshop', accent: LAYER.engine, slug: 'callout' },

@@ -70,7 +70,7 @@ export function App() {
   const [toast, setToast] = useState<{ status: 'success' | 'danger'; title: string; detail?: string }>();
   // Set when a signed-in user follows an invite meant for a different email — shown
   // instead of dropping them into onboarding ("create a team").
-  const [inviteBlock, setInviteBlock] = useState<{ teamName?: string; invitedEmail?: string; signedInAs?: string } | null>(null);
+  const [inviteBlock, setInviteBlock] = useState<{ token: string; teamName?: string; invitedEmail?: string; signedInAs?: string } | null>(null);
 
   // Theme → data-theme on the root (every token flips; no per-theme overrides).
   useEffect(() => {
@@ -132,11 +132,24 @@ export function App() {
       const token = window.location.pathname.match(/^\/invite\/([^/]+)$/)?.[1] ?? null;
       if (token) {
         const who = await api.me();
+        const preview = await api.previewInvite(token).catch(() => null);
         if (!who) {
           // Not signed in. Prefill the invited email and default to the sign-up screen
           // (invitees are usually new), then come back to this same link to accept.
-          const email = await api.previewInvite(token).then((p) => p.email).catch(() => undefined);
-          signIn({ returnTo: `/invite/${token}`, loginHint: email, screenHint: 'signup' });
+          signIn({ returnTo: `/invite/${token}`, loginHint: preview?.email, screenHint: 'signup' });
+          return;
+        }
+        // Signed in: this invite belongs to a specific email, so verify it is THIS
+        // account before doing anything. An existing member (e.g. the team owner) would
+        // otherwise be silently switched in by the server's "already a member" shortcut
+        // when they open an invite meant for someone else — never learning it wasn't
+        // theirs. If it doesn't match, block and offer to sign out into the invited email.
+        const myEmail = (who as { email?: string | null }).email?.trim().toLowerCase();
+        const invitedEmail = preview?.email?.trim().toLowerCase();
+        if (preview && invitedEmail && invitedEmail !== myEmail) {
+          if (!live) return;
+          window.history.replaceState(null, '', '/');
+          setInviteBlock({ token, teamName: preview.teamName, invitedEmail: preview.email, signedInAs: (who as { email?: string | null }).email ?? undefined });
           return;
         }
         try {
@@ -145,16 +158,11 @@ export function App() {
           window.location.reload();
           return;
         } catch {
-          // Signed in, but the engine refused (this invite is for a different verified
-          // email, or it lapsed). Show a clear block, never the onboarding dead-end.
+          // Signed in with the right email but the engine still refused (the invite
+          // lapsed or was revoked). Show a clear block, never the onboarding dead-end.
           if (!live) return;
-          const preview = await api.previewInvite(token).catch(() => null);
           window.history.replaceState(null, '', '/');
-          setInviteBlock({
-            teamName: preview?.teamName,
-            invitedEmail: preview?.email,
-            signedInAs: (who as { email?: string | null }).email ?? undefined,
-          });
+          setInviteBlock({ token, teamName: preview?.teamName, invitedEmail: preview?.email, signedInAs: (who as { email?: string | null }).email ?? undefined });
           return;
         }
       }
@@ -411,7 +419,7 @@ export function App() {
         teamName={inviteBlock.teamName}
         invitedEmail={inviteBlock.invitedEmail}
         signedInAs={inviteBlock.signedInAs}
-        onSignOut={signOut}
+        onSignOut={() => signOut({ returnTo: `/invite/${inviteBlock.token}` })}
         onContinue={() => window.location.assign('/')}
       />
     );

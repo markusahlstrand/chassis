@@ -24,6 +24,9 @@ import { invitesModule } from '@substrat-run/engine-invites';
 // production model deploys Callout separately (dashboard.md §6) and — per master-plan
 // D-33 — a demo is a template that is COPIED, not imported. This import is the M0 seam.
 import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
+// The worker-safe subpath of the Meridian (HR) vertical: its domain module + perms
+// only, never the demo's node/better-auth seed. M0 bundles it here, same seam as Callout.
+import { meridianModule, HR_PERM } from '@substrat-run/demo-meridian/module';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
 import { createApp, deprovisionApp, provisionDashboard, type DashboardNode } from './provision.js';
@@ -55,9 +58,11 @@ const teamCookieOpts = (origin: string) => ({
 
 // The app binary: the Dashboard vertical + the verticals an app can run. M0 bundles
 // the app verticals into this deployment's ScopeDO (see the file header), so every
-// module a catalog entry needs must be here: Documents (protocol) and Callout —
-// the field-service vertical composing workorder + invoicing + protocol.
-const MODULES = [dashboardModule, invitesModule, protocolModule, workorderModule, invoicingModule, calloutModule];
+// module a catalog entry needs must be here: Documents (protocol), Callout — the
+// field-service vertical composing workorder + invoicing + protocol — and Meridian,
+// the HR vertical (its core domain is vertical code on the kernel; it composes
+// protocol for onboarding only).
+const MODULES = [dashboardModule, invitesModule, protocolModule, workorderModule, invoicingModule, calloutModule, meridianModule];
 export const ScopeDO = defineScopeDO(MODULES, {});
 export { ControlPlaneDO };
 
@@ -88,6 +93,22 @@ const CATALOG: Record<string, { name: string; entitlements: string[]; ownerGrant
       WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
       INV.read, INV.export,
       PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
+    ] as PermissionKey[],
+  },
+  // Meridian runs the HR domain on the kernel plus protocol (onboarding). Its SKU is
+  // two flags (`meridian` + `protocol`); the installing owner receives the `hr-admin`
+  // permission set (demos/meridian provision.ts `hrAdminPerms`) as a flat grant, so a
+  // freshly-installed instance's owner can define leave types, create employees and
+  // projects, approve leave/expenses, and drive onboarding contracts from day one.
+  meridian: {
+    name: 'Meridian',
+    entitlements: ['meridian', 'protocol'],
+    ownerGrants: [
+      HR_PERM.employeeManage, HR_PERM.absenceConfigure, HR_PERM.absenceApprove, HR_PERM.absenceRead,
+      HR_PERM.timeRead, HR_PERM.projectManage, HR_PERM.expenseApprove, HR_PERM.expenseRead, HR_PERM.payrollExport,
+      // PROTO.recordSignature is deliberately excluded — it speaks for the signing
+      // provider (a connection holds it), never a human role (provision.ts).
+      PROTO.create, PROTO.fill, PROTO.bind, PROTO.requestSignature, PROTO.sign, PROTO.read, PROTO.void,
     ] as PermissionKey[],
   },
 };

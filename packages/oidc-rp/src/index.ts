@@ -359,6 +359,8 @@ export function mountOidcRoutes<B extends OidcEnv>(app: Hono<{ Bindings: B }>, o
 
   app.get('/api/auth/logout', (c) => {
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
-    return c.redirect(onSuccess);
+    // A same-origin `returnTo` lets a "sign out and use another account" flow land
+    // back where it started (e.g. an invite link) so the next login is scoped to it.
+    return c.redirect(safePath(c.req.query('returnTo')) ?? onSuccess);
   });
 }
