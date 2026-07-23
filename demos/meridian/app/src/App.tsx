@@ -180,13 +180,18 @@ export default function App() {
   if (me && !hasMyWork && !canManage) {
     return (
       <div className="phone">
-        <div className="persona-bar">
-          <span>Signed in as</span>
-          <select value={personaKey} onChange={(e) => switchPersona(e.target.value)}>
-            {cast.map((c) => (<option key={c.key} value={c.key}>{c.display} · {c.role}</option>))}
-          </select>
-        </div>
-        <Centered><b>{me.display}</b> has no access here.<br />Pick an employee (Elin), a team lead (Mats) or HR (Hedda).</Centered>
+        {cast.length > 0 && (
+          <div className="persona-bar">
+            <span>Signed in as</span>
+            <select value={personaKey} onChange={(e) => switchPersona(e.target.value)}>
+              {cast.map((c) => (<option key={c.key} value={c.key}>{c.display} · {c.role}</option>))}
+            </select>
+          </div>
+        )}
+        <Centered>
+          <b>{me.display}</b> has no access here.
+          {cast.length > 0 && <><br />Pick an employee (Elin), a team lead (Mats) or HR (Hedda).</>}
+        </Centered>
       </div>
     );
   }
@@ -233,9 +238,11 @@ export default function App() {
 
           <div className="nav-user">
             <button className="btn sm tint" onClick={reloadAll} style={{ height: 30 }}>↻ Refresh</button>
-            <select value={personaKey} onChange={(e) => switchPersona(e.target.value)}>
-              {cast.map((c) => (<option key={c.key} value={c.key}>{c.display}</option>))}
-            </select>
+            {cast.length > 0 && (
+              <select value={personaKey} onChange={(e) => switchPersona(e.target.value)}>
+                {cast.map((c) => (<option key={c.key} value={c.key}>{c.display}</option>))}
+              </select>
+            )}
             <select value={theme} onChange={(e) => setTheme(e.target.value as Theme)}>
               <option value="system">Theme: system</option>
               <option value="light">Theme: light</option>
@@ -275,12 +282,14 @@ export default function App() {
 
   return (
     <div className="phone">
-      <div className="persona-bar">
-        <span>Signed in as</span>
-        <select value={personaKey} onChange={(e) => switchPersona(e.target.value)}>
-          {cast.map((c) => (<option key={c.key} value={c.key}>{c.display} · {c.role}</option>))}
-        </select>
-      </div>
+      {cast.length > 0 && (
+        <div className="persona-bar">
+          <span>Signed in as</span>
+          <select value={personaKey} onChange={(e) => switchPersona(e.target.value)}>
+            {cast.map((c) => (<option key={c.key} value={c.key}>{c.display} · {c.role}</option>))}
+          </select>
+        </div>
+      )}
 
       {flowEl ? (
         flowEl
