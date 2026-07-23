@@ -20,6 +20,15 @@
 # NOT touched: per-service secrets (SESSION_SECRET) and external ones (OIDC_*, CF_API_TOKEN)
 # — those are not generatable-to-match and rotating SESSION_SECRET would sign everyone out.
 #
+# DELIBERATELY EXCLUDED — SECRET_BOX_KEY (dashboard). It is an encryption-AT-REST key, the
+# opposite of the shared secrets here: these re-agree on a fresh value, but SECRET_BOX_KEY's
+# OLD value must SURVIVE to decrypt already-sealed connection credentials. The deployed
+# webCryptoSecretBox holds ONE key and open() throws on a keyId mismatch, so replacing it
+# irreversibly orphans every stored credential (recovery = reconnect each provider). Real
+# rotation needs a keyring SecretBox (seal under the new keyId; open by the ciphertext's
+# keyId, holding old+new) + a re-seal sweep — the keyId field is ready; the impl is not.
+# Until then: set SECRET_BOX_KEY once, back it up, and leave it out of any rotation.
+#
 # ROTATES: running this replaces the current values. Afterwards:
 #   1. redeploy the control plane   (so the injector reads the new PLATFORM_SECRET/ROUTER_SECRET)
 #   2. re-push any verticals         (their injected secrets change with the values above)
