@@ -1,5 +1,6 @@
 {
+  // account_id is NOT supported in a Pages config file (wrangler validates it out);
+  // it is supplied via the CLOUDFLARE_ACCOUNT_ID env var by the deploy script instead.
   "name": "substrat-docs",
-  "account_id": "8cbb7553a78d4d4bc4159906c77214a3",
   "pages_build_output_dir": ".vitepress/dist"
 }
