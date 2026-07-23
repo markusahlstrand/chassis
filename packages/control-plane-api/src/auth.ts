@@ -158,6 +158,13 @@ export function staffAllowlist(
 export interface BuilderIdentity {
   actor: PlatformActorId;
   tenantId: TenantId;
+  /**
+   * The owning tenant's slug — the prefix the control plane prepends to a builder's bare
+   * slug to form the vertical id `<tenantSlug>/<name>` (builder-plane.md §5). Resolved by
+   * the reader (it already looked the tenant up), so the transport never needs a second
+   * round-trip to prefix. A builder never types this; they push `--slug <name>`.
+   */
+  tenantSlug: string;
 }
 
 /**
@@ -179,4 +186,4 @@ export type BuilderAuth = (
  */
 export type Principal =
   | { kind: 'staff'; actor: PlatformActorId }
-  | { kind: 'builder'; actor: PlatformActorId; tenantId: TenantId };
+  | { kind: 'builder'; actor: PlatformActorId; tenantId: TenantId; tenantSlug: string };

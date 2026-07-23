@@ -789,22 +789,26 @@ describe('control-plane API — builder authz', () => {
   let app: ReturnType<typeof createControlPlaneApi>;
 
   const staff = platformActorId.parse(ulid());
-  const acme = tenantId.parse(ulid()); // a builder tenant — owns 'helpdesk'
+  const acme = tenantId.parse(ulid()); // a builder tenant — owns 'acme-co/helpdesk'
   const other = tenantId.parse(ulid()); // a different builder tenant
   const acmeActor = platformActorId.parse(ulid());
   const otherActor = platformActorId.parse(ulid());
+  // The tenant SLUGS form the vertical-id prefix (§5): a bare `helpdesk` push by acme
+  // becomes `acme-co/helpdesk`, by other becomes `other-co/helpdesk` — no claim race.
+  const acmeSlug = 'acme-co';
+  const otherSlug = 'other-co';
 
-  // The stub builder reader: a header names the acting tenant; its audited actor is
-  // derived. Anything else is not a builder session (null → fall through to 401).
+  // The stub builder reader: a header names the acting tenant; its audited actor + slug
+  // are derived. Anything else is not a builder session (null → fall through to 401).
   const BUILDER_HEADER = 'x-test-builder';
-  const builderActors: Record<string, ReturnType<typeof platformActorId.parse>> = {
-    [acme]: acmeActor,
-    [other]: otherActor,
+  const builders: Record<string, { actor: ReturnType<typeof platformActorId.parse>; slug: string }> = {
+    [acme]: { actor: acmeActor, slug: acmeSlug },
+    [other]: { actor: otherActor, slug: otherSlug },
   };
   const authenticateBuilder = (req: Request) => {
     const t = req.headers.get(BUILDER_HEADER);
-    if (t && builderActors[t]) return { actor: builderActors[t]!, tenantId: tenantId.parse(t) };
-    return null;
+    const b = t ? builders[t] : undefined;
+    return b ? { actor: b.actor, tenantId: tenantId.parse(t!), tenantSlug: b.slug } : null;
   };
 
   const asStaff = { [DEV_ACTOR_HEADER]: staff, 'content-type': 'application/json' };
@@ -865,33 +869,37 @@ describe('control-plane API — builder authz', () => {
     ).toBe(403);
   });
 
-  it('claims an unregistered slug for the pushing tenant', async () => {
+  it('claims a bare slug under the tenant prefix, stamping the owner', async () => {
+    // The builder pushes a BARE `helpdesk`; the id becomes `<tenantSlug>/helpdesk` (§5),
+    // and the owner is stamped from the principal — a forged ownerTenant in the body loses.
     const res = await acmeReq('/verticals', 'POST', { slug: 'helpdesk', name: 'Helpdesk', source: 'cli' });
     expect(res.status).toBe(201);
-    // Owner is stamped from the principal, not the body — even a forged ownerTenant loses.
-    expect(await res.json()).toMatchObject({ slug: 'helpdesk', ownerTenant: acme });
+    expect(await res.json()).toMatchObject({ slug: `${acmeSlug}/helpdesk`, ownerTenant: acme });
   });
 
   it('filters GET /verticals to the caller — a builder sees only what it owns', async () => {
-    // Staff register a platform-owned vertical; acme must not see it.
+    // Staff register a platform-owned vertical (bare, no prefix); acme must not see it.
     await staffReq('/verticals', 'POST', { slug: 'callout', name: 'Callout', source: 'builtin' });
 
     const mine = await (await acmeReq('/verticals')).json();
-    expect(mine.map((v: { slug: string }) => v.slug)).toEqual(['helpdesk']);
+    expect(mine.map((v: { slug: string }) => v.slug)).toEqual([`${acmeSlug}/helpdesk`]);
     expect(await (await otherReq('/verticals')).json()).toEqual([]);
-    // Staff see the whole registry.
+    // Staff see the whole registry, bare and prefixed alike.
     const all = await (await staffReq('/verticals')).json();
-    expect(all.map((v: { slug: string }) => v.slug).sort()).toEqual(['callout', 'helpdesk']);
+    expect(all.map((v: { slug: string }) => v.slug).sort()).toEqual([`${acmeSlug}/helpdesk`, 'callout']);
   });
 
-  it("refuses to claim or touch another tenant's slug", async () => {
-    // other cannot re-claim helpdesk...
-    expect((await otherReq('/verticals', 'POST', { slug: 'helpdesk', name: 'H', source: 'cli' })).status).toBe(403);
-    // ...nor publish to it...
-    expect((await otherReq('/verticals/helpdesk/versions', 'POST', version(ulid(), 'helpdesk'))).status).toBe(403);
-    // ...nor even see its versions/channels (404 — indistinguishable from absent).
-    expect((await otherReq('/verticals/helpdesk/versions')).status).toBe(404);
-    expect((await otherReq('/verticals/helpdesk/channels')).status).toBe(404);
+  it('gives each tenant its own namespace — two builders can hold the same bare name', async () => {
+    // The prefix is the whole point (§2): `helpdesk` is really `<tenant>/helpdesk`, so
+    // `other` claiming a bare `helpdesk` gets ITS OWN `other-co/helpdesk` — no claim race,
+    // no collision with acme's.
+    const res = await otherReq('/verticals', 'POST', { slug: 'helpdesk', name: 'Help', source: 'cli' });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ slug: `${otherSlug}/helpdesk`, ownerTenant: other });
+    // And other still cannot see acme's — its list holds only its own helpdesk.
+    expect((await (await otherReq('/verticals')).json()).map((v: { slug: string }) => v.slug)).toEqual([
+      `${otherSlug}/helpdesk`,
+    ]);
   });
 
   const v1 = ulid();
@@ -914,28 +922,40 @@ describe('control-plane API — builder authz', () => {
     expect((await acmeReq('/verticals/helpdesk/channels/staging/promote', 'POST', { versionId: v1 })).status).toBe(200);
     // prod: staff-only, even for the owner.
     expect((await acmeReq('/verticals/helpdesk/channels/prod/promote', 'POST', { versionId: v1 })).status).toBe(403);
-    // Staff can promote to prod.
-    expect((await staffReq('/verticals/helpdesk/channels/prod/promote', 'POST', { versionId: v1 })).status).toBe(200);
-    // A non-owner cannot promote helpdesk at all.
-    expect((await otherReq('/verticals/helpdesk/channels/dev/promote', 'POST', { versionId: v1 })).status).toBe(403);
+    // Staff promote to prod — but by the FULL id, since staff address a vertical by its
+    // real registry id, not a bare name (they have no tenant prefix to apply).
+    expect((await staffReq(`/verticals/${encodeURIComponent(`${acmeSlug}/helpdesk`)}/channels/prod/promote`, 'POST', { versionId: v1 })).status).toBe(200);
+    // `other` promoting a bare `helpdesk` addresses ITS OWN (empty) `other-co/helpdesk`,
+    // never acme's — acme's version id isn't in that namespace, so it cannot be promoted.
+    expect((await otherReq('/verticals/helpdesk/channels/dev/promote', 'POST', { versionId: v1 })).status).toBeGreaterThanOrEqual(400);
   });
 
-  it('claims a slug through the deploy/push path too, and refuses a foreign push', async () => {
-    const fd = new FormData();
-    fd.set('manifest', JSON.stringify({
-      version: '0.1.0', entry: 'worker.js', compatibilityDate: '2025-01-01',
-      doClasses: ['ScopeDO'],
-      bindings: [{ type: 'durable_object_namespace', name: 'SCOPE', class_name: 'ScopeDO' }],
-      digests: { manifest: 'm1', permission: 'p1', migration: 'g1' },
-    }));
-    fd.set('worker.js', new Blob(['export default {}'], { type: 'application/javascript+module' }), 'worker.js');
-    const push = (t: string) => app.request('/verticals/reports/deploy', { method: 'POST', headers: { [BUILDER_HEADER]: t }, body: fd });
+  it('claims a slug through the deploy/push path too, each tenant in its own namespace', async () => {
+    const fd = () => {
+      const f = new FormData();
+      f.set('manifest', JSON.stringify({
+        version: '0.1.0', entry: 'worker.js', compatibilityDate: '2025-01-01',
+        doClasses: ['ScopeDO'],
+        bindings: [{ type: 'durable_object_namespace', name: 'SCOPE', class_name: 'ScopeDO' }],
+        digests: { manifest: 'm1', permission: 'p1', migration: 'g1' },
+      }));
+      f.set('worker.js', new Blob(['export default {}'], { type: 'application/javascript+module' }), 'worker.js');
+      return f;
+    };
+    // Both push a BARE `reports`; each claims its own prefixed id (no collision, §2).
+    const acmePush = await app.request('/verticals/reports/deploy', { method: 'POST', headers: { [BUILDER_HEADER]: acme }, body: fd() });
+    expect(acmePush.status).toBe(201);
+    expect(await acmePush.json()).toMatchObject({ verticalSlug: `${acmeSlug}/reports` });
+    const otherPush = await app.request('/verticals/reports/deploy', { method: 'POST', headers: { [BUILDER_HEADER]: other }, body: fd() });
+    expect(otherPush.status).toBe(201);
+    expect(await otherPush.json()).toMatchObject({ verticalSlug: `${otherSlug}/reports` });
 
-    const res = await push(acme);
-    expect(res.status).toBe(201);
-    // The pushed slug is now owned by acme...
-    expect((await (await acmeReq('/verticals')).json()).map((v: { slug: string }) => v.slug).sort()).toEqual(['helpdesk', 'reports']);
-    // ...so a different tenant's push to the same slug is refused (claim-on-first-push).
-    expect((await push(other)).status).toBe(403);
+    // Each list holds only that tenant's own verticals — prefixed, isolated.
+    expect((await (await acmeReq('/verticals')).json()).map((v: { slug: string }) => v.slug).sort()).toEqual([
+      `${acmeSlug}/helpdesk`, `${acmeSlug}/reports`,
+    ]);
+    expect((await (await otherReq('/verticals')).json()).map((v: { slug: string }) => v.slug).sort()).toEqual([
+      `${otherSlug}/helpdesk`, `${otherSlug}/reports`,
+    ]);
   });
 });

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { instant, slug, tenantId } from './ids.js';
+import { instant, tenantId, verticalSlug } from './ids.js';
 
 /**
  * The vertical + version registry (#31 step 1; D-33's milestone one).
@@ -18,7 +18,7 @@ export const verticalSource = z.enum(['builtin', 'git', 'cli']);
 export type VerticalSource = z.infer<typeof verticalSource>;
 
 export const vertical = z.object({
-  slug, // stable, human-readable, and what a scope row denormalizes for display
+  slug: verticalSlug, // stable, human-readable; `<tenantSlug>/<name>` for a builder, bare for platform
   name: z.string().min(1),
   source: verticalSource,
   /**
@@ -62,7 +62,7 @@ export type AdmissionStatus = z.infer<typeof admissionStatus>;
  */
 export const verticalVersion = z.object({
   id: z.string().min(1), // ULID
-  verticalSlug: slug,
+  verticalSlug,
   version: z.string().min(1), // the builder's label — semver, a git sha, whatever they push
   manifestDigest: z.string().min(1),
   permissionDigest: z.string().min(1),
@@ -98,7 +98,7 @@ export const channelName = z.enum(['dev', 'staging', 'prod']);
 export type ChannelName = z.infer<typeof channelName>;
 
 export const verticalChannel = z.object({
-  verticalSlug: slug,
+  verticalSlug,
   channel: channelName,
   versionId: z.string().min(1),
   updatedAt: instant,

@@ -39,6 +39,7 @@ import { mountOidcRoutes, type OidcEnv } from '@substrat-run/oidc-rp';
 import { oidcStaffSessionReader, oidcStaffBearerReader } from './staff-auth.js';
 import { d1StaffRoster } from './staff-roster.js';
 import { mountCliAuthRoutes } from './cli-auth.js';
+import { oidcBuilderReader, resolveWhoami } from './builder-auth.js';
 
 /** The placeholder scope-DO class: kernel only, no modules. */
 export const ScopeDO = defineScopeDO([], {});
@@ -208,12 +209,20 @@ export default {
       return c.json({ user: staff ? { email: staff.email } : null });
     });
 
+    // The BUILDER's identity + the tenants they can build for (builder-plane.md §5). The
+    // CLI calls this on `login` to store a default tenant, and to prompt when a user
+    // belongs to several. Reads the same session (bearer or cookie) as the API.
+    app.get('/api/auth/whoami', async (c) => c.json(await resolveWhoami(hostFor(c.env), c.env, c.req.raw)));
+
     // The audited control-plane API under /api (the console's baseUrl).
     app.route(
       '/api',
       createControlPlaneApi({
         host: hostFor(env),
         authenticate: authFor(env),
+        // A tenant user acting on their own verticals — self-serve, no vetting roster.
+        // Tried only after staff/service auth declines (control-plane-api middleware).
+        authenticateBuilder: oidcBuilderReader(hostFor(env), env),
         verticals: verticalsFor(env),
         resolveVertical: resolveVerticalFor(env),
         deployVertical: deployVerticalFor(env),

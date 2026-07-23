@@ -207,7 +207,14 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     let principal: Principal | null = staff ? { kind: 'staff', actor: staff } : null;
     if (!principal && authenticateBuilder) {
       const builder = await authenticateBuilder(c.req.raw);
-      if (builder) principal = { kind: 'builder', actor: builder.actor, tenantId: builder.tenantId };
+      if (builder) {
+        principal = {
+          kind: 'builder',
+          actor: builder.actor,
+          tenantId: builder.tenantId,
+          tenantSlug: builder.tenantSlug,
+        };
+      }
     }
     if (!principal) return c.json({ error: 'unauthenticated' }, 401);
     c.set('principal', principal);
@@ -221,23 +228,26 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   // route not listed here 403s for a builder — forgetting to allow one costs a feature,
   // never an escalation, which is why this is an allowlist rather than a set of guards
   // sprinkled on the staff-only routes (a forgotten guard there would fail OPEN). Staff
-  // pass through untouched. The `versions$`/`channels$` anchors deliberately exclude the
-  // staff-only `versions/:id/{admit,reject}` and `.../instances`.
-  const SEG = '[^/]+';
+  // pass through untouched. The set deliberately excludes the staff-only
+  // `versions/:id/{admit,reject}` and `.../instances`.
+  //
+  // Matched on the request path by SUFFIX from `/verticals` (a URL-encoded prefixed slug
+  // has no literal `/`, so `[^/]+` covers it) — mount-independent: it works whether the app
+  // is standalone (`/verticals/…`) or routed under `/api` in the worker (`/api/verticals/…`).
+  // The `$` anchors deliberately exclude the staff-only `versions/:id/{admit,reject}` and
+  // `.../instances`, which end in a different segment.
   const BUILDER_ROUTES: readonly { method: string; re: RegExp }[] = [
-    { method: 'GET', re: new RegExp(`^/verticals$`) },
-    { method: 'POST', re: new RegExp(`^/verticals$`) },
-    { method: 'GET', re: new RegExp(`^/verticals/${SEG}/versions$`) },
-    { method: 'POST', re: new RegExp(`^/verticals/${SEG}/versions$`) },
-    { method: 'GET', re: new RegExp(`^/verticals/${SEG}/channels$`) },
-    { method: 'POST', re: new RegExp(`^/verticals/${SEG}/channels/${SEG}/promote$`) },
-    { method: 'POST', re: new RegExp(`^/verticals/${SEG}/deploy$`) },
+    { method: 'GET', re: /\/verticals$/ },
+    { method: 'POST', re: /\/verticals$/ },
+    { method: 'GET', re: /\/verticals\/[^/]+\/versions$/ },
+    { method: 'POST', re: /\/verticals\/[^/]+\/versions$/ },
+    { method: 'GET', re: /\/verticals\/[^/]+\/channels$/ },
+    { method: 'POST', re: /\/verticals\/[^/]+\/channels\/[^/]+\/promote$/ },
+    { method: 'POST', re: /\/verticals\/[^/]+\/deploy$/ },
   ];
   app.use('*', async (c, next) => {
     if (c.get('principal').kind === 'builder') {
-      const { method } = c.req;
-      const path = c.req.path;
-      const allowed = BUILDER_ROUTES.some((r) => r.method === method && r.re.test(path));
+      const allowed = BUILDER_ROUTES.some((r) => r.method === c.req.method && r.re.test(c.req.path));
       if (!allowed) return c.json({ error: 'forbidden' }, 403);
     }
     await next();
@@ -416,6 +426,16 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     return v ? v.ownerTenant : undefined;
   };
 
+  // The vertical id a request actually addresses. For a BUILDER it is `<tenantSlug>/<name>`
+  // (builder-plane.md §5): they send a bare `--slug`, the control plane forms the prefix
+  // from their authenticated tenant — so two builders can each own a `helpdesk` with no
+  // global claim race, and a builder can never name another tenant's namespace (their
+  // prefix is fixed by auth). Staff address a vertical by its full id, so for them the raw
+  // slug is the identity. A builder slug that already contains `/` yields a two-slash id
+  // that fails `verticalSlug` validation / the ownership check downstream — fail-closed.
+  const effectiveSlug = (p: Principal, raw: string): string =>
+    p.kind === 'builder' ? `${p.tenantSlug}/${raw}` : raw;
+
   app.get('/verticals', async (c) => {
     const all = await admin.listVerticals(c.get('actor'));
     const p = c.get('principal');
@@ -427,9 +447,11 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     const input = registerVerticalInput.parse(await c.req.json());
     const p = c.get('principal');
     if (p.kind === 'builder') {
-      // Claim an unregistered slug, or re-register one this tenant already owns; a slug
-      // owned by another tenant is refused (claim-on-first-push, §3). Owner is stamped
-      // from the principal, never trusted from the body.
+      // The bare `--slug` becomes `<tenantSlug>/<name>`; claim it or re-register one this
+      // tenant already owns (a slug owned by another tenant is refused — unreachable via
+      // the prefix, backstopped by the ownership check). Owner + prefix come from the
+      // principal, never trusted from the body.
+      input.slug = effectiveSlug(p, input.slug);
       const owner = await ownerOf(p.actor, input.slug);
       if (owner !== undefined && owner !== p.tenantId) return c.json({ error: 'forbidden' }, 403);
       input.ownerTenant = p.tenantId;
@@ -442,8 +464,8 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   });
 
   app.get('/verticals/:slug/versions', async (c) => {
-    const slug = c.req.param('slug');
     const p = c.get('principal');
+    const slug = effectiveSlug(p, c.req.param('slug'));
     // A builder reading a vertical it does not own gets 404 — indistinguishable from
     // absent, the same fail-closed reflex K-3 uses for a cross-tenant scope.
     if (p.kind === 'builder' && (await ownerOf(p.actor, slug)) !== p.tenantId) {
@@ -454,20 +476,20 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
 
   app.post('/verticals/:slug/versions', async (c) => {
     const input = publishVersionInput.parse(await c.req.json());
-    // The slug is in the path AND the body; they must agree, the same fail-closed
-    // cross-check `(tenantId, scopeId)` makes (K-3) — a mismatch is a client bug, not
-    // a silent publish under the wrong vertical.
+    // The slug is in the path AND the body; they must agree (both bare for a builder),
+    // the same fail-closed cross-check `(tenantId, scopeId)` makes (K-3) — a mismatch is
+    // a client bug, not a silent publish under the wrong vertical.
     if (input.verticalSlug !== c.req.param('slug')) {
       return c.json({ error: 'verticalSlug does not match the path' }, 400);
     }
     const p = c.get('principal');
-    if (p.kind === 'builder' && (await ownerOf(p.actor, input.verticalSlug)) !== p.tenantId) {
+    const slug = effectiveSlug(p, input.verticalSlug);
+    if (p.kind === 'builder' && (await ownerOf(p.actor, slug)) !== p.tenantId) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    input.verticalSlug = slug;
     await admin.publishVersion(c.get('actor'), input);
-    const version = (await admin.listVersions(c.get('actor'), input.verticalSlug)).find(
-      (v) => v.id === input.id,
-    );
+    const version = (await admin.listVersions(c.get('actor'), slug)).find((v) => v.id === input.id);
     return c.json(version, 201);
   });
 
@@ -487,8 +509,8 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   });
 
   app.get('/verticals/:slug/channels', async (c) => {
-    const slug = c.req.param('slug');
     const p = c.get('principal');
+    const slug = effectiveSlug(p, c.req.param('slug'));
     if (p.kind === 'builder' && (await ownerOf(p.actor, slug)) !== p.tenantId) {
       return c.json({ error: 'not found' }, 404);
     }
@@ -496,9 +518,9 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   });
 
   app.post('/verticals/:slug/channels/:channel/promote', async (c) => {
-    const slug = c.req.param('slug');
-    const channel = channelName.parse(c.req.param('channel'));
     const p = c.get('principal');
+    const slug = effectiveSlug(p, c.req.param('slug'));
+    const channel = channelName.parse(c.req.param('channel'));
     if (p.kind === 'builder') {
       // Staff keep the prod gate (model B, §2/§4): a builder self-serves dev/staging;
       // admission and prod promotion stay a human staff decision (the trust boundary
@@ -523,8 +545,9 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     if (!options.deployVertical) {
       return c.json({ error: 'deploy is not configured on this control plane' }, 501);
     }
-    const slug = c.req.param('slug');
     const p = c.get('principal');
+    // A builder pushes a bare `--slug`; the registry id is `<tenantSlug>/<name>` (§5).
+    const slug = effectiveSlug(p, c.req.param('slug'));
     // A builder pushes to a slug it owns, or claims an unregistered one (§3). Checked
     // BEFORE the upload so a refused push never leaves an orphaned namespace script.
     // `existingOwner` also lets a staff push stay ownership-idempotent (below).
