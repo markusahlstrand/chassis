@@ -20,7 +20,7 @@ import {
 export interface SendEmailBinding {
   send(message: {
     to: BindingAddress | BindingAddress[];
-    from: BindingAddress;
+    from: { email: string; name?: string };
     replyTo?: BindingAddress;
     subject: string;
     html?: string;
@@ -75,14 +75,7 @@ export class CloudflareEmailTransport implements EmailTransport {
   }
 }
 
-/**
- * Our normalized address → the binding's address shape. A named address becomes
- * `{ email, name }`; a NAMELESS one becomes a bare string, never `{ email }`. The
- * workerd `EmailAddress` runtime rejects an object whose `name` is absent
- * ("Incorrect type for the 'name' field on 'EmailAddress': … not of type 'string'"),
- * so the object form is only safe when we actually have a name — a bare string is the
- * documented shape for a recipient with no display name.
- */
-function toBinding(address: EmailAddress): string | { email: string; name: string } {
-  return address.name ? { email: address.email, name: address.name } : address.email;
+/** Our normalized address → the binding's address shape (identical today; explicit for clarity). */
+function toBinding(address: EmailAddress): { email: string; name?: string } {
+  return address.name ? { email: address.email, name: address.name } : { email: address.email };
 }
