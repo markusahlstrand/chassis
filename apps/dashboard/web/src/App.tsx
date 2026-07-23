@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Toast } from '@substrat-run/ui';
-import { api, signOut, ApiError, type AppRow, type CatalogEntry, type Deployment, type Me } from './lib/api';
-import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_DEPLOYMENTS, MOCK_ME } from './lib/mock';
+import { Toast, Dialog, Input } from '@substrat-run/ui';
+import { api, signIn, signOut, ApiError, needsOnboarding, type AppRow, type CatalogEntry, type Deployment, type Me, type MeResult, type Member, type InviteRole } from './lib/api';
+import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_DEPLOYMENTS, MOCK_ME, MOCK_MEMBERS } from './lib/mock';
 import { verticalMeta } from './lib/demo';
 import { DashShell, type Crumb, type NavKey } from './components/DashShell';
 import { CommandPalette } from './components/CommandPalette';
 import { NotificationsPopover } from './components/NotificationsPopover';
 import { SignIn, Interstitial } from './views/SignIn';
+import { Onboarding } from './views/Onboarding';
 import { Apps } from './views/Apps';
 import { Deployments } from './views/Deployments';
 import { CreateApp } from './views/CreateApp';
@@ -39,15 +40,19 @@ function go(hash: string) {
   window.location.hash = hash;
 }
 
-/** Org label from the signed-in email domain (acme.com → "Acme"), else "Workspace". */
+/** Fallback org label from the signed-in email domain (acme.com → "Acme"). */
 function orgFrom(email?: string | null): string {
   const domain = email?.split('@')[1]?.split('.')[0];
   return domain ? domain.charAt(0).toUpperCase() + domain.slice(1) : 'Workspace';
 }
 
 export function App() {
-  const [me, setMe] = useState<Me | null | undefined>(undefined);
+  const [me, setMe] = useState<MeResult | null | undefined>(undefined);
+  const [newTeamOpen, setNewTeamOpen] = useState(false);
+  const [newTeamName, setNewTeamName] = useState('');
+  const [creatingTeam, setCreatingTeam] = useState(false);
   const [apps, setApps] = useState<AppRow[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [promoting, setPromoting] = useState(false);
@@ -99,28 +104,69 @@ export function App() {
     setDeployments(await api.listDeployments());
   }, []);
 
-  // Session check → on sign-in, load apps + catalog + deployments. Dev-preview mode
-  // short-circuits to the demo tenant so the UI renders without the OIDC round-trip.
+  // Session check → on sign-in, load apps + members + catalog + deployments. First,
+  // handle an invite acceptance (a `/invite/<token>` link, or one stashed across the
+  // login round-trip). Dev-preview short-circuits to the demo tenant, no OIDC.
   useEffect(() => {
     if (DEV_MOCK) {
+      // `?onboarding=1` previews the teamless first-run screen without a backend.
+      if (new URLSearchParams(window.location.search).get('onboarding') === '1') {
+        setMe({ needsOnboarding: true, email: MOCK_ME.email, name: MOCK_ME.name });
+        return;
+      }
       setMe(MOCK_ME);
       setApps(MOCK_APPS);
+      setMembers(MOCK_MEMBERS);
       setCatalog(MOCK_CATALOG);
       setDeployments(MOCK_DEPLOYMENTS);
       return;
     }
     let live = true;
-    void api.me().then(async (m) => {
+    void (async () => {
+      // 1. Invite acceptance. A pathname link, or a token stashed before we sent the
+      //    recipient to sign in (the OIDC round-trip returns them to '/').
+      const PENDING = 'substrat.pendingInvite';
+      const pathToken = window.location.pathname.match(/^\/invite\/([^/]+)$/)?.[1];
+      const token = pathToken ?? localStorage.getItem(PENDING) ?? null;
+      if (token) {
+        const who = await api.me();
+        if (!who) {
+          // Not signed in yet — remember the invite, then authenticate.
+          localStorage.setItem(PENDING, token);
+          signIn();
+          return;
+        }
+        localStorage.removeItem(PENDING);
+        try {
+          await api.acceptInvite(token);
+          window.history.replaceState(null, '', '/#/team');
+          window.location.reload();
+          return;
+        } catch (e) {
+          window.history.replaceState(null, '', '/');
+          setToast({ status: 'danger', title: 'Could not accept invite', detail: e instanceof Error ? e.message : String(e) });
+        }
+      }
+
+      // 2. Normal session load.
+      const m = await api.me();
       if (!live) return;
       setMe(m);
-      if (m) {
-        const [a, c, d] = await Promise.all([api.listApps(), api.catalog(), api.listDeployments().catch(() => [])]);
+      // A teamless login (onboarding) has nothing to load yet — skip the fetches.
+      if (m && !needsOnboarding(m)) {
+        const [a, mem, c, d] = await Promise.all([
+          api.listApps(),
+          api.listMembers().catch(() => [] as Member[]),
+          api.catalog(),
+          api.listDeployments().catch(() => []),
+        ]);
         if (!live) return;
         setApps(a);
+        setMembers(mem);
         setCatalog(c);
         setDeployments(d);
       }
-    });
+    })();
     return () => {
       live = false;
     };
@@ -212,16 +258,130 @@ export function App() {
     [promoting, reloadDeployments],
   );
 
+  // Switch team → the server pins the choice in a cookie and the whole portal
+  // re-scopes on reload. Dev-preview just flips the local mock selection.
+  const switchTeam = useCallback(
+    async (teamId: string) => {
+      if (!me || needsOnboarding(me) || teamId === me.currentTeamId) return;
+      if (DEV_MOCK) {
+        setMe((m) => (m ? { ...m, currentTeamId: teamId as Me['currentTeamId'], tenant: teamId as Me['tenant'] } : m));
+        go('#/overview');
+        return;
+      }
+      try {
+        await api.switchTeam(teamId);
+        window.location.hash = '#/overview';
+        window.location.reload();
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Could not switch team', detail: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [me],
+  );
+
+  // Create a team → the server provisions it, links the owner, and switches to it,
+  // so the client reloads onto the new team. Dev-preview mutates the local mock.
+  const createTeam = useCallback(
+    async (name: string) => {
+      const teamName = name.trim();
+      if (!teamName || creatingTeam) return;
+      setCreatingTeam(true);
+      try {
+        if (DEV_MOCK) {
+          const id = `01J2Q8Z3V9K4W7X2M5N6P7T${Date.now().toString().slice(-3)}`;
+          setMe((m) => {
+            const base: Me = m && !needsOnboarding(m) ? m : { ...MOCK_ME, teams: [] };
+            const team = { id: id as Me['tenant'], name: teamName, slug: teamName.toLowerCase() };
+            return { ...base, teams: [...base.teams, team], currentTeamId: id as Me['currentTeamId'], tenant: id as Me['tenant'] };
+          });
+          setNewTeamOpen(false);
+          setNewTeamName('');
+          go('#/overview');
+          setToast({ status: 'success', title: `${teamName} created`, detail: 'You’re now in your new team.' });
+          return;
+        }
+        await api.createTeam(teamName);
+        window.location.reload();
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Could not create team', detail: e instanceof Error ? e.message : String(e) });
+      } finally {
+        setCreatingTeam(false);
+      }
+    },
+    [creatingTeam],
+  );
+
+  const reloadMembers = useCallback(async () => {
+    if (DEV_MOCK) return;
+    setMembers(await api.listMembers().catch(() => []));
+  }, []);
+
+  // Invite a member → returns a shareable accept link (Team shows it to copy). The
+  // roster refreshes so the pending invite appears. Dev-preview fakes both.
+  const inviteMember = useCallback(
+    async (email: string, roleKey: InviteRole): Promise<{ acceptUrl: string } | void> => {
+      if (DEV_MOCK) {
+        const id = String(Date.now());
+        setMembers((ms) => [
+          { id, principal: null, email, role_key: roleKey, status: 'invited', invitation_id: id, invited_by: 'you', invited_at: new Date().toISOString(), joined_at: null },
+          ...ms,
+        ]);
+        return { acceptUrl: `${window.location.origin}/invite/demo-${id}` };
+      }
+      const res = await api.inviteMember(email, roleKey);
+      await reloadMembers();
+      return res;
+    },
+    [reloadMembers],
+  );
+
+  const revokeInvite = useCallback(
+    async (invitationId: string) => {
+      try {
+        if (DEV_MOCK) setMembers((ms) => ms.filter((m) => m.invitation_id !== invitationId));
+        else {
+          await api.revokeInvite(invitationId);
+          await reloadMembers();
+        }
+        setToast({ status: 'success', title: 'Invite revoked' });
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Could not revoke invite', detail: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [reloadMembers],
+  );
+
+  const removeMember = useCallback(
+    async (memberId: string) => {
+      try {
+        if (DEV_MOCK) setMembers((ms) => ms.filter((m) => m.id !== memberId));
+        else {
+          await api.removeMember(memberId);
+          await reloadMembers();
+        }
+        setToast({ status: 'success', title: 'Member removed', detail: 'Their access is revoked.' });
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Could not remove member', detail: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [reloadMembers],
+  );
+
   const openApp = useMemo(() => (route.app ? apps.find((a) => a.app_scope_id === route.app) : undefined), [apps, route.app]);
 
-  // Session mode: checking → interstitial; signed out → sign-in.
+  // Session mode: checking → interstitial; signed out → sign-in; signed in but
+  // teamless → onboarding (name your first team).
   if (me === undefined) return <Interstitial />;
   if (me === null) {
     const failed = new URLSearchParams(window.location.search).get('error') === 'auth';
     return <SignIn error={failed} />;
   }
+  if (needsOnboarding(me)) {
+    return <Onboarding name={me.name} busy={creatingTeam} onCreate={(n) => void createTeam(n)} />;
+  }
 
-  const org = orgFrom(me.email);
+  const currentTeam = me.teams?.find((t) => t.id === me.currentTeamId);
+  const org = currentTeam?.name ?? orgFrom(me.email);
   const activeNav: NavKey = route.section === 'new' ? 'apps' : route.section;
 
   const crumbs: Crumb[] = [{ label: org, onClick: () => go('#/overview') }];
@@ -237,6 +397,10 @@ export function App() {
       active={activeNav}
       onNav={(k) => go(`#/${k}`)}
       org={org}
+      teams={me.teams ?? []}
+      currentTeamId={me.currentTeamId}
+      onSwitchTeam={(id) => void switchTeam(id)}
+      onNewTeam={() => { setNewTeamName(''); setNewTeamOpen(true); }}
       userEmail={me.email ?? 'you@substrat.run'}
       userName={me.name ?? me.email?.split('@')[0] ?? 'Account'}
       crumbs={crumbs}
@@ -262,7 +426,14 @@ export function App() {
       ) : route.section === 'deployments' ? (
         <Deployments deployments={deployments} onPromote={(slug, vid, ch) => void promoteDeployment(slug, vid, ch)} busy={promoting} />
       ) : route.section === 'team' ? (
-        <Team />
+        <Team
+          members={members}
+          meEmail={me.email ?? ''}
+          canManage={['owner', 'admin'].includes(members.find((m) => m.principal === me.principal)?.role_key ?? 'owner')}
+          onInvite={inviteMember}
+          onRevoke={(id) => void revokeInvite(id)}
+          onRemove={(id) => void removeMember(id)}
+        />
       ) : route.section === 'domains' ? (
         <Domains />
       ) : route.section === 'integrations' ? (
@@ -290,6 +461,20 @@ export function App() {
         />
       )}
       {notifs && <NotificationsPopover onClose={() => setNotifs(false)} onMarkRead={() => { setUnread(false); setNotifs(false); }} />}
+
+      <Dialog
+        open={newTeamOpen}
+        title="Create a team"
+        description="A team has its own apps, domains, and billing. You’ll be its owner."
+        confirmLabel={creatingTeam ? 'Creating…' : 'Create team'}
+        confirmDisabled={!newTeamName.trim() || creatingTeam}
+        onConfirm={() => void createTeam(newTeamName)}
+        onCancel={() => { setNewTeamOpen(false); setNewTeamName(''); }}
+      >
+        <div onKeyDown={(e) => { if (e.key === 'Enter' && newTeamName.trim()) void createTeam(newTeamName); }}>
+          <Input label="Team name" placeholder="Acme Inc" value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} />
+        </div>
+      </Dialog>
 
       {toast && (
         <div style={{ position: 'fixed', right: 24, top: 72, zIndex: 60 }}>

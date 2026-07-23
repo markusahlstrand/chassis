@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Ic, StrataGlyph, type IconName } from '../lib/icons';
 import { initials } from '../lib/format';
+import type { Team } from '../lib/api';
 
 export type NavKey =
   | 'overview'
@@ -79,6 +80,11 @@ export interface DashShellProps {
   active: NavKey;
   onNav: (k: NavKey) => void;
   org: string;
+  /** Every team the signed-in user belongs to — drives the sidebar switcher. */
+  teams: Team[];
+  currentTeamId: string;
+  onSwitchTeam: (teamId: string) => void;
+  onNewTeam: () => void;
   userEmail: string;
   userName: string;
   crumbs: Crumb[];
@@ -112,7 +118,7 @@ export function DashShell(props: DashShellProps) {
             <StrataGlyph size={18} />
             <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>substrat</span>
           </div>
-          <span style={{ fontSize: 12.5, color: 'var(--text-secondary)', paddingLeft: 26 }}>{props.org}</span>
+          <TeamSwitcher org={props.org} teams={props.teams} currentTeamId={props.currentTeamId} onSwitch={props.onSwitchTeam} onNewTeam={props.onNewTeam} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           {MAIN.map((it) => (
@@ -217,6 +223,128 @@ export function DashShell(props: DashShellProps) {
         <main style={{ flex: 1, overflow: 'auto' }}>{props.children}</main>
       </div>
     </div>
+  );
+}
+
+/**
+ * The team switcher under the wordmark. Shows the current team; the dropdown lists
+ * every team the user belongs to (one login can span several) and switches on click.
+ * A single-team user still gets the control — it is where "New team" will live.
+ */
+function TeamSwitcher({
+  org,
+  teams,
+  currentTeamId,
+  onSwitch,
+  onNewTeam,
+}: {
+  org: string;
+  teams: Team[];
+  currentTeamId: string;
+  onSwitch: (teamId: string) => void;
+  onNewTeam: () => void;
+}) {
+  // `?teams=1` opens it on load (a demo/screenshot aid, like `?menu=1`).
+  const [open, setOpen] = useState(() => new URLSearchParams(window.location.search).get('teams') === '1');
+  return (
+    <div style={{ position: 'relative', marginLeft: 26 }}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Switch team"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          maxWidth: '100%',
+          padding: '2px 6px',
+          margin: '0 -6px',
+          borderRadius: 6,
+          border: 0,
+          background: open ? 'var(--surface-hover)' : 'transparent',
+          color: 'var(--text-secondary)',
+          fontSize: 12.5,
+          cursor: 'pointer',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{org}</span>
+        <span style={{ display: 'inline-flex', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}>
+          <Ic name="chevronDown" size={11} color="var(--text-tertiary)" />
+        </span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div
+            role="menu"
+            style={{
+              position: 'absolute',
+              top: 28,
+              left: -6,
+              zIndex: 41,
+              width: 224,
+              background: 'var(--surface-card)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 10,
+              boxShadow: 'var(--shadow-popover)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: '8px 12px 4px', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+              Teams
+            </div>
+            {teams.map((t) => (
+              <TeamRow key={t.id} team={t} active={t.id === currentTeamId} onClick={() => { setOpen(false); onSwitch(t.id); }} />
+            ))}
+            <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0' }} />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setOpen(false); onNewTeam(); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', height: 36, padding: '0 12px', border: 0, background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, cursor: 'pointer', textAlign: 'left' }}
+            >
+              <span style={{ display: 'inline-flex', width: 22, justifyContent: 'center', color: 'var(--text-tertiary)' }}>
+                <Ic name="plus" size={15} />
+              </span>
+              New team
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TeamRow({ team, active, onClick }: { team: Team; active: boolean; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        width: '100%',
+        height: 38,
+        padding: '0 12px',
+        border: 0,
+        background: hover ? 'var(--surface-hover)' : 'transparent',
+        color: 'var(--text-primary)',
+        fontSize: 13,
+        cursor: 'pointer',
+        textAlign: 'left',
+      }}
+    >
+      <Avatar seed={team.name} tone="brand" size={22} />
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{team.name}</span>
+      {active && <Ic name="check" size={15} color="var(--text-brand)" />}
+    </button>
   );
 }
 
