@@ -742,6 +742,50 @@ export function scopeHostContractSuite(
       expect(scope?.vertical).toBe('callout');
     });
 
+    it('records the owning tenant and fixes it at first push (claim-on-first-push)', async () => {
+      // builder-plane.md Phase 1b: a vertical is owned by a TENANT (null = platform).
+      // 'callout' above was registered platform-owned; a builder-pushed one carries
+      // its pushing tenant, and that ownership is queryable off the registry row.
+      // (The <tenant>/<name> slug prefix that keeps builder slugs globally unique is
+      // constructed at push time in a later phase; ownership is the column here.)
+      await host.admin.registerVertical(staff, {
+        slug: 'helpdesk',
+        name: 'Helpdesk',
+        source: 'cli',
+        ownerTenant: t2,
+      });
+      const listed = await host.admin.listVerticals(staff);
+      expect(listed.find((v) => v.slug === 'callout')?.ownerTenant).toBeNull();
+      expect(listed.find((v) => v.slug === 'helpdesk')?.ownerTenant).toBe(t2);
+
+      // Idempotent when nothing changed — same push, same owner.
+      await host.admin.registerVertical(staff, {
+        slug: 'helpdesk',
+        name: 'Helpdesk',
+        source: 'cli',
+        ownerTenant: t2,
+      });
+
+      // A slug's owner is fixed at first push: a different owner (or claiming a
+      // platform vertical) is refused, naming both owners.
+      await expect(
+        host.admin.registerVertical(staff, {
+          slug: 'helpdesk',
+          name: 'Helpdesk',
+          source: 'cli',
+          ownerTenant: t1,
+        }),
+      ).rejects.toThrow(/owned by/);
+      await expect(
+        host.admin.registerVertical(staff, {
+          slug: 'callout',
+          name: 'Callout',
+          source: 'builtin',
+          ownerTenant: t2,
+        }),
+      ).rejects.toThrow(/owned by the platform/);
+    });
+
     it('refuses to bind a rejected version, and rejection is terminal', async () => {
       const versionId = ulid();
       await host.admin.publishVersion(staff, {

@@ -106,6 +106,7 @@ export interface VerticalRow {
   slug: string;
   name: string;
   source: string;
+  owner_tenant: string | null;
   created_at: string;
 }
 
@@ -240,10 +241,11 @@ const DIRECTORY_DDL = `
   );
   CREATE INDEX IF NOT EXISTS hostnames_scope ON hostnames (scope_id, surface);
   CREATE TABLE IF NOT EXISTS verticals (
-    slug       TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    source     TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    slug         TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    owner_tenant TEXT,
+    created_at   TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS vertical_versions (
     id                TEXT PRIMARY KEY,
@@ -510,6 +512,8 @@ export class ControlPlaneDO extends DurableObject {
     // K-21's tombstone on tenant-level tuples (membership lives here).
     this.addColumn('_substrat_tenant_tuples', 'revoked_at TEXT');
     this.addColumn('_substrat_admin_log', 'caused_by TEXT');
+    // builder-plane.md: which tenant owns a vertical (NULL = platform-owned).
+    this.addColumn('verticals', 'owner_tenant TEXT');
     this.sql.exec("UPDATE scopes SET slug = lower(scope_id) WHERE slug IS NULL");
     this.sql.exec("UPDATE scopes SET kind = 'scope' WHERE kind IS NULL");
     this.sql.exec('UPDATE scopes SET name = slug WHERE name IS NULL');
@@ -939,10 +943,10 @@ export class ControlPlaneDO extends DurableObject {
       .toArray()[0] as unknown as VerticalRow | undefined;
   }
 
-  insertVertical(slug: string, name: string, source: string, createdAt: string): void {
+  insertVertical(slug: string, name: string, source: string, ownerTenant: string | null, createdAt: string): void {
     this.sql.exec(
-      'INSERT INTO verticals (slug, name, source, created_at) VALUES (?, ?, ?, ?)',
-      slug, name, source, createdAt,
+      'INSERT INTO verticals (slug, name, source, owner_tenant, created_at) VALUES (?, ?, ?, ?, ?)',
+      slug, name, source, ownerTenant, createdAt,
     );
   }
 

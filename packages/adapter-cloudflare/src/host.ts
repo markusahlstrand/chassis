@@ -226,7 +226,7 @@ interface ControlPlaneStub {
   setHostnameStatus(hostname: string, status: string, note: string | null): Promise<void>;
   listHostnames(filter: { tenantId?: string; scopeId?: string }): Promise<HostnameRow[]>;
   readVertical(slug: string): Promise<VerticalRow | undefined>;
-  insertVertical(slug: string, name: string, source: string, createdAt: string): Promise<void>;
+  insertVertical(slug: string, name: string, source: string, ownerTenant: string | null, createdAt: string): Promise<void>;
   listVerticals(): Promise<VerticalRow[]>;
   readVersion(id: string): Promise<VersionRow | undefined>;
   insertVersion(v: {
@@ -922,7 +922,7 @@ export class CloudflareScopeHost implements ScopeHost {
       });
 
     const mapVertical = (r: VerticalRow): Vertical =>
-      verticalSchema.parse({ slug: r.slug, name: r.name, source: r.source, createdAt: r.created_at });
+      verticalSchema.parse({ slug: r.slug, name: r.name, source: r.source, ownerTenant: r.owner_tenant, createdAt: r.created_at });
     const mapVersion = (r: VersionRow): VerticalVersion =>
       verticalVersion.parse({
         id: r.id,
@@ -1249,10 +1249,22 @@ export class CloudflareScopeHost implements ScopeHost {
         const parsed = registerVerticalInput.parse(input);
         const existing = await this.cp.readVertical(parsed.slug);
         if (existing) {
-          if (existing.source === parsed.source && existing.name === parsed.name) return;
+          // Idempotent on an identical registration; a changed source OR owner conflicts —
+          // claim-on-first-push (builder-plane.md): a slug's owner is fixed at first push.
+          if (
+            existing.source === parsed.source &&
+            existing.name === parsed.name &&
+            existing.owner_tenant === parsed.ownerTenant
+          )
+            return;
+          if (existing.owner_tenant !== parsed.ownerTenant) {
+            throw new Error(
+              `vertical '${parsed.slug}' is owned by ${existing.owner_tenant ?? 'the platform'}, not ${parsed.ownerTenant ?? 'the platform'}`,
+            );
+          }
           throw new Error(`vertical '${parsed.slug}' is already registered as ${existing.source}`);
         }
-        await this.cp.insertVertical(parsed.slug, parsed.name, parsed.source, new Date().toISOString());
+        await this.cp.insertVertical(parsed.slug, parsed.name, parsed.source, parsed.ownerTenant, new Date().toISOString());
         await this.recordAdmin(actor, 'registerVertical', { tenantId: null }, null, parsed);
       },
       listVerticals: async (actor) => {

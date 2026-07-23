@@ -346,6 +346,7 @@ interface VerticalRow {
   slug: string;
   name: string;
   source: string;
+  owner_tenant: string | null;
   created_at: string;
 }
 
@@ -519,10 +520,13 @@ export class SqliteScopeHost implements ScopeHost {
       -- dev/staging/prod are the same vertical pinned differently, and a preview
       -- deployment is a version nothing has been promoted to yet.
       CREATE TABLE IF NOT EXISTS verticals (
-        slug       TEXT PRIMARY KEY,
-        name       TEXT NOT NULL,
-        source     TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        slug         TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        -- The tenant that OWNS this vertical (builder-plane.md). NULL = platform-owned.
+        -- Denormalized nullable column so ownership is queryable without parsing slugs.
+        owner_tenant TEXT,
+        created_at   TEXT NOT NULL
       );
       -- admission: 'pending' until the gates pass. A push is not a deploy, and
       -- bind_scope_version refuses anything not admitted -- which is what makes
@@ -1528,6 +1532,7 @@ export class SqliteScopeHost implements ScopeHost {
         slug: r.slug,
         name: r.name,
         source: r.source,
+        ownerTenant: r.owner_tenant,
         createdAt: r.created_at,
       });
     const readVertical = (slugValue: string): Vertical | undefined => {
@@ -2002,15 +2007,28 @@ export class SqliteScopeHost implements ScopeHost {
         if (existing) {
           // Idempotent on an identical registration. A conflicting one throws:
           // changing a vertical's source silently rebinds what every scope on it
-          // is understood to be running.
-          if (existing.source === parsed.source && existing.name === parsed.name) return;
+          // is understood to be running. A changed owner is the sharper form of that —
+          // claim-on-first-push (builder-plane.md) fixes a slug's owner at first push.
+          if (
+            existing.source === parsed.source &&
+            existing.name === parsed.name &&
+            existing.ownerTenant === parsed.ownerTenant
+          )
+            return;
+          if (existing.ownerTenant !== parsed.ownerTenant) {
+            throw new Error(
+              `vertical '${parsed.slug}' is owned by ${existing.ownerTenant ?? 'the platform'}, not ${parsed.ownerTenant ?? 'the platform'}`,
+            );
+          }
           throw new Error(
             `vertical '${parsed.slug}' is already registered as ${existing.source}`,
           );
         }
         this.directory
-          .prepare('INSERT INTO verticals (slug, name, source, created_at) VALUES (?, ?, ?, ?)')
-          .run(parsed.slug, parsed.name, parsed.source, new Date().toISOString());
+          .prepare(
+            'INSERT INTO verticals (slug, name, source, owner_tenant, created_at) VALUES (?, ?, ?, ?, ?)',
+          )
+          .run(parsed.slug, parsed.name, parsed.source, parsed.ownerTenant, new Date().toISOString());
         this.recordAdmin(actor, 'registerVertical', { tenantId: null }, null, parsed);
       },
       listVerticals: async (actor) => {
@@ -2961,6 +2979,8 @@ export class SqliteScopeHost implements ScopeHost {
     this.ensureColumn(this.directory, '_substrat_admin_log', 'caused_by', 'caused_by TEXT');
     // K-21's tombstone on tenant-level tuples (membership lives here).
     this.ensureColumn(this.directory, '_substrat_tenant_tuples', 'revoked_at', 'revoked_at TEXT');
+    // builder-plane.md Phase 1b: who owns a vertical (NULL = platform-owned).
+    this.ensureColumn(this.directory, 'verticals', 'owner_tenant', 'owner_tenant TEXT');
     const existing = new Set(
       (this.directory.prepare('PRAGMA table_info(scopes)').all() as { name: string }[]).map(
         (c) => c.name,
