@@ -77,6 +77,7 @@ export const api = {
   listApps: () => call<AppRow[]>('/apps'),
   createApp: (input: { verticalSlug: string; name: string }) =>
     call<AppRow>('/apps', { method: 'POST', body: JSON.stringify(input) }),
+  deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
 /** Auth is a full-page redirect — the OIDC round-trip needs a real navigation. */

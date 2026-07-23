@@ -114,6 +114,15 @@ export class TenantNarrowedControlPlane {
     return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/activate`);
   }
 
+  /**
+   * Take a scope offline — suspend fails its `getScope` closed for every request (the
+   * control plane's live weapon, control-plane.md §7). Reversible and audit-preserving,
+   * so it is how a deleted app is deprovisioned without erasing the record.
+   */
+  suspendScope(scopeId: ScopeId): Promise<void> {
+    return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/suspend`);
+  }
+
   /** Bind the default hostname so the router (reading this directory) can resolve it. */
   bindHostname(input: { hostname: string; scopeId: ScopeId; surface: string; canonical: boolean }): Promise<void> {
     return this.post('/hostnames', { tenantId: this.tenantId, region: null, ...input });

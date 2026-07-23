@@ -139,6 +139,23 @@ export function App() {
     [reloadApps],
   );
 
+  const deleteApp = useCallback(
+    async (app: AppRow) => {
+      try {
+        if (DEV_MOCK) setApps((a) => a.filter((x) => x.id !== app.id));
+        else {
+          await api.deleteApp(app.id);
+          await reloadApps();
+        }
+        go('#/apps');
+        setToast({ status: 'success', title: `${app.name} deleted`, detail: 'Its hostname is offline; audit history is retained.' });
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Delete failed', detail: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [reloadApps],
+  );
+
   const openApp = useMemo(() => (route.app ? apps.find((a) => a.app_scope_id === route.app) : undefined), [apps, route.app]);
 
   // Session mode: checking → interstitial; signed out → sign-in.
@@ -180,7 +197,7 @@ export function App() {
           app={openApp}
           tab={route.tab ?? 'overview'}
           onTab={(t) => go(`#/apps/${openApp.app_scope_id}/${t}`)}
-          onDeleted={() => { go('#/apps'); setToast({ status: 'success', title: `${openApp.name} deleted`, detail: 'Data is archived for 30 days.' }); }}
+          onDeleted={() => void deleteApp(openApp)}
         />
       ) : route.section === 'apps' && route.app ? (
         <NotFound label="That app could not be found." onBack={() => go('#/apps')} />

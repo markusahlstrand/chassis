@@ -13,6 +13,7 @@ import {
   MODULES,
   provisionDashboard,
   createApp,
+  deprovisionApp,
   type DashboardAppRow,
   type DashboardNode,
 } from '../src/index.js';
@@ -93,6 +94,29 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     const apps = await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {});
     expect(apps.map((a) => a.app_scope_id)).toEqual([appScopeId]);
     expect(apps[0]!.status).toBe('active');
+  });
+
+  it('deleting an app deprovisions its scope and drops it from the list (record retained)', async () => {
+    const acme = await bootstrap('acme-del');
+    const appScopeId = scopeId.parse(ulid());
+    const app = await createApp(host, {
+      node: acme,
+      appScopeId,
+      verticalSlug: 'protocol',
+      name: 'Temp',
+      appEntitlements: ['protocol'],
+      appOwnerGrants: [PROTOCOL_PERM.read] as PermissionKey[],
+    });
+    expect(app.status).toBe('active');
+
+    await deprovisionApp(host, { node: acme, appScopeId, hostname: app.hostname });
+
+    // Dropped from the account's app list (soft-deleted)...
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    expect(await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {})).toHaveLength(0);
+
+    // ...and the scope is SUSPENDED — getScope fails closed, so the app is offline.
+    await expect(host.getScope(acme.principal, acme.tenantId, appScopeId)).rejects.toThrow();
   });
 
   it('an owner provisions a real Callout app — a live multi-engine scope with a default hostname', async () => {

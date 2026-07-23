@@ -145,6 +145,37 @@ export async function createApp(
 type CreateAppInput = Parameters<typeof createApp>[1];
 
 /**
+ * Delete an app: authorize + soft-delete the account's record, then take its scope
+ * offline (the mirror of createApp). Suspend — not destroy — so it is reversible and
+ * the audit history is retained; the hostname goes to `failed` so the router stops
+ * resolving it. Connected: on the shared plane, tenant-narrowed. Embedded: this host.
+ */
+export async function deprovisionApp(
+  host: ScopeHost,
+  input: {
+    node: DashboardNode;
+    appScopeId: ScopeId;
+    hostname: string | null;
+    controlPlane?: TenantNarrowedControlPlane;
+  },
+): Promise<void> {
+  // 1. Authorize + record, in the caller's own dashboard scope — the "can they?" half,
+  //    exactly as createApp does, before any platform effect.
+  const scope = await host.getScope(input.node.principal, input.node.tenantId, input.node.scopeId);
+  await scope.invoke('dashboard/delete-app', { appScopeId: input.appScopeId });
+
+  // 2. Take the app scope offline in the caller's own tenant (ambient, never a request arg).
+  if (input.controlPlane) {
+    await input.controlPlane.suspendScope(input.appScopeId);
+    if (input.hostname) await input.controlPlane.setHostnameStatus(input.hostname, 'failed', 'app deleted');
+  } else {
+    const staff = platformActorId.parse(ulid());
+    await host.admin.suspendScope(staff, input.node.tenantId, input.appScopeId);
+    if (input.hostname) await host.admin.setHostnameStatus(staff, input.hostname, 'failed');
+  }
+}
+
+/**
  * CONNECTED mode: provision through the shared control plane, tenant-narrowed —
  * the production path (dashboard.md §6). Mirrors the operator console's proven
  * create-instance sequence (apps/console/src/lib/create-instance.ts): a directory
