@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@substrat-run/adapter-cloudflare": "workspace:^",
+    "@substrat-run/adapter-email": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/demo-callout": "workspace:^",
     "@substrat-run/engine-invites": "workspace:^",

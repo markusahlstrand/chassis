@@ -29,6 +29,8 @@ import { dashboardModule, type DashboardAppRow } from './module.js';
 import { createApp, deprovisionApp, provisionDashboard, type DashboardNode } from './provision.js';
 import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
+import { transportFor, senderFor, teamInviteEmail } from './email.js';
+import type { SendEmailBinding } from '@substrat-run/adapter-email';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
 const PROVIDER = 'authhero';
@@ -111,6 +113,14 @@ interface Env extends OidcEnv {
   CP_SERVICE_TOKEN?: string;
   /** The platform actor id stamped on shared-plane writes (a fixed dashboard actor). */
   CP_ACTOR?: string;
+  /**
+   * Cloudflare Email Service `send_email` binding — invite + transactional mail.
+   * Absent ⇒ the in-memory mock (local dev has no sending domain), so an invite
+   * still succeeds; only the email is dropped.
+   */
+  EMAIL?: SendEmailBinding;
+  /** Sender address for platform mail (default `no-reply@send.substrat.net`); domain must be onboarded. */
+  EMAIL_FROM?: string;
 }
 
 const DASHBOARD_CP_ACTOR = platformActorId.parse('01JZ000000000000000000DASH');
@@ -427,9 +437,16 @@ app.get('/api/members', async (c) => {
 
 /**
  * Invite a member to the current team at a role. The in-scope op enforces the §5.1
- * bound (invite only at a role you already hold) and composes the invites engine.
- * Returns a shareable accept link — email delivery is a later connector, so for now
- * the inviter passes the link along.
+ * bound (invite only at a role you already hold) and composes the invites engine,
+ * then we email the invitee an accept link.
+ *
+ * The email is sent HERE, host-side, because this is the only place the raw address
+ * exists: the invites engine hashes the identifier and the `invites.sent` event
+ * carries only the hash (piiClass 'none'), so no outbox executor could recover an
+ * address to send to. Delivery is best-effort — the invitation is already committed,
+ * so a send failure is reported (`emailDelivered: false`) rather than rolling back a
+ * recorded invite; the returned `acceptUrl` lets the inviter share the link manually
+ * and is what a resend would use.
  */
 const inviteMemberBody = z.object({
   email: z.string().trim().min(1),
@@ -437,6 +454,8 @@ const inviteMemberBody = z.object({
 });
 app.post('/api/members/invite', async (c) => {
   const host = hostFor(c.env);
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) throw new HTTPException(401, { message: 'unauthorized' });
   const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
   if (!node) throw new HTTPException(401, { message: 'unauthorized' });
   const body = inviteMemberBody.parse(await c.req.json());
@@ -447,7 +466,27 @@ app.post('/api/members/invite', async (c) => {
     scopeId: node.scopeId,
     invitationId,
   });
-  return c.json({ invitationId, acceptUrl: `${new URL(c.req.url).origin}/invite/${token}` }, 201);
+  const acceptUrl = `${new URL(c.req.url).origin}/invite/${token}`;
+
+  const team = await host.admin.getTenant(STAFF, node.tenantId);
+  let emailDelivered = false;
+  try {
+    const result = await transportFor(c.env).send(
+      teamInviteEmail({
+        to: body.email,
+        from: senderFor(c.env),
+        teamName: team?.name ?? 'your team',
+        inviterName: user.name,
+        acceptUrl,
+      }),
+    );
+    emailDelivered = result.delivered.length > 0;
+  } catch (err) {
+    // A committed invite with a failed email is recoverable (resend); a thrown 500
+    // that hides the invitationId is not. Log and report, don't fail the request.
+    console.error('invite email send failed:', err instanceof Error ? err.message : err);
+  }
+  return c.json({ invitationId, acceptUrl, emailDelivered }, 201);
 });
 
 /** Withdraw a pending invite from the current team. */
