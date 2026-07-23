@@ -587,6 +587,32 @@ app.post('/api/members/remove', async (c) => {
 });
 
 /**
+ * Preview an invite for the accept screen + login prefill. UNAUTHENTICATED on purpose:
+ * the signed token is the authority (the link was mailed to the invitee), and this
+ * reveals only that invite's own team name + address — access itself still requires the
+ * verified-email hash at accept-time. Used before sign-in to prefill `login_hint`, so a
+ * first-time invitee signs up with the right email and lands in the team, not onboarding.
+ */
+app.get('/api/invites/preview', async (c) => {
+  const token = c.req.query('token');
+  if (!token) throw new HTTPException(400, { message: 'missing token' });
+  const claim = await verifyInviteToken(c.env, token);
+  if (!claim) throw new HTTPException(404, { message: 'this invite link is invalid or has expired' });
+  const t = tenantId.parse(claim.tenantId);
+  const s = scopeId.parse(claim.scopeId);
+  const host = hostFor(c.env);
+  // Mint an ephemeral principal to reach the scope — the op does no permission check
+  // (same pattern as accept-invite), so no role is needed to read the invite's own data.
+  const scope = await host.getScope(principalId.parse(ulid()), t, s);
+  const preview = (await scope.invoke('dashboard/preview-invite', { invitationId: claim.invitationId })) as
+    | { email: string; roleKey: string }
+    | null;
+  if (!preview) throw new HTTPException(404, { message: 'this invite link is invalid or has expired' });
+  const team = await host.admin.getTenant(STAFF, t);
+  return c.json({ teamName: team?.name ?? 'a team', email: preview.email, roleKey: preview.roleKey });
+});
+
+/**
  * Accept an invitation. The recipient is logged in (verified email), presents the
  * signed token. We mint their principal, accept in-scope (the engine re-hashes their
  * email — the real gate), then effect access: assign the invited role at the tenant

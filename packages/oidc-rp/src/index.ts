@@ -107,7 +107,7 @@ const redirectUri = (env: OidcEnv, origin: string): string =>
 export async function beginLogin(
   env: OidcEnv,
   origin: string,
-  opts: { returnTo?: string } = {},
+  opts: { returnTo?: string; loginHint?: string; screenHint?: string } = {},
 ): Promise<{ location: string; flow: string }> {
   const d = await discover(env.OIDC_ISSUER);
   const verifier = randomB64url(32);
@@ -132,6 +132,11 @@ export async function beginLogin(
   u.searchParams.set('nonce', nonce);
   u.searchParams.set('code_challenge', await pkceChallenge(verifier));
   u.searchParams.set('code_challenge_method', 'S256');
+  // Optional UX hints (both AuthHero/Auth0-standard, ignored by IdPs that don't
+  // support them): `login_hint` prefills the email field (e.g. from an invite), and
+  // `screen_hint=signup` opens the sign-up view for a first-time invitee.
+  if (opts.loginHint) u.searchParams.set('login_hint', opts.loginHint);
+  if (opts.screenHint) u.searchParams.set('screen_hint', opts.screenHint);
   return { location: u.toString(), flow };
 }
 
@@ -322,7 +327,14 @@ export function mountOidcRoutes<B extends OidcEnv>(app: Hono<{ Bindings: B }>, o
 
   app.get('/api/auth/login', async (c) => {
     const origin = new URL(c.req.url).origin;
-    const { location, flow } = await beginLogin(c.env, origin, { returnTo: safePath(c.req.query('returnTo')) });
+    // `screen_hint` is allowlisted (only the two IdP-recognised values); `login_hint`
+    // is passed through — the authorize URL builder encodes it, and the IdP validates it.
+    const screen = c.req.query('screen_hint');
+    const { location, flow } = await beginLogin(c.env, origin, {
+      returnTo: safePath(c.req.query('returnTo')),
+      loginHint: c.req.query('login_hint') || undefined,
+      screenHint: screen === 'signup' || screen === 'login' ? screen : undefined,
+    });
     setCookie(c, FLOW_COOKIE, flow, cookieOpts(origin, FLOW_MAXAGE));
     return c.redirect(location);
   });

@@ -167,6 +167,11 @@ export const api = {
   /** Remove an active member (revokes their role). The owner cannot be removed. */
   removeMember: (memberId: string) =>
     call<void>('/members/remove', { method: 'POST', body: JSON.stringify({ memberId }) }),
+  /** Preview an invite (unauthenticated): the team + invited email, for prefill + the accept screen. */
+  previewInvite: (token: string) =>
+    call<{ teamName: string; email: string; roleKey: InviteRole }>(
+      `/invites/preview?token=${encodeURIComponent(token)}`,
+    ),
   /** Accept an invite token; the server switches to the team, so the caller reloads after. */
   acceptInvite: (token: string) =>
     call<{ teamId: string; already?: boolean }>('/invites/accept', {
@@ -185,9 +190,20 @@ export const api = {
     }),
 };
 
-/** Auth is a full-page redirect — the OIDC round-trip needs a real navigation. */
-export const signIn = () => {
-  window.location.href = '/api/auth/login';
+/**
+ * Auth is a full-page redirect — the OIDC round-trip needs a real navigation.
+ * `returnTo` is a same-origin path the callback returns to (e.g. an invite link);
+ * `loginHint` prefills the email at the IdP; `screenHint` opens sign-up vs log-in.
+ */
+export const signIn = (
+  opts: { returnTo?: string; loginHint?: string; screenHint?: 'signup' | 'login' } = {},
+) => {
+  const p = new URLSearchParams();
+  if (opts.returnTo) p.set('returnTo', opts.returnTo);
+  if (opts.loginHint) p.set('login_hint', opts.loginHint);
+  if (opts.screenHint) p.set('screen_hint', opts.screenHint);
+  const qs = p.toString();
+  window.location.href = `/api/auth/login${qs ? `?${qs}` : ''}`;
 };
 export const signOut = () => {
   window.location.href = '/api/auth/logout';
