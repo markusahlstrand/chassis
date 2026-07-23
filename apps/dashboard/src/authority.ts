@@ -116,11 +116,19 @@ export class TenantNarrowedControlPlane {
 
   /**
    * Take a scope offline — suspend fails its `getScope` closed for every request (the
-   * control plane's live weapon, control-plane.md §7). Reversible and audit-preserving,
-   * so it is how a deleted app is deprovisioned without erasing the record.
+   * control plane's live weapon, control-plane.md §7). Reversible and audit-preserving.
    */
   suspendScope(scopeId: ScopeId): Promise<void> {
     return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/suspend`);
+  }
+
+  /**
+   * Archive a scope — the terminal state for a DELETED app: offline (getScope fails
+   * closed) and, unlike suspend, it releases the scope's slug so the name can be reused.
+   * The record is retained (audit history), archived not erased.
+   */
+  archiveScope(scopeId: ScopeId): Promise<void> {
+    return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/archive`);
   }
 
   /** Bind the default hostname so the router (reading this directory) can resolve it. */

@@ -1185,9 +1185,11 @@ export class CloudflareScopeHost implements ScopeHost {
           throw new Error(`unknown scope ${parsed.scopeId} in tenant ${parsed.tenantId}`);
         }
         const existing = await this.cp.readHostname(parsed.hostname);
-        if (existing && existing.scope_id !== parsed.scopeId) {
+        const holderArchived = (existing as { scope_status?: string } | undefined)?.scope_status === 'archived';
+        if (existing && existing.scope_id !== parsed.scopeId && !holderArchived) {
           // A hostname routes to exactly one place; silently rebinding would move
-          // another tenant's traffic.
+          // another tenant's traffic. Exception: the holder is ARCHIVED (a deleted app) —
+          // it has released the name, so the rebind reclaims it.
           throw new Error(`hostname '${parsed.hostname}' is already bound to another scope`);
         }
         // Exactly one canonical per (scope, surface).
@@ -1491,7 +1493,9 @@ export class CloudflareScopeHost implements ScopeHost {
       unsuspendScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unsuspendScope', tenantId, scopeId, ['suspended'], 'active'),
       archiveScope: async (actor, tenantId, scopeId) =>
-        transitionScope(actor, 'archiveScope', tenantId, scopeId, ['active', 'suspended'], 'archived'),
+        // Also from `provisioning`: a scope whose provisioning never completed (a failed
+        // create) must be abandonable, or its slug is stranded forever.
+        transitionScope(actor, 'archiveScope', tenantId, scopeId, ['provisioning', 'active', 'suspended'], 'archived'),
       unarchiveScope: async (actor, tenantId, scopeId) =>
         transitionScope(actor, 'unarchiveScope', tenantId, scopeId, ['archived'], 'active'),
       grantEntitlement: async (actor, tenantId, entitlementKey) => {

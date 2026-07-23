@@ -115,8 +115,22 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
     expect(await dash.invoke<DashboardAppRow[]>('dashboard/list-apps', {})).toHaveLength(0);
 
-    // ...and the scope is SUSPENDED — getScope fails closed, so the app is offline.
+    // ...and the scope is ARCHIVED — getScope fails closed, so the app is offline.
     await expect(host.getScope(acme.principal, acme.tenantId, appScopeId)).rejects.toThrow();
+
+    // ...and the slug is RECLAIMED: a new app can take the same name (the deleted
+    // scope no longer holds it). Provisioning a fresh scope with slug 'temp' succeeds.
+    const reScopeId = scopeId.parse(ulid());
+    const reApp = await createApp(host, {
+      node: acme,
+      appScopeId: reScopeId,
+      verticalSlug: 'protocol',
+      name: 'Temp',
+      appEntitlements: ['protocol'],
+      appOwnerGrants: [PROTOCOL_PERM.read] as PermissionKey[],
+    });
+    expect(reApp.status).toBe('active');
+    expect(reApp.hostname).toBe('temp.global.substrat.run');
   });
 
   it('an owner provisions a real Callout app — a live multi-engine scope with a default hostname', async () => {
