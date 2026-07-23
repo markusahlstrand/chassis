@@ -14,6 +14,8 @@
     "src/auth.ts",
     "src/auth-schema.ts",
     "src/auth-adapters.ts",
+    "src/auth-provider.ts",
+    "src/auth-do.ts",
     "src/assets.ts",
     "src/assets.generated.ts"
   ]

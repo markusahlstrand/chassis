@@ -25,19 +25,20 @@ import {
   RouterAssertionError,
 } from '@substrat-run/kernel';
 import { MODULES, ROLES } from './provision.js';
-import { buildAuth } from './auth.js';
 import { serveAsset } from './assets.js';
 import {
-  betterAuthAdapter,
   devHeaderAdapter,
   resolvePrincipal,
   type AuthAdapter,
   type CompanyNode,
-  type IdentityDirectory,
 } from './auth-adapters.js';
+import { AuthDO, doAuthProvider } from './auth-do.js';
+import type { AuthProvider } from './auth-provider.js';
 
 /** The scope-DO class = the app binary: kernel + protocol + Meridian, bundled. */
 export const ScopeDO = defineScopeDO(MODULES, {});
+/** The per-tenant auth DO — Better Auth over its own SQLite, behind the AuthProvider contract. */
+export { AuthDO };
 
 // A fixed dev node (valid ULIDs). Behind the router the node comes from the resolved
 // hostname; this is ONLY the fallback for local `wrangler dev`, where there is no router
@@ -48,11 +49,12 @@ const DEV_NODE: CompanyNode = {
 };
 
 interface Env {
-  // A sandbox-clean vertical (scope-local-permissions.md Phase 3): its ONLY durable
-  // stores are its own SCOPE DO class + AUTH_DB. No CONTROL_PLANE binding, no service
-  // binding to a platform worker — assertSandboxContract refuses those.
+  // A sandbox-clean vertical (scope-local-permissions.md Phase 3): its ONLY durable stores
+  // are its OWN DO classes — SCOPE (business data, per scope) and AUTH (identity, per
+  // tenant). No shared D1 `AUTH_DB`, no CONTROL_PLANE binding, no service binding — all
+  // refused by assertSandboxContract. AUTH being an OWN class is what keeps it legal.
   SCOPE: DurableObjectNamespace;
-  AUTH_DB: D1Database;
+  AUTH: DurableObjectNamespace;
   /** The built SPA is inlined into the worker (src/assets.ts) — no ASSETS binding here. */
   BETTER_AUTH_SECRET?: string;
   BASE_URL?: string;
@@ -98,35 +100,24 @@ function hostFor(env: Env): CloudflareScopeHost {
 const originOf = (req: Request): string => new URL(req.url).origin;
 
 /**
- * The CP-less identity directory: with no control plane to bind identities into, the
- * vertical's OWN Better Auth store IS the id→principal map. The `principal_id` column on
- * the `user` row (migrations/0002) holds the binding — set by /internal/link when a
- * provisioned instance's owner is made usable, read on every login after.
+ * The `AuthProvider` for this request — the tenant's own `AuthDO` (Better Auth over its
+ * own DO SQLite), addressed by tenant id, behind the contract. The worker never imports
+ * Better Auth on the request path; it holds a stub and talks `handle` / `resolve`.
  */
-function d1IdentityDirectory(db: D1Database): IdentityDirectory {
-  return {
-    async resolve(externalId) {
-      const row = (await db
-        .prepare('SELECT principal_id FROM user WHERE id = ?')
-        .bind(externalId)
-        .first()) as { principal_id: string | null } | null;
-      return row?.principal_id ? principalId.parse(row.principal_id) : null;
-    },
-    async bind(externalId, principal) {
-      await db.prepare('UPDATE user SET principal_id = ? WHERE id = ?').bind(principal, externalId).run();
-    },
-  };
+function authProviderFor(env: Env, req: Request): AuthProvider {
+  const node = nodeFor(req, env);
+  const id = env.AUTH.idFromName(node.tenantId);
+  return doAuthProvider(env.AUTH.get(id), originOf(req));
 }
 
 /**
- * The mounted auth seam: Better Auth (a D1 session cookie), resolved through the CP-less
- * directory. The kernel only ever receives the resolved `PrincipalId`. The `x-principal`
- * dev-header is an impersonation bypass, mounted ONLY when ALLOW_DEV_HEADER=true.
+ * The op-invocation auth seam. SPIKE scope: the dev-header (local) resolves a principal
+ * for `/api/invoke`. Mapping a real AuthDO subject → principal (owner-linking) is the next
+ * step and is deliberately out of this spike — the spike proves the AuthDO + contract, via
+ * the `/api/auth/*` flow and `/api/session`.
  */
-function adaptersFor(env: Env, req: Request): AuthAdapter[] {
-  const adapters: AuthAdapter[] = [
-    betterAuthAdapter(buildAuth(env, originOf(req)), d1IdentityDirectory(env.AUTH_DB)),
-  ];
+function adaptersFor(env: Env): AuthAdapter[] {
+  const adapters: AuthAdapter[] = [];
   if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter());
   return adapters;
 }
@@ -139,16 +130,14 @@ const provisionInstanceBody = z.object({
   name: z.string().min(1),
 });
 
-const linkBody = z.object({
-  /** The Better Auth user id (from sign-up) to bind to `principal`. */
-  externalId: z.string().min(1),
-  principal: principalId,
-});
-
 const app = new Hono<{ Bindings: Env }>();
 
-// Better Auth owns identity/credentials/sessions in D1, mounted under /api/auth/*.
-app.on(['GET', 'POST'], '/api/auth/*', (c) => buildAuth(c.env, originOf(c.req.raw)).handler(c.req.raw));
+// Identity/credentials/sessions live in the tenant's own AuthDO — the worker just forwards
+// the /api/auth/* surface to it through the AuthProvider contract (it never runs Better Auth).
+app.on(['GET', 'POST'], '/api/auth/*', (c) => authProviderFor(c.env, c.req.raw).handle(c.req.raw));
+
+/** The verified subject behind the current session, or null — the contract's `resolve`. */
+app.get('/api/session', async (c) => c.json(await authProviderFor(c.env, c.req.raw).resolve(c.req.raw.headers)));
 
 /**
  * Provision ONE instance on the platform's instruction (K-31), CP-less. The shared
@@ -175,28 +164,10 @@ app.post('/internal/provision', async (c) => {
   return c.json({ tenantId: body.tenantId, scopeId: body.scopeId, owner: body.owner }, 201);
 });
 
-/**
- * Bind a Better Auth login to a principal (K-31 follow-on) — how the portal (or an admin)
- * makes a freshly-provisioned instance usable by a real login: the owner signs up, and
- * this links that user id to the owner principal in the vertical's own `user` row.
- * Registering an email alone grants nothing until this runs. Platform-secret gated.
- */
-app.post('/internal/link', async (c) => {
-  try {
-    assertPlatformCall(c.req.raw.headers, { expectedSecret: c.env.PLATFORM_SECRET });
-  } catch (e) {
-    if (e instanceof PlatformCallError) throw new HTTPException(403, { message: e.message });
-    throw e;
-  }
-  const body = linkBody.parse(await c.req.json());
-  await d1IdentityDirectory(c.env.AUTH_DB).bind(body.externalId, body.principal);
-  return c.json({ linked: true }, 201);
-});
-
 /** Resolve the caller across the mounted adapters → the routed node → a scope stub. 401 if none. */
 async function stub(c: { env: Env; req: { raw: Request } }) {
   const node = nodeFor(c.req.raw, c.env);
-  const result = await resolvePrincipal(adaptersFor(c.env, c.req.raw), c.req.raw.headers);
+  const result = await resolvePrincipal(adaptersFor(c.env), c.req.raw.headers);
   if (!result) throw new HTTPException(401, { message: 'unauthorized' });
   // CP-less: lifecycle is the router's gate — it forwards only an active scope and asserts
   // the node. The vertical trusts that node and opens the scope; permissions evaluate locally.
@@ -204,7 +175,7 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
 }
 
 app.get('/api/me', async (c) => {
-  const result = await resolvePrincipal(adaptersFor(c.env, c.req.raw), c.req.raw.headers);
+  const result = await resolvePrincipal(adaptersFor(c.env), c.req.raw.headers);
   if (!result) return c.json({ error: 'unauthorized' }, 401);
   return c.json({ principal: result.principal, via: result.via, display: result.display });
 });
