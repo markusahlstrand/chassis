@@ -18,28 +18,21 @@
 	// no service binding to a platform worker, no ASSETS binding — assertSandboxContract
 	// (control-plane-api/deploy.ts) refuses those, and the push would be rejected. The
 	// router asserts the node; permissions evaluate from each scope's own storage.
+	// Two OWN DO classes: SCOPE (business data, one per scope) and AUTH (identity —
+	// Better Auth over its own DO SQLite, one per tenant). No shared D1 `AUTH_DB`: a
+	// tenant's users/sessions/credentials are isolated in its AUTH DO, and there is no
+	// per-worker auth database to leak across tenants. Both are the vertical's OWN
+	// classes, so the sandbox contract permits the bindings.
 	"durable_objects": {
 		"bindings": [
-			{ "name": "SCOPE", "class_name": "ScopeDO" }
+			{ "name": "SCOPE", "class_name": "ScopeDO" },
+			{ "name": "AUTH", "class_name": "IdentityDO" }
 		]
 	},
-	// Better Auth's own store (identity, credentials, sessions) — separate from the scope
-	// DOs. It also holds the CP-less identity binding: `user.principal_id`, the kernel
-	// PrincipalId a login resolves to (migrations/0002). Local D1 is created automatically
-	// under `wrangler dev`. Before a real push, apply migrations:
-	//   wrangler d1 migrations apply substrat-meridian-auth   (--local for dev)
-	"d1_databases": [
-		{
-			"binding": "AUTH_DB",
-			"database_name": "substrat-meridian-auth",
-			"database_id": "00000000-0000-0000-0000-000000000000",
-			"migrations_dir": "migrations"
-		}
-	],
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": ["ScopeDO"]
+			"new_sqlite_classes": ["ScopeDO", "IdentityDO"]
 		}
 	]
 	// Secrets on deploy (`wrangler secret put …` / injected by the platform on push):
