@@ -19,14 +19,21 @@ install that would 501.
 - `@substrat-run/cli` built (`pnpm --filter @substrat-run/cli build`), and you can `substrat login`
   to the control plane.
 
+## Auth: no D1 to create
+
+Identity/credentials/sessions now live in a per-tenant **`IdentityDO`** (Durable Object, via
+`@substrat-run/vertical-auth`) — its own SQLite, isolated per tenant. There is **no shared `AUTH_DB`
+D1** to create. Auth is a config choice (`AUTH_PROVIDER`): the default `better-auth-do` runs Better
+Auth in that DO; set `AUTH_PROVIDER=oidc` + `OIDC_ISSUER` (`OIDC_AUDIENCE`) to verify a bearer token
+against an OIDC issuer (Supabase / Auth0 / AuthHero / Keycloak) instead.
+
 ## Steps
 
-1. **Create the auth D1 and apply migrations**, then set the real id in `wrangler.jsonc`
-   (`d1_databases[0].database_id`, currently a placeholder):
+1. **Set the auth secret** (used to sign Better Auth sessions in the IdentityDO):
 
    ```sh
-   wrangler d1 create substrat-meridian-auth          # copy the returned database_id into wrangler.jsonc
-   wrangler d1 migrations apply substrat-meridian-auth # applies 0001_better_auth + 0002_principal_binding
+   wrangler secret put BETTER_AUTH_SECRET     # a random 32+ char string
+   # for the OIDC provider instead: set vars AUTH_PROVIDER=oidc, OIDC_ISSUER=…, OIDC_AUDIENCE=…
    ```
 
 2. **Push** the vertical. This runs the `build` hook (`pnpm --dir app build && gen-assets`), bundles
@@ -53,20 +60,21 @@ install that would 501.
 
 ## Verify (already done on `wrangler dev`, real workerd)
 
-The reshaped worker was smoke-tested locally: `GET /` serves the SPA; `/internal/provision` is
-fail-closed (403 without `PLATFORM_SECRET`, 201 with it) and sets up the scope CP-lessly via
-`provisionScopeLocal`; an authenticated `hr/*` invoke (the owner holding `hr-admin` at scope level)
-succeeds on DO SQLite. `wrangler deploy --dry-run` shows only the `SCOPE` + `AUTH_DB` bindings.
+Smoke-tested locally end to end: `GET /` serves the SPA; `/internal/provision` is fail-closed (403
+without `PLATFORM_SECRET`, 201 with it) and sets up the scope CP-lessly via `provisionScopeLocal`,
+seeding the owner seat; a real **sign-up → session cookie → `/api/invoke`** claims that seat (the
+installer becomes `hr-admin`) and the `hr/*` op succeeds on DO SQLite; `/api/me` returns the claimed
+principal. `wrangler deploy --dry-run` shows only the `SCOPE` + `AUTH` (IdentityDO) bindings — no D1,
+no service binding, so it passes `assertSandboxContract`.
 
 ## Known follow-ups (not blockers for provisioning, but for full hosted UX)
 
-- **App data contract.** The SPA still calls `/api/me` expecting the demo shape (`{ key, role,
-  country, employeeId }`) and `/api/cast` (persona switching) — the sandbox-clean worker returns
-  `{ principal, via, display }` and has no cast. A hosted, single-real-user Meridian needs `/api/me`
-  to resolve the caller's role + employee record from the scope, and the cast switcher gated to dev.
-- **Owner login linking.** `/internal/link` binds a Better Auth login to the provisioned owner
-  principal (writes `user.principal_id`); the portal must call it when the owner first signs in, or
-  provide a first-login claim flow. Until then the owner authenticates via the dev header only.
+- **App data contract.** The SPA expects `/api/me` as `{ key, role, country, employeeId }` (+ a
+  `/api/cast`), but this branch's `/api/me` returns just `{ principal }`. Fold the `hr/whoami` shape
+  back in (it lives on the unmerged data-contract branch) so the owner lands on the Admin/setup
+  surface. Owner **login-linking is done** — the first sign-in claims the owner seat (`hr-admin`).
+- **Dead files.** `src/auth.ts` + `src/auth-schema.ts` (the old D1 Better Auth) and the D1 auth
+  migrations are now unused (auth moved to the IdentityDO); safe to remove in a cleanup pass.
 - **Scrive reconcile.** The poll-path cron cannot run as a dispatch user-worker, so Scrive e-sign
   reconciliation is not wired in the pushed worker; it remains a standalone-mode feature until a
   platform-level sweep covers dispatch verticals.
