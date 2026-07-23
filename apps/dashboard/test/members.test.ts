@@ -31,8 +31,11 @@ describe('Dashboard teams — invite + accept', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  const PROVIDER = 'authhero';
+
   /** Bootstrap a team the way the worker's createTeam does: provision + org + init. */
   const makeTeam = async (slug: string, ownerEmail: string): Promise<DashboardNode> => {
+    await host.admin.registerIdentityPool(staff, { provider: PROVIDER, topology: 'central', tenantId: null });
     const node = await provisionDashboard(host, {
       tenantId: tenantId.parse(ulid()),
       scopeId: scopeId.parse(ulid()),
@@ -127,21 +130,27 @@ describe('Dashboard teams — invite + accept', () => {
     const kim = principalId.parse(ulid());
     const kimScope = await host.getScope(kim, acme.tenantId, acme.scopeId);
     await kimScope.invoke('dashboard/accept-invite', { invitationId, identifier: 'kim@acme5.com' });
-    // Mirror the worker: assign Kim the member role at the tenant node, so she has access —
-    // proven by a gated read succeeding.
+    // Mirror the worker's accept: assign Kim the member role (proven by a gated read
+    // succeeding) and link her identity so the team is in her switcher.
     await host.admin.assignRole(staff, { principalId: kim, roleKey: 'member', node: { tenantId: acme.tenantId, scopeId: null } });
+    await host.admin.linkIdentity(staff, { provider: PROVIDER, externalId: 'kim-sub', principal: kim, tenantId: acme.tenantId, scopeId: acme.scopeId });
     await expect(kimScope.invoke('dashboard/list-members', {})).resolves.toBeDefined();
+    expect(await host.admin.listIdentityTenants(staff, PROVIDER, 'kim-sub')).toContain(acme.tenantId);
 
-    // Remove her: the op returns what to unassign, then the worker (here, the test) unassigns.
+    // Remove her: the op returns what to unassign, then the worker (here, the test) cuts
+    // access (unassignRole) AND severs her login (unlinkIdentity).
     const removed = await ownerScope.invoke<{ principal: string; roleKey: string } | null>('dashboard/remove-member', {
       memberId: (await members(acme)).find((m) => m.email === 'kim@acme5.com')!.id,
     });
     expect(removed).toMatchObject({ principal: kim, roleKey: 'member' });
     await host.admin.unassignRole(staff, { principalId: kim, roleKey: 'member', node: { tenantId: acme.tenantId, scopeId: null } });
+    await host.admin.unlinkIdentity(staff, acme.tenantId, kim);
 
-    // Access is gone (the gated read now denies), and she is off the roster.
+    // Access is gone (the gated read denies), she is off the roster, and the team no
+    // longer appears in her switcher.
     await expect(kimScope.invoke('dashboard/list-members', {})).rejects.toThrow(/permission denied/);
     expect((await members(acme)).find((m) => m.email === 'kim@acme5.com')).toBeUndefined();
+    expect(await host.admin.listIdentityTenants(staff, PROVIDER, 'kim-sub')).not.toContain(acme.tenantId);
   });
 
   it('the owner cannot be removed', async () => {

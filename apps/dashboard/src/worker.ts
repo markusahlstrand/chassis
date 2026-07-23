@@ -459,11 +459,15 @@ app.post('/api/members/remove', async (c) => {
   const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
   const removed = (await scope.invoke('dashboard/remove-member', { memberId })) as { principal: string; roleKey: string } | null;
   if (removed) {
+    const principal = principalId.parse(removed.principal);
+    // Cut access (revoke the role) AND sever their login from the team, so it also
+    // disappears from their own switcher rather than lingering as a dead entry.
     await host.admin.unassignRole(DASHBOARD_CP_ACTOR, {
-      principalId: principalId.parse(removed.principal),
+      principalId: principal,
       roleKey: removed.roleKey,
       node: { tenantId: node.tenantId, scopeId: null },
     });
+    await host.admin.unlinkIdentity(STAFF, node.tenantId, principal);
   }
   return c.body(null, 204);
 });

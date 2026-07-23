@@ -129,10 +129,12 @@ access). So this work **added `unassignRole` to the kernel**: `ScopeHost.HostAdm
 + both adapters (tombstone the role tuple — K-21, never DELETE, so the checker skips it and a
 re-`assignRole` reactivates), a generic tenant-tuple/scope-tuple revoke on the Cloudflare DOs, the
 `unassignRole` admin-log action, and a contract-suite test. `dashboard/remove-member` marks the
-roster row revoked and the worker calls `unassignRole` (access is actually cut); the owner cannot
-be removed. Remaining nit: the removed member's **identity link is left**, so the team still shows
-in *their own* switcher but resolves to no permissions — fully hiding it needs a kernel
-`unlinkIdentity` (a smaller follow-up).
+roster row revoked and the worker calls `unassignRole` (access is actually cut) **and
+`unlinkIdentity`** (severs their login from the team, so it also leaves their own switcher rather
+than lingering as a dead entry); the owner cannot be removed. `unlinkIdentity` (keyed by principal,
+so the remover needs no external subject) is a DELETE — the identity map is current state, the audit
+is the admin log — so a re-invite can re-link a fresh principal. Both kernel additions ship with
+contract/adapter tests.
 
 ## 8. Still a follow-up: email delivery
 
