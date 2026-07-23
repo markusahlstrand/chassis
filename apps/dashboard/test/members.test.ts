@@ -153,6 +153,28 @@ describe('Dashboard teams — invite + accept', () => {
     expect(await host.admin.listIdentityTenants(staff, PROVIDER, 'kim-sub')).not.toContain(acme.tenantId);
   });
 
+  it('leaving a team detaches the caller (roster revoked + identity unlinked)', async () => {
+    const acme = await makeTeam('acme7', 'owner@acme7.com');
+    const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    const { invitationId } = await ownerScope.invoke<{ invitationId: string }>('dashboard/invite-member', {
+      email: 'lee@acme7.com',
+      roleKey: 'member',
+    });
+    const lee = principalId.parse(ulid());
+    const leeScope = await host.getScope(lee, acme.tenantId, acme.scopeId);
+    await leeScope.invoke('dashboard/accept-invite', { invitationId, identifier: 'lee@acme7.com' });
+    await host.admin.assignRole(staff, { principalId: lee, roleKey: 'member', node: { tenantId: acme.tenantId, scopeId: null } });
+    await host.admin.linkIdentity(staff, { provider: PROVIDER, externalId: 'lee-sub', principal: lee, tenantId: acme.tenantId, scopeId: acme.scopeId });
+    expect(await host.admin.listIdentityTenants(staff, PROVIDER, 'lee-sub')).toContain(acme.tenantId);
+
+    // Lee leaves — mirror the worker: mark own row revoked, then unlink identity.
+    await leeScope.invoke('dashboard/leave-self', {});
+    await host.admin.unlinkIdentity(staff, acme.tenantId, lee);
+
+    expect(await host.admin.listIdentityTenants(staff, PROVIDER, 'lee-sub')).not.toContain(acme.tenantId);
+    expect((await members(acme)).find((m) => m.email === 'lee@acme7.com')).toBeUndefined();
+  });
+
   it('the owner cannot be removed', async () => {
     const acme = await makeTeam('acme6', 'owner@acme6.com');
     const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);

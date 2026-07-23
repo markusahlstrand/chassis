@@ -143,6 +143,9 @@ export const api = {
   /** Switch the active team; the server pins it in a cookie, so the caller reloads after. */
   switchTeam: (teamId: string) =>
     call<void>('/teams/switch', { method: 'POST', body: JSON.stringify({ teamId }) }),
+  /** Leave the current team (detaches your login); reload after — you'll land in another
+   *  team or onboarding if it was your last. */
+  leaveTeam: () => call<void>('/teams/leave', { method: 'POST' }),
   catalog: () => call<CatalogEntry[]>('/catalog'),
   /** The current team's roster (active members + outstanding invites). */
   listMembers: () => call<Member[]>('/members'),

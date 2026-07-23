@@ -377,6 +377,17 @@ const listMembersOp: OperationHandler<Record<string, never>, DashboardMemberRow[
   );
 };
 
+/**
+ * The caller leaves the team — marks their OWN roster row revoked. The worker then
+ * severs their identity link (`unlinkIdentity`), which is what actually detaches
+ * them. Any member may leave (including the owner: on a throwaway/abandoned team
+ * that is intended; a "last owner leaving" guard can come with team deletion).
+ */
+const leaveSelfOp: OperationHandler<Record<string, never>, void> = async (ctx) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.read));
+  ctx.sql.exec(`UPDATE dashboard_members SET status = 'revoked' WHERE principal = ? AND status = 'active'`, [ctx.principal]);
+};
+
 const removeMemberInput = z.object({ memberId: z.string().min(1) });
 
 /**
@@ -412,5 +423,6 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/revoke-invite': revokeInviteOp as OperationHandler<never, unknown>,
     'dashboard/list-members': listMembersOp as OperationHandler<never, unknown>,
     'dashboard/remove-member': removeMemberOp as OperationHandler<never, unknown>,
+    'dashboard/leave-self': leaveSelfOp as OperationHandler<never, unknown>,
   },
 };
