@@ -905,7 +905,9 @@ app.get('/api/github/callback', async (c) => {
     secret: { installationId },
     createdBy: node.principal, // B: the authorizing principal, never STAFF.
   });
-  return c.redirect('/#/apps/new?connected=github');
+  // Back to the create-app flow; the Git card re-fetches and shows the repos. No query
+  // suffix — it would land inside the hash fragment and break the SPA's route parse.
+  return c.redirect('/#/apps/new');
 });
 
 /**
