@@ -269,7 +269,14 @@ export async function retryApp(
  * router dispatches on a static `VERTICAL_<slug>` binding, which needs no version.
  */
 async function provisionOnSharedPlane(cp: TenantNarrowedControlPlane, input: CreateAppInput): Promise<string | null> {
-  const slug = slugify(input.name);
+  const nameSlug = slugify(input.name);
+  const scopeTail = input.appScopeId.toLowerCase().slice(-6);
+  // The SCOPE slug must be UNIQUE within the tenant. Suffixing the scope id keeps two apps
+  // with the same name — or a fresh attempt after one left an orphaned scope (a failed
+  // provision marks the row failed but doesn't release its shared-plane scope) — from
+  // colliding on "scope slug 'x' already taken". The hostname below still prefers the clean
+  // name, so the URL stays `meridian.global.substrat.run` whenever it's free.
+  const slug = `${nameSlug}-${scopeTail}`;
   const tenantSlug = `t-${cp.tenantId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-10)}`;
   await cp.ensureTenant(tenantSlug, input.tenantName ?? 'Workspace');
   // Belt-and-braces: the vertical grants these too, but an idempotent grant here
@@ -287,9 +294,9 @@ async function provisionOnSharedPlane(cp: TenantNarrowedControlPlane, input: Cre
   const prod = (await cp.listChannels(input.verticalSlug)).find((ch) => ch.channel === 'prod');
   if (prod) await cp.bindScopeVersion(input.appScopeId, prod.versionId);
 
-  const base = input.baseDomain ?? 'substrat.run';
-  const tail = input.appScopeId.toLowerCase().slice(-4);
-  for (const hostname of [`${slug}.global.${base}`, `${slug}-${tail}.global.${base}`]) {
+  const domain = input.baseDomain ?? 'substrat.run';
+  // Prefer the clean name for the URL; fall back to the unique scope slug on a global collision.
+  for (const hostname of [`${nameSlug}.global.${domain}`, `${slug}.global.${domain}`]) {
     try {
       await cp.bindHostname({ hostname, scopeId: input.appScopeId, surface: 'app', canonical: true });
       await cp.setHostnameStatus(hostname, 'active');
