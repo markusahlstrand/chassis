@@ -5,12 +5,13 @@
 
 # Permission snapshot — @substrat-run/dashboard
 
-6 keys · 2 modules · 4 roles
+7 keys · 2 modules · 4 roles
 
 ## 1. Registry — every key a registered manifest declares
 
 | Key | Description | Declared by |
 | --- | --- | --- |
+| `dashboard:manage-integrations` | Connect and disconnect third-party providers (GitHub, Scrive) for this tenant | `@substrat-run/dashboard` |
 | `dashboard:manage-members` | Invite and remove team members and see the roster | `@substrat-run/dashboard` |
 | `dashboard:provision-app` | Provision and manage apps (vertical instances) in this tenant — the tenant admin | `@substrat-run/dashboard` |
 | `dashboard:read` | Read the tenant’s apps | `@substrat-run/dashboard` |
@@ -24,15 +25,16 @@ Identical in every tenant. Per-tenant customisation is a runtime concern.
 
 | Role | Permissions |
 | --- | --- |
-| `admin` | `dashboard:manage-members`, `dashboard:provision-app`, `dashboard:read`, `invites:read`, `invites:revoke`, `invites:send` |
+| `admin` | `dashboard:manage-integrations`, `dashboard:manage-members`, `dashboard:provision-app`, `dashboard:read`, `invites:read`, `invites:revoke`, `invites:send` |
 | `member` | `dashboard:provision-app`, `dashboard:read` |
-| `owner` | `dashboard:manage-members`, `dashboard:provision-app`, `dashboard:read`, `invites:read`, `invites:revoke`, `invites:send` |
+| `owner` | `dashboard:manage-integrations`, `dashboard:manage-members`, `dashboard:provision-app`, `dashboard:read`, `invites:read`, `invites:revoke`, `invites:send` |
 | `viewer` | `dashboard:read` |
 
 ## 3. Coverage — which roles hold each key
 
 | Key | Held by |
 | --- | --- |
+| `dashboard:manage-integrations` | `admin`, `owner` |
 | `dashboard:manage-members` | `admin`, `owner` |
 | `dashboard:provision-app` | `admin`, `member`, `owner` |
 | `dashboard:read` | `admin`, `member`, `owner`, `viewer` |

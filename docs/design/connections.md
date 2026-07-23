@@ -238,14 +238,52 @@ Connecting a Scrive account is a **tenant admin's** act, not platform staff's. T
 | **B** | In-scope capability, like D-31 proposes for membership — module asks, executor effects | consistent with where membership is going; needs the same kernel seam membership needs |
 | **C** | A third actor brand (`TenantAdminActorId`) | solves it narrowly; adds a third actor concept before anyone asked for one |
 
-**Recommendation: A now, structured so B is not a rewrite.** Keep the store, the sealing and
-the audit shape identical; let *who may call it* be the one thing that changes. Concretely:
-land `HostAdmin.createConnection(actor: PlatformActorId, …)` first, and do not build a console
-flow on top of it until the actor question is settled with membership's — because a console
-flow is what would freeze the wrong answer.
+**Settled (2026-07-23): B.** The authority to connect a provider **originates in-scope**, from a
+tenant admin's permission-checked act — never a `PlatformActorId` conjured in a request handler.
+The earlier "A now" deferral is retired: the console flow that A warned would "freeze the wrong
+answer" is exactly the flow we are about to build (GitHub connect), so the question had to be
+answered before it, not after.
 
-This is a deliberate deferral of the same question, not an answer to it. Flagging it here so it
-is reviewed rather than discovered.
+B is far cheaper than the fork implied, because **the executor seam it needs already exists**:
+`ScopeHost.registerExecutor(id, eventType, handler)` (scope-host.ts) — out-of-band host code that
+effects, with `HostAdmin` authority, what a module asked for inside a scope; delivered
+at-least-once from the outbox and stamped `causedBy` the causing event, so the authorizing
+principal and the privileged write join in the trail. It is implemented in both adapters,
+covered by the contract suite, and used in anger by `demos/rally` (`rally-member-adder` reacting
+to `member.add-requested`). Membership's own dashboard path still launders through `STAFF` inline
+instead of using this seam — that is the **parallel cleanup** this decision commits to, so the two
+converge as §3.5 always intended.
+
+#### 3.5.1 The secret wrinkle — why connections use a signed-state callback, not the outbox executor
+
+Membership carries no secret; an OAuth connection does, and **the credential must never traverse
+the outbox** — the same law as §3.4 (the audit log) and the invites engine hashing identifiers so
+"no outbox executor could recover an address." A raw token in an event payload written to the
+append-only spine is precisely what the platform forbids. So the plain rally shape (event carries
+everything → executor effects) does not transfer. Two independent facts steer the effect mechanism:
+the secret cannot ride the outbox, and an OAuth connect is a **synchronous one-shot**, not a
+durably-retried post-commit effect (its "retry" is the user clicking Connect again). The outbox
+executor exists for the opposite case; forcing it here would add a staging store and a retry loop
+a synchronous flow does not want.
+
+The shape, therefore — same **essence** as membership (authority in-scope, effect with platform
+authority, attribution preserved), different **mechanism**:
+
+- **Authorization is in-scope.** A tenant admin invokes an in-scope op `beginConnection(provider,
+  vertical)` whose first line is `assertAllowed(await ctx.check(<manage-integrations>))`. It mints a
+  **signed state token** binding `{ tenant, vertical, provider, principal, nonce, exp }`. *This* is
+  the attributed, permission-checked act.
+- **The effect is host-side, gated on that proof.** The provider redirects to the worker's OAuth
+  callback with the state; the callback verifies the signature (proving the act was authorized
+  in-scope by that principal), exchanges the code for a token, seals it via `SecretBox`, and effects
+  `createConnection` **stamped with the principal from the state** — not with whatever actor the
+  handler happens to hold.
+
+`createConnection`'s signature is left as-is for now (it takes a `PlatformActorId`, which the
+callback legitimately holds); B is satisfied by *where the authority comes from and how it is
+attributed*, not by retyping the store. A later `TenantAdminActorId` (option C) can still slot in
+without touching the store, the sealing, or the audit shape — the one thing §3.5 always promised
+would stay stable.
 
 ### 3.6 Token refresh
 

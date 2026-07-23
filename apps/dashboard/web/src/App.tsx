@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Toast, Dialog, Input } from '@substrat-run/ui';
-import { api, signIn, signOut, ApiError, needsOnboarding, type AppRow, type CatalogEntry, type Deployment, type Me, type MeResult, type Member, type InviteRole } from './lib/api';
-import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_DEPLOYMENTS, MOCK_ME, MOCK_MEMBERS } from './lib/mock';
+import { api, signIn, signOut, ApiError, needsOnboarding, type AppRow, type CatalogEntry, type Deployment, type GitReposResult, type Me, type MeResult, type Member, type InviteRole } from './lib/api';
+import { DEV_MOCK, MOCK_APPS, MOCK_CATALOG, MOCK_DEPLOYMENTS, MOCK_GIT_REPOS, MOCK_ME, MOCK_MEMBERS } from './lib/mock';
 import { verticalMeta } from './lib/demo';
 import { DashShell, type Crumb, type NavKey } from './components/DashShell';
 import { CommandPalette } from './components/CommandPalette';
@@ -106,6 +106,10 @@ export function App() {
     if (DEV_MOCK) return;
     setDeployments(await api.listDeployments());
   }, []);
+
+  // Git-import state is fetched lazily by the Create-App view (it hits GitHub), so it
+  // isn't loaded on every dashboard open. Mock-aware so the dev preview renders it.
+  const loadGitRepos = useCallback(async (): Promise<GitReposResult> => (DEV_MOCK ? MOCK_GIT_REPOS : api.gitRepos()), []);
 
   // Session check → on sign-in, load apps + members + catalog + deployments. First,
   // handle an invite acceptance (a `/invite/<token>` link, or one stashed across the
@@ -491,7 +495,7 @@ export function App() {
       onSignOut={signOut}
     >
       {route.section === 'new' ? (
-        <CreateApp catalog={catalog} onCancel={() => go('#/apps')} onCreate={createApp} />
+        <CreateApp catalog={catalog} loadGitRepos={loadGitRepos} onCancel={() => go('#/apps')} onCreate={createApp} />
       ) : route.section === 'apps' && openApp ? (
         <AppDetail
           app={openApp}

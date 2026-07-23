@@ -2544,7 +2544,9 @@ export class SqliteScopeHost implements ScopeHost {
               input.externalAccountRef ?? null,
               JSON.stringify(input.scopes),
               input.expiresAt ?? null,
-              actor,
+              // The authorizing principal when supplied (a self-serve connect), else the
+              // effecting platform actor. See connections.md §3.5.1 / createConnectionInput.
+              input.createdBy ?? actor,
               now,
             );
         } catch (err) {
@@ -2576,6 +2578,7 @@ export class SqliteScopeHost implements ScopeHost {
             label: input.label,
             scopes: input.scopes,
             externalAccountRef: input.externalAccountRef ?? null,
+            createdBy: input.createdBy ?? actor,
           },
         );
       },

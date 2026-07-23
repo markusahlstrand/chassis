@@ -12,7 +12,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { principalId, scopeId, tenantId, orgId, platformActorId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
+import { principalId, scopeId, tenantId, orgId, platformActorId, connectionId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { protocolModule } from '@substrat-run/engine-protocol';
@@ -34,6 +34,7 @@ import { createApp, deprovisionApp, retryApp, provisionDashboard, type Dashboard
 import { listDeploymentsFromCp, listDeploymentsFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 import { transportFor, senderFor, teamInviteEmail } from './email.js';
+import { githubConfig, installUrl, installationAccount, listInstallationRepos } from './github.js';
 import type { SendEmailBinding } from '@substrat-run/adapter-email';
 
 /** The identity provider: the platform's AuthHero instance, via the identity pool. */
@@ -96,6 +97,14 @@ interface Env extends OidcEnv {
   EMAIL?: SendEmailBinding;
   /** Sender address for platform mail (default `no-reply@send.substrat.net`); domain must be onboarded. */
   EMAIL_FROM?: string;
+  /**
+   * GitHub App credentials for the repo-import flow (connections.md §3.5.1). Secrets;
+   * absent ⇒ the Git-import surface reports "not configured" rather than erroring.
+   * The private key is PKCS#8 PEM (RS256); the slug builds the install URL.
+   */
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_SLUG?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
 }
 
 const DASHBOARD_CP_ACTOR = platformActorId.parse('01JZ000000000000000000DASH');
@@ -183,6 +192,50 @@ async function verifyInviteToken(env: Env, token: string): Promise<InviteClaim |
   if (!ok) return null;
   try {
     const claim = JSON.parse(new TextDecoder().decode(b64urlToBytes(body))) as InviteClaim;
+    return claim.exp > Date.now() ? claim : null;
+  } catch {
+    return null;
+  }
+}
+
+// -- signed OAuth state (connections.md §3.5.1) ------------------------------
+// The in-scope `begin-connection` op authorizes the connect (permission check +
+// the authorizing principal); the worker mints THIS token from that result and
+// passes it through the provider's install redirect. At the callback we verify the
+// signature — proving the connect was authorized in-scope by this principal for
+// this tenant — before effecting the sealed `createConnection`. Signing (not the
+// secret) is what stops the tenant/principal fields being forged to attach a
+// connection to someone else's tenant; short-lived because it is single-use.
+
+interface GithubStateClaim {
+  tenantId: string;
+  principal: string;
+  provider: string;
+  nonce: string;
+  exp: number;
+}
+
+async function signGithubState(env: Env, claim: Omit<GithubStateClaim, 'exp' | 'nonce'>): Promise<string> {
+  const payload: GithubStateClaim = { ...claim, nonce: crypto.randomUUID(), exp: Date.now() + 10 * 60 * 1000 };
+  const body = b64url(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = new Uint8Array(
+    await crypto.subtle.sign('HMAC', await hmacKey(env.SESSION_SECRET), new TextEncoder().encode(body)),
+  );
+  return `${body}.${b64url(sig)}`;
+}
+
+async function verifyGithubState(env: Env, token: string): Promise<GithubStateClaim | null> {
+  const [body, sig] = token.split('.');
+  if (!body || !sig) return null;
+  const ok = await crypto.subtle.verify(
+    'HMAC',
+    await hmacKey(env.SESSION_SECRET),
+    b64urlToBytes(sig),
+    new TextEncoder().encode(body),
+  );
+  if (!ok) return null;
+  try {
+    const claim = JSON.parse(new TextDecoder().decode(b64urlToBytes(body))) as GithubStateClaim;
     return claim.exp > Date.now() ? claim : null;
   } catch {
     return null;
@@ -773,6 +826,88 @@ app.post('/api/deployments/:slug/promote', async (c) => {
     await host.admin.promoteVersion(STAFF, slug, body.channel, body.versionId);
   }
   return c.body(null, 204);
+});
+
+// -- Git import (GitHub App) — connections.md §3.5.1 -------------------------
+// The dashboard vertical holds the connection; keyed (tenant, 'dashboard', 'github').
+const GIT_VERTICAL = 'dashboard';
+
+/**
+ * Begin a GitHub connection. Authorize IN-SCOPE first (the tenant admin's
+ * permission-checked act via `begin-connection`), then redirect to the App's install
+ * page carrying a signed state that binds this connect to the authorizing principal +
+ * tenant. B's authority originates here — not in the callback, not from a platform actor.
+ */
+app.get('/api/git/connect', async (c) => {
+  const cfg = githubConfig(c.env);
+  if (!cfg) throw new HTTPException(503, { message: 'GitHub is not configured' });
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  // Throws "permission denied" (→ 403 via onError) if the caller may not connect providers.
+  const { principal } = (await dash.invoke('dashboard/begin-connection', { provider: 'github' })) as { principal: string };
+  const state = await signGithubState(c.env, { tenantId: node.tenantId, principal, provider: 'github' });
+  return c.redirect(installUrl(cfg, state));
+});
+
+/**
+ * The App install callback. Verify the signed state (the connect was authorized
+ * in-scope by this principal for this tenant) AND that the callback's session is that
+ * same principal, then record the connection: the installationId sealed, attributed to
+ * the principal (`createdBy`), effected with platform authority.
+ */
+app.get('/api/git/callback', async (c) => {
+  const cfg = githubConfig(c.env);
+  if (!cfg) throw new HTTPException(503, { message: 'GitHub is not configured' });
+  const installationId = c.req.query('installation_id');
+  const stateToken = c.req.query('state');
+  if (!installationId || !stateToken) throw new HTTPException(400, { message: 'missing installation_id or state' });
+  const state = await verifyGithubState(c.env, stateToken);
+  if (!state) throw new HTTPException(400, { message: 'invalid or expired state' });
+
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node || node.principal !== state.principal || node.tenantId !== state.tenantId) {
+    throw new HTTPException(403, { message: 'state does not match your session' });
+  }
+
+  const account = await installationAccount(cfg, installationId);
+  // Reconnect cleanly: revoke any live github connection first (uniqueness ignores revoked rows).
+  const existing = await host.admin.listConnections(STAFF, { tenantId: node.tenantId, vertical: GIT_VERTICAL, provider: 'github' });
+  for (const conn of existing) await host.admin.revokeConnection(STAFF, conn.id);
+  await host.admin.createConnection(STAFF, {
+    id: connectionId.parse(ulid()),
+    tenantId: node.tenantId,
+    vertical: GIT_VERTICAL,
+    provider: 'github',
+    label: account ? `GitHub — ${account}` : 'GitHub',
+    externalAccountRef: account ?? undefined,
+    scopes: ['contents:read', 'metadata:read'],
+    secret: { installationId },
+    createdBy: node.principal, // B: the authorizing principal, never STAFF.
+  });
+  return c.redirect('/#/apps/new?connected=github');
+});
+
+/**
+ * List the repos the tenant granted us — `{ connected: false }` when no connection
+ * exists yet (the UI shows Connect). The installation token is minted fresh from the
+ * stored installationId on each call, so nothing durable is a bearer secret.
+ */
+app.get('/api/git/repos', async (c) => {
+  const cfg = githubConfig(c.env);
+  if (!cfg) return c.json({ configured: false, connected: false, repos: [] });
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const conn = (await host.admin.listConnections(STAFF, { tenantId: node.tenantId, vertical: GIT_VERTICAL, provider: 'github' }))[0];
+  if (!conn) return c.json({ configured: true, connected: false, repos: [] });
+  const open = await host.admin.openConnection(node.tenantId, GIT_VERTICAL, 'github');
+  const installationId = open?.secret.installationId;
+  if (!installationId) return c.json({ configured: true, connected: false, repos: [] });
+  const repos = await listInstallationRepos(cfg, installationId);
+  return c.json({ configured: true, connected: true, account: conn.externalAccountRef, repos });
 });
 
 app.onError((err, c) => {

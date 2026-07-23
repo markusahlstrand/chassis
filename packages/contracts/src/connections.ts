@@ -95,6 +95,15 @@ export const createConnectionInput = z.object({
   scopes: z.array(z.string()).default([]),
   expiresAt: instant.optional(),
   secret: connectionSecret,
+  /**
+   * Who authorized this connection, when that is a tenant principal rather than the
+   * effecting platform actor (connections.md §3.5.1). A self-serve connect is a tenant
+   * admin's in-scope, permission-checked act; the host effects the sealed write with
+   * platform authority, but the connection must record the *principal* who authorized
+   * it — not `STAFF`, which would launder the act (the D-31 defect). Omitted ⇒ the
+   * caller's `actor`, so existing platform-driven callers are unchanged.
+   */
+  createdBy: z.string().min(1).optional(),
 });
 export type CreateConnectionInput = z.input<typeof createConnectionInput>;
 

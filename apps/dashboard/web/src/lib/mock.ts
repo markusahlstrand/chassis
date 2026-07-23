@@ -1,4 +1,4 @@
-import type { AppRow, CatalogEntry, Deployment, Me, Member } from './api';
+import type { AppRow, CatalogEntry, Deployment, GitReposResult, Me, Member } from './api';
 
 /**
  * Dev-preview mode — the Dashboard's analogue of the console's `VITE_DEV_ACTOR`
@@ -24,11 +24,25 @@ export const MOCK_ME: Me = {
   ],
 };
 
+// Mirror the worker's CATALOG map (apps/dashboard/src/worker.ts) — the first-party
+// templates a tenant can instantiate, which the live Create App marketplace lists.
 export const MOCK_CATALOG: CatalogEntry[] = [
-  { slug: 'meridian', name: 'Meridian' },
-  { slug: 'callout', name: 'Callout' },
   { slug: 'protocol', name: 'Documents' },
+  { slug: 'callout', name: 'Callout' },
 ];
+
+// A connected GitHub account so the dev-preview shows the live Git-import card shape
+// (the real flow redirects to GitHub, which a mock can't do).
+export const MOCK_GIT_REPOS: GitReposResult = {
+  configured: true,
+  connected: true,
+  account: 'acme-inc',
+  repos: [
+    { fullName: 'acme-inc/hr-portal', defaultBranch: 'main', private: true, updatedAt: '2026-07-20T10:00:00Z' },
+    { fullName: 'acme-inc/legal-docs', defaultBranch: 'main', private: true, updatedAt: '2026-07-16T09:00:00Z' },
+    { fullName: 'acme-inc/field-ops', defaultBranch: 'main', private: false, updatedAt: '2026-07-09T14:00:00Z' },
+  ],
+};
 
 export const MOCK_MEMBERS: Member[] = [
   { id: 'm1', principal: MOCK_ME.principal, email: 'dana@acme.com', role_key: 'owner', status: 'active', invitation_id: null, invited_by: 'system', invited_at: '2026-03-02T10:00:00Z', joined_at: '2026-03-02T10:00:00Z' },
