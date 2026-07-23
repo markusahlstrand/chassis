@@ -11,7 +11,7 @@
  */
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { getCookie, setCookie } from 'hono/cookie';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { principalId, scopeId, tenantId, orgId, platformActorId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
@@ -395,6 +395,24 @@ app.post('/api/teams/switch', async (c) => {
     throw new HTTPException(403, { message: 'not a member of that team' });
   }
   setCookie(c, TEAM_COOKIE, teamId, teamCookieOpts(new URL(c.req.url).protocol));
+  return c.body(null, 204);
+});
+
+/**
+ * Leave a team — the caller detaches themselves: mark their roster row revoked, then
+ * sever their identity link so the team leaves their switcher and they can no longer
+ * resolve into it. The selected-team cookie is cleared so the next load re-resolves
+ * (another team, or onboarding if this was their last). Self-service; no role needed
+ * beyond membership. Leaving the team you have selected — no team id argument.
+ */
+app.post('/api/teams/leave', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  await scope.invoke('dashboard/leave-self', {});
+  await host.admin.unlinkIdentity(STAFF, node.tenantId, node.principal);
+  deleteCookie(c, TEAM_COOKIE, { path: '/' });
   return c.body(null, 204);
 });
 
