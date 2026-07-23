@@ -16,6 +16,7 @@ import { createInterface } from 'node:readline';
 import { loadConfig, saveConfig, resolveAuth } from './config.js';
 import { browserLogin } from './login.js';
 import { push } from './push.js';
+import { printVersions } from './versions.js';
 
 const argv = process.argv.slice(2);
 
@@ -39,9 +40,10 @@ function ask(question: string): Promise<string> {
 const USAGE = `substrat — authenticated deploy tooling
 
 Usage:
-  substrat login  [--cp <url>]              sign in via the browser (per-human)
-  substrat login  --token <serviceToken>    store a service credential (CI)
-  substrat push   <verticalDir> --slug <slug> --version <v> [--name <name>]
+  substrat login    [--cp <url>]              sign in via the browser (per-human)
+  substrat login    --token <serviceToken>    store a service credential (CI)
+  substrat push     <verticalDir> --slug <slug> --version <v> [--name <name>]
+  substrat versions <slug>                    list a vertical's versions + channels
 
 Options (any command):
   --cp <url>       control-plane API base, e.g. https://console.substrat.net/api
@@ -89,11 +91,23 @@ async function cmdPush(): Promise<void> {
   console.log('  admit it in the console to let a scope bind it.');
 }
 
+async function cmdVersions(): Promise<void> {
+  const slug = argv[1];
+  if (!slug || slug.startsWith('--')) {
+    console.error('usage: substrat versions <slug>');
+    process.exit(1);
+  }
+  const { controlPlaneUrl, header } = resolveAuth({ cp: flag('cp'), token: flag('token') });
+  await printVersions(controlPlaneUrl, header, slug);
+}
+
 async function main(): Promise<void> {
   const command = argv[0];
   switch (command) {
     case 'login':
       return cmdLogin();
+    case 'versions':
+      return cmdVersions();
     case 'push':
       return cmdPush();
     case 'help':
