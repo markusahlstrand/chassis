@@ -15,6 +15,11 @@ export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
+  // CP-less identity (scope-local-permissions.md Phase 3): the kernel PrincipalId this
+  // login is bound to. Null until bound (registering an email ≠ becoming an employee);
+  // set by /internal/link when a provisioned instance's owner is made usable. In the
+  // node/central deployment the control-plane directory holds this instead, so it stays null.
+  principalId: text("principal_id"),
   emailVerified: integer("email_verified", { mode: "boolean" })
     .default(false)
     .notNull(),
