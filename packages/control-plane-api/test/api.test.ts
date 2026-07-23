@@ -772,3 +772,170 @@ describe('control-plane API — deploy', () => {
     expect(res.status).toBe(501);
   });
 });
+
+/**
+ * Builder authz (builder-plane.md §4). A second principal kind — a tenant user — on
+ * the same surface, confined to the vertical-management routes and to the verticals
+ * their tenant OWNS (the `owner_tenant` column, Phase 1b). Staff remain a superset.
+ *
+ * The builder session is stubbed by a test header (the real reader — session → user →
+ * selected tenant — wires in a later phase; this package holds no identity provider).
+ * Staff requests carry `x-platform-actor`; builder requests carry only `x-test-builder`,
+ * so staff auth is tried and declines before the builder path runs.
+ */
+describe('control-plane API — builder authz', () => {
+  let dir: string;
+  let host: SqliteScopeHost;
+  let app: ReturnType<typeof createControlPlaneApi>;
+
+  const staff = platformActorId.parse(ulid());
+  const acme = tenantId.parse(ulid()); // a builder tenant — owns 'helpdesk'
+  const other = tenantId.parse(ulid()); // a different builder tenant
+  const acmeActor = platformActorId.parse(ulid());
+  const otherActor = platformActorId.parse(ulid());
+
+  // The stub builder reader: a header names the acting tenant; its audited actor is
+  // derived. Anything else is not a builder session (null → fall through to 401).
+  const BUILDER_HEADER = 'x-test-builder';
+  const builderActors: Record<string, ReturnType<typeof platformActorId.parse>> = {
+    [acme]: acmeActor,
+    [other]: otherActor,
+  };
+  const authenticateBuilder = (req: Request) => {
+    const t = req.headers.get(BUILDER_HEADER);
+    if (t && builderActors[t]) return { actor: builderActors[t]!, tenantId: tenantId.parse(t) };
+    return null;
+  };
+
+  const asStaff = { [DEV_ACTOR_HEADER]: staff, 'content-type': 'application/json' };
+  const asBuilder = (t: string) => ({ [BUILDER_HEADER]: t, 'content-type': 'application/json' });
+  const call =
+    (headers: Record<string, string>) => (path: string, method = 'GET', body?: unknown) =>
+      app.request(path, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+  const staffReq = call(asStaff);
+  const acmeReq = call(asBuilder(acme));
+  const otherReq = call(asBuilder(other));
+
+  const version = (id: string, slug: string, over: Record<string, unknown> = {}) => ({
+    id,
+    verticalSlug: slug,
+    version: id.slice(-6),
+    manifestDigest: 'm1',
+    permissionDigest: 'p1',
+    migrationDigest: 'g1',
+    deploymentRef: null,
+    ...over,
+  });
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'cp-builder-'));
+    host = new SqliteScopeHost({ dir });
+    app = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      authenticateBuilder,
+      deployVertical: async () => {},
+    });
+  });
+  afterAll(async () => {
+    await host.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses a request that is neither staff nor a builder, fail closed', async () => {
+    const res = await app.request('/verticals', { headers: { 'content-type': 'application/json' } });
+    expect(res.status).toBe(401);
+  });
+
+  it('confines a builder to the vertical-management surface (default-deny)', async () => {
+    // None of these are on the builder allowlist — a builder gets 403, not the data.
+    expect((await acmeReq('/tenants')).status).toBe(403);
+    expect((await acmeReq('/scopes')).status).toBe(403);
+    expect((await acmeReq('/admin-log')).status).toBe(403);
+    expect((await acmeReq('/hostnames')).status).toBe(403);
+    // Provisioning an instance is a scope action, not vertical management → 403.
+    expect(
+      (await acmeReq('/verticals/helpdesk/instances', 'POST', {
+        tenantId: acme, scopeId: scopeId.parse(ulid()), owner: ulid(), slug: 'x', name: 'X',
+      })).status,
+    ).toBe(403);
+  });
+
+  it('claims an unregistered slug for the pushing tenant', async () => {
+    const res = await acmeReq('/verticals', 'POST', { slug: 'helpdesk', name: 'Helpdesk', source: 'cli' });
+    expect(res.status).toBe(201);
+    // Owner is stamped from the principal, not the body — even a forged ownerTenant loses.
+    expect(await res.json()).toMatchObject({ slug: 'helpdesk', ownerTenant: acme });
+  });
+
+  it('filters GET /verticals to the caller — a builder sees only what it owns', async () => {
+    // Staff register a platform-owned vertical; acme must not see it.
+    await staffReq('/verticals', 'POST', { slug: 'callout', name: 'Callout', source: 'builtin' });
+
+    const mine = await (await acmeReq('/verticals')).json();
+    expect(mine.map((v: { slug: string }) => v.slug)).toEqual(['helpdesk']);
+    expect(await (await otherReq('/verticals')).json()).toEqual([]);
+    // Staff see the whole registry.
+    const all = await (await staffReq('/verticals')).json();
+    expect(all.map((v: { slug: string }) => v.slug).sort()).toEqual(['callout', 'helpdesk']);
+  });
+
+  it("refuses to claim or touch another tenant's slug", async () => {
+    // other cannot re-claim helpdesk...
+    expect((await otherReq('/verticals', 'POST', { slug: 'helpdesk', name: 'H', source: 'cli' })).status).toBe(403);
+    // ...nor publish to it...
+    expect((await otherReq('/verticals/helpdesk/versions', 'POST', version(ulid(), 'helpdesk'))).status).toBe(403);
+    // ...nor even see its versions/channels (404 — indistinguishable from absent).
+    expect((await otherReq('/verticals/helpdesk/versions')).status).toBe(404);
+    expect((await otherReq('/verticals/helpdesk/channels')).status).toBe(404);
+  });
+
+  const v1 = ulid();
+  it('lets the owner publish a version, and reads it back', async () => {
+    expect((await acmeReq('/verticals/helpdesk/versions', 'POST', version(v1, 'helpdesk'))).status).toBe(201);
+    const versions = await (await acmeReq('/verticals/helpdesk/versions')).json();
+    expect(versions.map((v: { id: string }) => v.id)).toEqual([v1]);
+  });
+
+  it('keeps admission staff-only — a builder cannot admit its own version', async () => {
+    // admit is not on the builder allowlist → 403 (the confinement, not an ownership check).
+    expect((await acmeReq(`/verticals/helpdesk/versions/${v1}/admit`, 'POST')).status).toBe(403);
+    // Staff admit it (model B: the human gate).
+    expect((await staffReq(`/verticals/helpdesk/versions/${v1}/admit`, 'POST')).status).toBe(200);
+  });
+
+  it('lets the owner self-serve non-prod, but keeps prod a staff decision', async () => {
+    // dev/staging: the builder promotes its own admitted version.
+    expect((await acmeReq('/verticals/helpdesk/channels/dev/promote', 'POST', { versionId: v1 })).status).toBe(200);
+    expect((await acmeReq('/verticals/helpdesk/channels/staging/promote', 'POST', { versionId: v1 })).status).toBe(200);
+    // prod: staff-only, even for the owner.
+    expect((await acmeReq('/verticals/helpdesk/channels/prod/promote', 'POST', { versionId: v1 })).status).toBe(403);
+    // Staff can promote to prod.
+    expect((await staffReq('/verticals/helpdesk/channels/prod/promote', 'POST', { versionId: v1 })).status).toBe(200);
+    // A non-owner cannot promote helpdesk at all.
+    expect((await otherReq('/verticals/helpdesk/channels/dev/promote', 'POST', { versionId: v1 })).status).toBe(403);
+  });
+
+  it('claims a slug through the deploy/push path too, and refuses a foreign push', async () => {
+    const fd = new FormData();
+    fd.set('manifest', JSON.stringify({
+      version: '0.1.0', entry: 'worker.js', compatibilityDate: '2025-01-01',
+      doClasses: ['ScopeDO'],
+      bindings: [{ type: 'durable_object_namespace', name: 'SCOPE', class_name: 'ScopeDO' }],
+      digests: { manifest: 'm1', permission: 'p1', migration: 'g1' },
+    }));
+    fd.set('worker.js', new Blob(['export default {}'], { type: 'application/javascript+module' }), 'worker.js');
+    const push = (t: string) => app.request('/verticals/reports/deploy', { method: 'POST', headers: { [BUILDER_HEADER]: t }, body: fd });
+
+    const res = await push(acme);
+    expect(res.status).toBe(201);
+    // The pushed slug is now owned by acme...
+    expect((await (await acmeReq('/verticals')).json()).map((v: { slug: string }) => v.slug).sort()).toEqual(['helpdesk', 'reports']);
+    // ...so a different tenant's push to the same slug is refused (claim-on-first-push).
+    expect((await push(other)).status).toBe(403);
+  });
+});

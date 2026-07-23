@@ -1,4 +1,4 @@
-import { platformActorId, type PlatformActorId } from '@substrat-run/contracts';
+import { platformActorId, type PlatformActorId, type TenantId } from '@substrat-run/contracts';
 
 /**
  * The identity seam for the control plane (control-plane.md §6).
@@ -135,3 +135,48 @@ export function staffAllowlist(
   const map = new Map(entries.map((e) => [e.email.toLowerCase(), e.actor]));
   return (identity) => map.get(identity.email.toLowerCase()) ?? null;
 }
+
+// -- the builder principal (builder-plane.md §4) -----------------------------
+//
+// The control-plane API was one gate: staff (cross-tenant) or a service token.
+// The builder plane adds a SECOND principal kind — a *tenant user* acting on
+// behalf of a tenant they belong to — to the same surface. A builder manages only
+// the verticals their tenant OWNS (the `owner_tenant` column, Phase 1b); staff
+// remain a superset that can act on any vertical.
+
+/**
+ * A tenant user resolved from an authenticated request — the builder-plane mirror
+ * of `StaffIdentity`/`PlatformActorId`.
+ *
+ * `actor` is the audited subject (a stable `PlatformActorId` per builder user — the
+ * admin log names WHO acted, §4.4, and a builder is as nameable as staff). `tenantId`
+ * is the SELECTED tenant they act for; ownership authz is `vertical.ownerTenant ===
+ * tenantId`. Both are supplied by whatever resolves the session → user → tenant (the
+ * dashboard's `listIdentityTenants` narrowed to the chosen tenant), so this package
+ * holds no identity provider — the same swappable-adapter seam D-16 commits to.
+ */
+export interface BuilderIdentity {
+  actor: PlatformActorId;
+  tenantId: TenantId;
+}
+
+/**
+ * Resolves a request to a builder principal, or null to decline. The tenant-user
+ * counterpart of `PlatformActorAuth`. Null is not an error — it means "not a builder
+ * session", and the surface falls through to fail-closed (no staff, no builder → 401).
+ */
+export type BuilderAuth = (
+  request: Request,
+) => Promise<BuilderIdentity | null> | BuilderIdentity | null;
+
+/**
+ * Who is acting on the control-plane surface, once authenticated.
+ *
+ * `staff` has cross-tenant reach (the console, service registration). `builder` is
+ * narrowed: it may only reach the vertical-management subset, and only for verticals
+ * its `tenantId` owns. The distinction is carried here, not by the actor-id brand —
+ * `actor` is just "the audited subject", staff or builder alike.
+ */
+export type Principal =
+  | { kind: 'staff'; actor: PlatformActorId }
+  | { kind: 'builder'; actor: PlatformActorId; tenantId: TenantId };
