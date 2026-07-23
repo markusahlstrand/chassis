@@ -7,7 +7,7 @@ import { Avatar } from '../components/DashShell';
 import { Page } from '../components/layout';
 import { card, MonoTag, PageTitle, Pill } from '../components/ui';
 
-const COLS = '2.4fr 1fr 1fr 1fr 90px';
+const COLS = '2.4fr 1fr 1fr 1fr 140px';
 const STATUS: Record<Member['status'], { kind: 'success' | 'warning' | 'neutral'; label: string }> = {
   active: { kind: 'success', label: 'Active' },
   invited: { kind: 'warning', label: 'Invited' },
@@ -44,6 +44,7 @@ export function Team({
   meEmail,
   canManage,
   onInvite,
+  onResend,
   onRevoke,
   onRemove,
 }: {
@@ -51,6 +52,7 @@ export function Team({
   meEmail: string;
   canManage: boolean;
   onInvite: (email: string, roleKey: InviteRole) => Promise<{ acceptUrl: string } | void>;
+  onResend: (invitationId: string) => void;
   onRevoke: (invitationId: string) => void;
   onRemove: (memberId: string) => void;
 }) {
@@ -116,13 +118,22 @@ export function Team({
               <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{fmtDate(m.joined_at ?? m.invited_at)}</span>
               <span style={{ textAlign: 'right' }}>
                 {canManage && m.status === 'invited' && m.invitation_id && (
-                  <button
-                    type="button"
-                    onClick={() => onRevoke(m.invitation_id!)}
-                    style={{ border: 0, background: 'transparent', color: 'var(--status-danger-fg)', fontSize: 12.5, cursor: 'pointer', padding: 4 }}
-                  >
-                    Revoke
-                  </button>
+                  <span style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={() => onResend(m.invitation_id!)}
+                      style={{ border: 0, background: 'transparent', color: 'var(--text-secondary)', fontSize: 12.5, cursor: 'pointer', padding: 4 }}
+                    >
+                      Resend
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRevoke(m.invitation_id!)}
+                      style={{ border: 0, background: 'transparent', color: 'var(--status-danger-fg)', fontSize: 12.5, cursor: 'pointer', padding: 4 }}
+                    >
+                      Revoke
+                    </button>
+                  </span>
                 )}
                 {canManage && m.status === 'active' && m.role_key !== 'owner' && !you && (
                   <button

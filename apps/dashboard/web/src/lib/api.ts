@@ -155,6 +155,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, roleKey }),
     }),
+  /** Re-send a pending invite's email; returns the (possibly refreshed) link + whether it was accepted for delivery. */
+  resendInvite: (invitationId: string) =>
+    call<{ invitationId: string; acceptUrl: string; emailDelivered: boolean }>('/members/resend-invite', {
+      method: 'POST',
+      body: JSON.stringify({ invitationId }),
+    }),
   /** Withdraw a pending invite. */
   revokeInvite: (invitationId: string) =>
     call<void>('/members/revoke-invite', { method: 'POST', body: JSON.stringify({ invitationId }) }),
