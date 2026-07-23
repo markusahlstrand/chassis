@@ -14,7 +14,7 @@ import { HTTPException } from 'hono/http-exception';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { principalId, scopeId, tenantId, orgId, platformActorId, connectionId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
-import { ulid, type ScopeHost } from '@substrat-run/kernel';
+import { ulid, webCryptoSecretBox, type ScopeHost, type SecretBox } from '@substrat-run/kernel';
 import { protocolModule } from '@substrat-run/engine-protocol';
 import { workorderModule } from '@substrat-run/engine-workorder';
 import { invoicingModule } from '@substrat-run/engine-invoicing';
@@ -106,6 +106,16 @@ interface Env extends OidcEnv {
   GITHUB_APP_ID?: string;
   GITHUB_APP_SLUG?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
+  /**
+   * The AES-256 key that seals stored connection credentials (connections.md §3.3).
+   * base64 of 32 bytes (`openssl rand -base64 32`). A DEDICATED secret — never derived
+   * from SESSION_SECRET, so the two rotate independently; rotating this without keeping
+   * the old key makes existing sealed credentials unreadable. Absent ⇒ the host fails
+   * closed on any credential write (no plaintext fallback). `SECRET_BOX_KEY_ID` labels
+   * the key for rotation (stored per-ciphertext); defaults to `sb1`.
+   */
+  SECRET_BOX_KEY?: string;
+  SECRET_BOX_KEY_ID?: string;
 }
 
 const DASHBOARD_CP_ACTOR = platformActorId.parse('01JZ000000000000000000DASH');
@@ -127,9 +137,18 @@ function controlPlaneFor(env: Env, tenantId: DashboardNode['tenantId']): TenantN
   });
 }
 
+/** The AES-256 SecretBox that seals connection credentials, or undefined when unset
+ *  (the host then fails closed on any credential write — never stores plaintext). */
+function secretBoxFor(env: Env): SecretBox | undefined {
+  if (!env.SECRET_BOX_KEY) return undefined;
+  const key = b64urlToBytes(env.SECRET_BOX_KEY.trim());
+  if (key.length !== 32) throw new Error(`SECRET_BOX_KEY must decode to 32 bytes (got ${key.length}) — use \`openssl rand -base64 32\``);
+  return webCryptoSecretBox(env.SECRET_BOX_KEY_ID ?? 'sb1', key);
+}
+
 /** The coordinator is stateless — rebuilt per request; durable state lives in the DOs + D1. */
 function hostFor(env: Env): CloudflareScopeHost {
-  const host = new CloudflareScopeHost({ scope: env.SCOPE, controlPlane: env.CONTROL_PLANE });
+  const host = new CloudflareScopeHost({ scope: env.SCOPE, controlPlane: env.CONTROL_PLANE, secretBox: secretBoxFor(env) });
   for (const m of MODULES) host.registerModule(m);
   return host;
 }
