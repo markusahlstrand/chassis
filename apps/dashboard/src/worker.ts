@@ -448,6 +448,49 @@ app.get('/api/members', async (c) => {
  * recorded invite; the returned `acceptUrl` lets the inviter share the link manually
  * and is what a resend would use.
  */
+/**
+ * Mint a fresh accept link for an invitation and mail it to the invitee. Shared by
+ * the initial invite and the resend button: both send the SAME message with the raw
+ * address (only ever in hand host-side) and a freshly-signed 14-day token. Delivery is
+ * best-effort — the invitation is already committed, so a send failure is reported
+ * (`emailDelivered: false`), never thrown, and the returned `acceptUrl` is always a
+ * shareable fallback. Cloudflare Email Service is asynchronous, so a successful send
+ * lands the recipient in `queued` (accepted, in flight), not `delivered` — count either.
+ */
+async function mailInvite(
+  env: Env,
+  host: ScopeHost,
+  origin: string,
+  node: DashboardNode,
+  inviterName: string | null | undefined,
+  to: string,
+  invitationId: string,
+): Promise<{ acceptUrl: string; emailDelivered: boolean }> {
+  const token = await signInviteToken(env, {
+    tenantId: node.tenantId,
+    scopeId: node.scopeId,
+    invitationId,
+  });
+  const acceptUrl = `${origin}/invite/${token}`;
+  const team = await host.admin.getTenant(STAFF, node.tenantId);
+  let emailDelivered = false;
+  try {
+    const result = await transportFor(env).send(
+      teamInviteEmail({
+        to,
+        from: senderFor(env),
+        teamName: team?.name ?? 'your team',
+        inviterName,
+        acceptUrl,
+      }),
+    );
+    emailDelivered = result.delivered.length + result.queued.length > 0;
+  } catch (err) {
+    console.error('invite email send failed:', err instanceof Error ? err.message : err);
+  }
+  return { acceptUrl, emailDelivered };
+}
+
 const inviteMemberBody = z.object({
   email: z.string().trim().min(1),
   roleKey: z.enum(['admin', 'member', 'viewer']),
@@ -461,32 +504,46 @@ app.post('/api/members/invite', async (c) => {
   const body = inviteMemberBody.parse(await c.req.json());
   const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
   const { invitationId } = (await scope.invoke('dashboard/invite-member', body)) as { invitationId: string };
-  const token = await signInviteToken(c.env, {
-    tenantId: node.tenantId,
-    scopeId: node.scopeId,
+  const { acceptUrl, emailDelivered } = await mailInvite(
+    c.env,
+    host,
+    new URL(c.req.url).origin,
+    node,
+    user.name,
+    body.email,
     invitationId,
-  });
-  const acceptUrl = `${new URL(c.req.url).origin}/invite/${token}`;
-
-  const team = await host.admin.getTenant(STAFF, node.tenantId);
-  let emailDelivered = false;
-  try {
-    const result = await transportFor(c.env).send(
-      teamInviteEmail({
-        to: body.email,
-        from: senderFor(c.env),
-        teamName: team?.name ?? 'your team',
-        inviterName: user.name,
-        acceptUrl,
-      }),
-    );
-    emailDelivered = result.delivered.length > 0;
-  } catch (err) {
-    // A committed invite with a failed email is recoverable (resend); a thrown 500
-    // that hides the invitationId is not. Log and report, don't fail the request.
-    console.error('invite email send failed:', err instanceof Error ? err.message : err);
-  }
+  );
   return c.json({ invitationId, acceptUrl, emailDelivered }, 201);
+});
+
+/**
+ * Re-send a pending invite's email — the resend button. Re-mints the accept link and
+ * mails it again to the address kept in the readable roster (the invites engine stores
+ * only a hash). The in-scope op re-checks manage-members + the §5.1 role bound and
+ * refreshes a lapsed invitation; a 404 means there is no such pending invite to resend.
+ */
+app.post('/api/members/resend-invite', async (c) => {
+  const host = hostFor(c.env);
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const { invitationId } = z.object({ invitationId: z.string().min(1) }).parse(await c.req.json());
+  const scope = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const resent = (await scope.invoke('dashboard/resend-invite', { invitationId })) as
+    | { invitationId: string; email: string; roleKey: string }
+    | null;
+  if (!resent) throw new HTTPException(404, { message: 'no such pending invite' });
+  const { acceptUrl, emailDelivered } = await mailInvite(
+    c.env,
+    host,
+    new URL(c.req.url).origin,
+    node,
+    user.name,
+    resent.email,
+    resent.invitationId,
+  );
+  return c.json({ invitationId: resent.invitationId, acceptUrl, emailDelivered });
 });
 
 /** Withdraw a pending invite from the current team. */

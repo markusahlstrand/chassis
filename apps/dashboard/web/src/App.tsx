@@ -351,6 +351,29 @@ export function App() {
     [reloadMembers],
   );
 
+  // Resend a pending invite's email. The link may be refreshed (a lapsed invitation is
+  // renewed), so reload the roster to pick up the new id. Dev-preview just toasts.
+  const resendInvite = useCallback(
+    async (invitationId: string) => {
+      try {
+        if (!DEV_MOCK) {
+          const res = await api.resendInvite(invitationId);
+          await reloadMembers();
+          setToast(
+            res.emailDelivered
+              ? { status: 'success', title: 'Invite re-sent' }
+              : { status: 'danger', title: 'Invite re-sent, but email delivery failed', detail: 'Share the link manually — check the email sending setup.' },
+          );
+        } else {
+          setToast({ status: 'success', title: 'Invite re-sent' });
+        }
+      } catch (e) {
+        setToast({ status: 'danger', title: 'Could not resend invite', detail: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [reloadMembers],
+  );
+
   const removeMember = useCallback(
     async (memberId: string) => {
       try {
@@ -431,6 +454,7 @@ export function App() {
           meEmail={me.email ?? ''}
           canManage={['owner', 'admin'].includes(members.find((m) => m.principal === me.principal)?.role_key ?? 'owner')}
           onInvite={inviteMember}
+          onResend={(id) => void resendInvite(id)}
           onRevoke={(id) => void revokeInvite(id)}
           onRemove={(id) => void removeMember(id)}
         />

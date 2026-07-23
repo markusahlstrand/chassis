@@ -184,6 +184,46 @@ describe('Dashboard teams — invite + accept', () => {
     expect((await members(acme)).find((m) => m.role_key === 'owner')).toBeDefined();
   });
 
+  it('resending a pending invite keeps the same id + address and stays acceptable', async () => {
+    const acme = await makeTeam('acme8', 'owner@acme8.com');
+    const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    const { invitationId } = await ownerScope.invoke<{ invitationId: string }>('dashboard/invite-member', {
+      email: 'rae@acme8.com',
+      roleKey: 'member',
+    });
+
+    // Resend: the still-open invitation is idempotent, so the id + address come back
+    // unchanged and no duplicate roster row appears.
+    const resent = await ownerScope.invoke<{ invitationId: string; email: string; roleKey: string } | null>(
+      'dashboard/resend-invite',
+      { invitationId },
+    );
+    expect(resent).toMatchObject({ invitationId, email: 'rae@acme8.com', roleKey: 'member' });
+    expect((await members(acme)).filter((m) => m.email === 'rae@acme8.com')).toHaveLength(1);
+
+    // The invitation the resend points at still accepts with the matching email.
+    const rae = principalId.parse(ulid());
+    const raeScope = await host.getScope(rae, acme.tenantId, acme.scopeId);
+    const res = await raeScope.invoke<{ roleKey: string }>('dashboard/accept-invite', {
+      invitationId: resent!.invitationId,
+      identifier: 'rae@acme8.com',
+    });
+    expect(res.roleKey).toBe('member');
+  });
+
+  it('resending a non-existent (or already settled) invite returns null', async () => {
+    const acme = await makeTeam('acme9', 'owner@acme9.com');
+    const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    const { invitationId } = await ownerScope.invoke<{ invitationId: string }>('dashboard/invite-member', {
+      email: 'nel@acme9.com',
+      roleKey: 'viewer',
+    });
+    await ownerScope.invoke('dashboard/revoke-invite', { invitationId });
+    // The row is no longer 'invited', so there is nothing to resend.
+    await expect(ownerScope.invoke('dashboard/resend-invite', { invitationId })).resolves.toBeNull();
+    await expect(ownerScope.invoke('dashboard/resend-invite', { invitationId: ulid() })).resolves.toBeNull();
+  });
+
   it('a revoked invite drops out of the roster and cannot be accepted', async () => {
     const acme = await makeTeam('acme4', 'owner@acme4.com');
     const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);

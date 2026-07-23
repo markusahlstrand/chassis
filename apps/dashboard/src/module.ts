@@ -356,6 +356,50 @@ const acceptInviteOp: OperationHandler<z.infer<typeof acceptInviteInput>, { role
   return { roleKey: invitation.role_key };
 };
 
+const resendInviteInput = z.object({ invitationId: z.string().min(1) });
+
+/**
+ * Re-send a pending invitation. The raw address the invites engine deliberately
+ * hashes away still lives in this readable roster row, so a resend needs no new
+ * input — it re-composes `sendInvite` with the stored email + role. That call is
+ * idempotent for a still-open invitation (returns the same id) and mints a fresh
+ * one if the old lapsed; either way the projection is re-pointed at the live
+ * invitation so accept keeps working. Re-checks the §5.1 role bound (as the
+ * initial invite does) so a since-downgraded admin cannot re-mint above their own
+ * authority. Returns the address + role + live id for the worker to re-mail, or
+ * null when there is no such pending invite.
+ */
+const resendInviteOp: OperationHandler<
+  z.infer<typeof resendInviteInput>,
+  { invitationId: string; email: string; roleKey: string } | null
+> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.manageMembers));
+  const input = resendInviteInput.parse(raw);
+  const row = ctx.sql.query<DashboardMemberRow>(
+    `SELECT * FROM dashboard_members WHERE invitation_id = ? AND status = 'invited'`,
+    [input.invitationId],
+  )[0];
+  if (!row) return null;
+
+  const perms = MEMBER_ROLES[row.role_key];
+  if (!perms) throw new Error(`unknown role '${row.role_key}'`);
+  for (const perm of perms) assertAllowed(await ctx.check(perm));
+
+  const team = ctx.sql.query<{ org_id: string }>('SELECT org_id FROM dashboard_team LIMIT 1')[0];
+  if (!team) throw new Error('team not initialised');
+
+  const { id: invitationId } = await sendInvite(ctx, {
+    orgId: team.org_id as unknown as OrgId,
+    identifier: row.email,
+    roleKey: row.role_key,
+  });
+  // A lapsed invitation yields a fresh id; keep the projection pointing at the live one.
+  if (invitationId !== row.invitation_id) {
+    ctx.sql.exec('UPDATE dashboard_members SET invitation_id = ? WHERE id = ?', [invitationId, row.id]);
+  }
+  return { invitationId, email: row.email, roleKey: row.role_key };
+};
+
 const revokeInviteInput = z.object({ invitationId: z.string().min(1) });
 
 /** Withdraw a pending invite (composes the engine's revoke) + drop it from the roster. */
@@ -420,6 +464,7 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/init-team': initTeamOp as OperationHandler<never, unknown>,
     'dashboard/invite-member': inviteMemberOp as OperationHandler<never, unknown>,
     'dashboard/accept-invite': acceptInviteOp as OperationHandler<never, unknown>,
+    'dashboard/resend-invite': resendInviteOp as OperationHandler<never, unknown>,
     'dashboard/revoke-invite': revokeInviteOp as OperationHandler<never, unknown>,
     'dashboard/list-members': listMembersOp as OperationHandler<never, unknown>,
     'dashboard/remove-member': removeMemberOp as OperationHandler<never, unknown>,
