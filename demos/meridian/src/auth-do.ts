@@ -48,6 +48,13 @@ const SCHEMA_STATEMENTS: string[] = [
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)))`,
   `CREATE INDEX IF NOT EXISTS verification_identifier_idx ON verification (identifier)`,
+  // The PROVIDER-AGNOSTIC identity directory: a verified subject (`sub`) → the Substrat
+  // PrincipalId it maps to, per scope (K-22 — the same login is a different principal in
+  // each scope). Written when a login claims the instance; read on every request after.
+  // Independent of WHICH provider verified the subject (Better Auth here, or an OIDC issuer).
+  `CREATE TABLE IF NOT EXISTS identity (scope_id TEXT NOT NULL, sub TEXT NOT NULL, principal TEXT NOT NULL, PRIMARY KEY (scope_id, sub))`,
+  // The owner seat waiting to be claimed: set at provision, consumed by the first login.
+  `CREATE TABLE IF NOT EXISTS pending_owner (scope_id TEXT PRIMARY KEY, principal TEXT NOT NULL)`,
 ];
 
 interface AuthDoEnv {
@@ -60,6 +67,35 @@ export class AuthDO extends DurableObject<AuthDoEnv> {
     ctx.blockConcurrencyWhile(async () => {
       for (const stmt of SCHEMA_STATEMENTS) ctx.storage.sql.exec(stmt);
     });
+  }
+
+  /**
+   * Record the owner seat to be claimed by the first login into this scope (called at
+   * provision). Provider-agnostic — the subject that later claims it may come from Better
+   * Auth or an OIDC issuer.
+   */
+  async setPendingOwner(scopeId: string, principal: string): Promise<void> {
+    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO pending_owner (scope_id, principal) VALUES (?, ?)', scopeId, principal);
+  }
+
+  /**
+   * Map a verified subject to a PrincipalId in this scope. If already bound, return it. If
+   * not, and the scope's owner seat is unclaimed, CLAIM it: bind this subject to the owner
+   * principal (the installer becomes `hr-admin`) and consume the pending seat. Otherwise
+   * return null — a stranger with a valid login but no seat has no access.
+   */
+  async resolvePrincipal(scopeId: string, sub: string): Promise<string | null> {
+    const bound = [...this.ctx.storage.sql.exec('SELECT principal FROM identity WHERE scope_id = ? AND sub = ?', scopeId, sub)][0] as
+      | { principal: string }
+      | undefined;
+    if (bound) return bound.principal;
+    const pending = [...this.ctx.storage.sql.exec('SELECT principal FROM pending_owner WHERE scope_id = ?', scopeId)][0] as
+      | { principal: string }
+      | undefined;
+    if (!pending) return null;
+    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO identity (scope_id, sub, principal) VALUES (?, ?, ?)', scopeId, sub, pending.principal);
+    this.ctx.storage.sql.exec('DELETE FROM pending_owner WHERE scope_id = ?', scopeId);
+    return pending.principal;
   }
 
   /** A Better Auth instance over THIS DO's SQLite, trusting the caller's origin. */

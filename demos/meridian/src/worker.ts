@@ -24,20 +24,17 @@ import {
   readRoutedNode,
   RouterAssertionError,
 } from '@substrat-run/kernel';
+import type { PrincipalId } from '@substrat-run/contracts';
 import { MODULES, ROLES } from './provision.js';
 import { serveAsset } from './assets.js';
-import {
-  devHeaderAdapter,
-  resolvePrincipal,
-  type AuthAdapter,
-  type CompanyNode,
-} from './auth-adapters.js';
+import type { CompanyNode } from './auth-adapters.js';
 import { AuthDO, doAuthProvider } from './auth-do.js';
+import { oidcAuthProvider } from './auth-oidc.js';
 import type { AuthProvider } from './auth-provider.js';
 
 /** The scope-DO class = the app binary: kernel + protocol + Meridian, bundled. */
 export const ScopeDO = defineScopeDO(MODULES, {});
-/** The per-tenant auth DO — Better Auth over its own SQLite, behind the AuthProvider contract. */
+/** The per-tenant identity DO — the sub→principal directory, and Better Auth when that provider is chosen. */
 export { AuthDO };
 
 // A fixed dev node (valid ULIDs). Behind the router the node comes from the resolved
@@ -54,7 +51,16 @@ interface Env {
   // tenant). No shared D1 `AUTH_DB`, no CONTROL_PLANE binding, no service binding — all
   // refused by assertSandboxContract. AUTH being an OWN class is what keeps it legal.
   SCOPE: DurableObjectNamespace;
-  AUTH: DurableObjectNamespace;
+  AUTH: DurableObjectNamespace<AuthDO>;
+  /**
+   * Which auth the app runs — the config section. `better-auth-do` (default): Better Auth
+   * in the per-tenant AUTH DO. `oidc`: verify a bearer token against an OIDC issuer
+   * (`OIDC_ISSUER` [+ `OIDC_AUDIENCE`]) — covers Supabase, Auth0, AuthHero, Keycloak, …
+   * The app never changes; only this config + the provider behind the contract does.
+   */
+  AUTH_PROVIDER?: string;
+  OIDC_ISSUER?: string;
+  OIDC_AUDIENCE?: string;
   /** The built SPA is inlined into the worker (src/assets.ts) — no ASSETS binding here. */
   BETTER_AUTH_SECRET?: string;
   BASE_URL?: string;
@@ -99,27 +105,42 @@ function hostFor(env: Env): CloudflareScopeHost {
 
 const originOf = (req: Request): string => new URL(req.url).origin;
 
-/**
- * The `AuthProvider` for this request — the tenant's own `AuthDO` (Better Auth over its
- * own DO SQLite), addressed by tenant id, behind the contract. The worker never imports
- * Better Auth on the request path; it holds a stub and talks `handle` / `resolve`.
- */
-function authProviderFor(env: Env, req: Request): AuthProvider {
-  const node = nodeFor(req, env);
-  const id = env.AUTH.idFromName(node.tenantId);
-  return doAuthProvider(env.AUTH.get(id), originOf(req));
+/** The tenant's identity DO stub — the sub→principal directory (and Better Auth, if chosen). */
+function identityDo(env: Env, node: CompanyNode) {
+  return env.AUTH.get(env.AUTH.idFromName(node.tenantId));
 }
 
 /**
- * The op-invocation auth seam. SPIKE scope: the dev-header (local) resolves a principal
- * for `/api/invoke`. Mapping a real AuthDO subject → principal (owner-linking) is the next
- * step and is deliberately out of this spike — the spike proves the AuthDO + contract, via
- * the `/api/auth/*` flow and `/api/session`.
+ * The `AuthProvider` for this request, chosen by CONFIG — the whole point of the contract.
+ * `oidc` verifies a bearer token against the configured issuer (Supabase / Auth0 / AuthHero
+ * / Keycloak); default `better-auth-do` runs Better Auth in the tenant's AUTH DO. The app
+ * never learns which; it only ever holds an `AuthProvider`.
  */
-function adaptersFor(env: Env): AuthAdapter[] {
-  const adapters: AuthAdapter[] = [];
-  if (env.ALLOW_DEV_HEADER === 'true') adapters.push(devHeaderAdapter());
-  return adapters;
+function authProviderFor(env: Env, req: Request): AuthProvider {
+  if ((env.AUTH_PROVIDER ?? 'better-auth-do') === 'oidc') {
+    if (!env.OIDC_ISSUER) throw new HTTPException(500, { message: 'AUTH_PROVIDER=oidc but OIDC_ISSUER is unset' });
+    return oidcAuthProvider({ issuer: env.OIDC_ISSUER, ...(env.OIDC_AUDIENCE ? { audience: env.OIDC_AUDIENCE } : {}) });
+  }
+  return doAuthProvider(identityDo(env, nodeFor(req, env)), originOf(req));
+}
+
+/**
+ * Resolve the caller to a PrincipalId for op invocation, PROVIDER-AGNOSTICALLY: the dev
+ * header (local only), else the configured provider verifies the request → a subject, and
+ * the tenant's identity DO maps that subject → a principal in this scope (claiming the
+ * owner seat on first login). Null ⇒ nobody (fail closed).
+ */
+async function principalFor(env: Env, req: Request): Promise<PrincipalId | null> {
+  if (env.ALLOW_DEV_HEADER === 'true') {
+    const raw = req.headers.get('x-principal');
+    const parsed = raw ? principalId.safeParse(raw) : null;
+    if (parsed?.success) return parsed.data;
+  }
+  const subject = await authProviderFor(env, req).resolve(req.headers);
+  if (!subject) return null;
+  const node = nodeFor(req, env);
+  const principal = await identityDo(env, node).resolvePrincipal(node.scopeId, subject.sub);
+  return principal ? principalId.parse(principal) : null;
 }
 
 const provisionInstanceBody = z.object({
@@ -161,23 +182,27 @@ app.post('/internal/provision', async (c) => {
     roles: ROLES,
     ownerRoleKey: 'hr-admin',
   });
+  // Record the owner seat: whoever first signs in and reaches this scope claims it (becomes
+  // hr-admin), whichever provider verifies them. This is how a provisioned instance becomes
+  // usable by a real login without the platform knowing the login's subject up front.
+  await identityDo(c.env, { tenantId: body.tenantId, scopeId: body.scopeId }).setPendingOwner(body.scopeId, body.owner);
   return c.json({ tenantId: body.tenantId, scopeId: body.scopeId, owner: body.owner }, 201);
 });
 
-/** Resolve the caller across the mounted adapters → the routed node → a scope stub. 401 if none. */
+/** Resolve the caller (any provider) → the routed node → a scope stub. 401 if nobody. */
 async function stub(c: { env: Env; req: { raw: Request } }) {
   const node = nodeFor(c.req.raw, c.env);
-  const result = await resolvePrincipal(adaptersFor(c.env), c.req.raw.headers);
-  if (!result) throw new HTTPException(401, { message: 'unauthorized' });
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   // CP-less: lifecycle is the router's gate — it forwards only an active scope and asserts
   // the node. The vertical trusts that node and opens the scope; permissions evaluate locally.
-  return hostFor(c.env).getScope(result.principal, node.tenantId, node.scopeId);
+  return hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
 }
 
 app.get('/api/me', async (c) => {
-  const result = await resolvePrincipal(adaptersFor(c.env), c.req.raw.headers);
-  if (!result) return c.json({ error: 'unauthorized' }, 401);
-  return c.json({ principal: result.principal, via: result.via, display: result.display });
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) return c.json({ error: 'unauthorized' }, 401);
+  return c.json({ principal });
 });
 
 // Generic invoke: the kernel checks the permission inside every operation, so a generic
