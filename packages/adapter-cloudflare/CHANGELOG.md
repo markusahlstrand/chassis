@@ -1,5 +1,116 @@
 # @substrat-run/adapter-cloudflare
 
+## 0.12.0
+
+### Minor Changes
+
+- 73c0cdb: **A vertical now records its owning tenant (builder-plane.md Phase 1b).** The registry
+  gains an `owner_tenant` column: `NULL` = platform-owned (Callout, the dashboard), a value
+  = the tenant that pushed it. Ownership is the gate a later phase checks for who may push
+  new versions and manage a vertical's non-prod channels.
+
+  - **`vertical.ownerTenant`** (contracts) — nullable branded `TenantId`; `registerVerticalInput`
+    takes it optional (defaults to `null`, so a staff/platform push keeps passing
+    `{slug, name, source}` unchanged).
+  - **Migration in each adapter** — `owner_tenant TEXT` added idempotently to the `verticals`
+    table (`ensureDirectoryColumns` in sqlite, `addColumn` in `control-plane-do`), so an
+    existing directory backfills to platform-owned.
+  - **Claim-on-first-push** — `registerVertical` fixes a slug's owner at first push: a later
+    registration under a _different_ owner (or an attempt to claim a platform vertical) is
+    refused, naming both owners. Identical re-registration stays idempotent.
+
+  The `<tenant>/<name>` slug prefix that keeps builder slugs globally unique is constructed at
+  push time in a later phase; this change is the ownership column + claim mechanism it rests on.
+
+  Verified: sqlite (147) + cloudflare (146) suites pass, including a new shared assertion that
+  a registered owner round-trips through `listVerticals` and that a conflicting owner is refused.
+
+- aa786b7: **Scope-local permissions, Phase 1 — the ScopeDO can evaluate permissions from its own storage (docs/design/scope-local-permissions.md).**
+
+  The read side of taking the shared control-plane DO off the request hot path. Behaviour-preserving on its own: a scope's `permission_source` defaults to `control-plane`, so the existing RPC path is used unchanged — this only makes the local path _possible_, for Phase 2 to activate.
+
+  - **`createLocalControlPlaneReader(sql)`** (`checker.ts`) — a `ControlPlaneReader` backed by two new ScopeDO tables (`_substrat_tenant_tuples`, `_substrat_roles`) instead of an RPC to the singleton directory. Returns the same rows the RPC reader does (the checker's `live()` filter still drops tombstoned/expired); an empty projection yields `[]` / `undefined`, i.e. **deny — fail closed**. A tombstoned role definition reads as absent.
+  - **The checker's reader is chosen per call** — `local` once a scope is projected (or whenever there is no `CONTROL_PLANE` binding to read, for a CP-less vertical), else RPC. Reading the marker is a cheap local indexed lookup; the source can flip at runtime.
+  - **Projection write primitives** on the ScopeDO — `projectRole`, `revokeProjectedRole`, `projectTenantTuple`, `setPermissionSource` — the surface the coordinator's fan-out will call in Phase 2.
+  - **`CONTROL_PLANE` is now optional** on the ScopeDO env (a projected / CP-less scope needs no binding).
+
+  Verified: the full adapter permission + scope-host contract suites pass **unchanged** (RPC parity), plus new tests proving the local reader is parity with RPC, that a tombstoned projection stops granting (K-21), and that flipping a scope to `local` with nothing projected **denies even where RPC would allow** (the load-bearing fail-closed property).
+
+- d83f521: **Scope-local permissions, Phase 2 — projection on write (docs/design/scope-local-permissions.md).**
+
+  The write side that activates Phase 1's local reader: the coordinator projects a tenant's roles + tenant-level tuples INTO its scopes, so they evaluate permissions from their own storage and the shared control-plane DO leaves the request hot path. Behind a **default-off** flag, so behaviour is unchanged until a deployment opts in.
+
+  - **`CloudflareScopeHostOptions.scopeLocalPermissions`** (default `false`). On: every tenant-level write **fans out** the tenant's current role/tuple state into all its scopes, and a newly-provisioned scope is projected + flipped to local from the start.
+  - **Fan-out is a full re-sync** (`applyProjection` replaces a scope's projected set), hooked after every tenant-level mutation — `defineRole`, tenant `assignRole`/`grant`/`grantToOrg`, `addMember`/`removeMember`. Uniform, so it cannot miss a mutation type; a scope-level assignment/grant/entity write stays a local scope tuple and needs no fan-out.
+  - **`reconcileTenantProjection(tenantId)`** — the reconciliation sweep + the back-fill for scopes provisioned before the flag was on. Idempotent full replace, safe on a schedule or on demand; the backstop for any dropped fan-out (a revoke that didn't propagate).
+  - **`ControlPlaneDO.dumpTenantTuples`** — reads a tenant's full tuple set (incl tombstones) for the projection.
+
+  Consistency: scope-level grants stay synchronous + immediately consistent; only tenant-level changes are eventually consistent across a tenant's scopes (bounded by the fan-out + sweep) — the trade the RFC makes (role changes are rare, requests constant).
+
+  Verified: the RPC permission + scope-host contract suites pass **unchanged** (flag off), plus new fan-out tests — a tenant role reaching scopes that existed _before_ it was assigned, scope-role confinement, org-membership + org-grant fan-out, a membership tombstone fanning out to deny, and `reconcileTenantProjection` repairing a deliberately-drifted scope.
+
+- 0ae7d0f: **Scope-local permissions, Phase 3a — a control-plane-optional host (the CP-less vertical enabler).**
+
+  The reusable capability behind an untrusted / scope-local vertical (docs/design/scope-local-permissions.md): a `CloudflareScopeHost` that runs with **no control plane at all**.
+
+  - **`CloudflareScopeHostOptions.controlPlane` is now optional.** Absent, the host uses a **null-object control plane**: the hot path a served scope actually touches becomes trust-the-upstream — `validateScopeAccess` / `setMigrationState` no-op (the router already gated lifecycle + tenancy from the shared directory), `tenantHoldsEntitlement` returns `true` (the SKU was enforced on the shared plane at provision, so a scope that exists here was granted it), and audit no-ops (the shared plane owns the spine). Every other directory method throws — that surface genuinely is unavailable.
+  - **`provisionScopeLocal(...)`** — the entry a CP-less vertical's `/internal/provision` calls: migrate the scope's modules, project the vertical's role definitions locally, grant the owner a role at scope level, and evaluate permissions from the scope's own storage. No tenant-level tuples, no control plane.
+
+  Verified: the RPC + fan-out suites pass unchanged, plus new tests — a CP-less host serving an owner's permission from the scope alone (no control plane, entitlement trusted), denying a stranger (fail closed), and the admin directory surface throwing a clear "control plane unavailable".
+
+  Phase 3b makes Callout the first vertical to run on this — dropping its `CONTROL_PLANE` bindings, trusting the router-asserted node, and deploying into the WfP dispatch namespace.
+
+- 518ea07: **Deleting an app reclaims its slug + hostname.** A failed or deleted app used to strand
+  its scope slug and hostname forever — no way to reuse the name.
+
+  - **A deleted app is now ARCHIVED, not suspended** (`deprovisionApp`): archive is the
+    terminal delete state — offline (`getScope` fails closed), record retained (audit), and
+    it _releases_ the name (suspend is reversible, so it keeps it).
+  - **`archiveScope` is allowed from `provisioning`** (both adapters), so a scope whose
+    provisioning never completed (a failed create) can be abandoned instead of stranding
+    its name.
+  - **Slug + hostname uniqueness ignore `archived` scopes** — the scope-slug check excludes
+    archived scopes, and `bindHostname` reclaims a hostname whose holder is archived. So
+    delete → recreate with the same name works, at the same `<name>.<jur>.substrat.run`.
+
+  Verified: adapter suites (146) + dashboard suites (11) pass, including a new assertion
+  that after deleting an app, a new one takes the same slug _and_ the same clean hostname.
+
+### Patch Changes
+
+- 0572a3b: **Typecheck on the native (Go) TypeScript compiler — `typescript` 5.6 → 7.**
+
+  TypeScript 7 (the native compiler, formerly the `tsgo`/`@typescript/native-preview`
+  rewrite) is now GA as `typescript@latest`. The binary is still `tsc`, so every package's
+  `tsc -p … --noEmit` script is unchanged — only the toolchain pin moves. No source or
+  public API changes; this bumps the published packages solely because their build now runs
+  through the native compiler.
+
+  Full-workspace `pnpm -r typecheck` drops to ~3s wall; per-package the native checker is
+  roughly an order of magnitude faster (kernel 1.33s → 0.07s, control-plane-api 1.50s →
+  0.12s, engine-invoicing 0.91s → 0.06s on this machine).
+
+  Two migration deltas TS7's stricter resolution surfaced (both green on 5.6, red on 7):
+
+  - **CSS side-effect imports (`TS2882`).** `import './ui.css'` in the six Vite app/admin
+    surfaces now needs an ambient declaration. Fixed the way `demos/meridian/app` already
+    did it — `"types": ["vite/client"]` in each app `tsconfig.json` (vite/client declares
+    `*.css`) — rather than adding a stray `vite-env.d.ts`.
+  - **`boundary-lint` node globals (`TS2584`/`TS2591`).** The linter CLI's `process`,
+    `console`, and `node:fs`/`node:path` imports stopped resolving because the base tsconfig
+    leaves `types` unset and TS7 no longer implicitly pulls in `@types/node` here. Added an
+    explicit `"types": ["node"]` to `packages/boundary-lint/tsconfig.json`.
+
+  Note: TS7 is a major bump that drops deprecated 5.x behavior. Editors should run their
+  TS Server on 7 to keep CLI and IDE diagnostics aligned.
+
+- Updated dependencies [73c0cdb]
+- Updated dependencies [1dff2bd]
+- Updated dependencies [66e752b]
+- Updated dependencies [0572a3b]
+  - @substrat-run/contracts@0.12.0
+  - @substrat-run/kernel@0.12.0
+
 ## 0.11.0
 
 ### Minor Changes
@@ -504,7 +615,7 @@ surface)` a router asserted in `x-substrat-*` headers and decides whether to tru
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-                      z.object({ facility: entityRef, unitPrice: money })
+                        z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is

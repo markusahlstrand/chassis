@@ -1,36 +1,8 @@
-# @substrat-run/console
+# @substrat-run/dashboard-web
 
 ## 0.1.0
 
 ### Minor Changes
-
-- b4420fb: **Console/control-plane staff sign-in moves from per-app Better Auth to OIDC (AuthHero).**
-
-  Second app in the platform's auth consolidation (the Dashboard was the pilot). The
-  OIDC relying party is now a shared package — `@substrat-run/oidc-rp` — so the
-  security-critical verifier (Authorization-Code + PKCE, ID-token/JWKS verification,
-  signed session cookie; jose + Web Crypto, no `node:*`) is written once and mounted
-  identically by both apps via `mountOidcRoutes`.
-
-  - **control-plane worker**: `/api/auth/login → /callback → /logout` (+ `/session`
-    for the console) replace the Better Auth handler. Staff authentication is now an
-    OIDC session reduced to the provider-agnostic `StaffSessionReader` — exactly the
-    seam the old code predicted. The **staff roster stays** the authorization gate
-    (`staff_actor` in D1); OIDC only proves the email, so an AuthHero user who isn't
-    rostered still gets nothing (fails closed). Dropped `nodejs_compat` and the
-    Better Auth D1 _schema_ (the roster D1 remains). All OIDC config is secrets —
-    nothing environment-specific is checked in.
-  - **console SPA**: sign-in is a redirect into the OIDC flow (no password field);
-    `getSession` polls `/api/auth/session`; sign-out redirects to `/api/auth/logout`.
-  - The `#47` public-signup-gated-by-roster test is removed — under OIDC the control
-    plane has no signup surface at all, so the hole cannot exist; a guard test asserts
-    no sign-up endpoint is exposed.
-
-  The dev harness (`control-plane-api/dev/server.mts`) keeps Better Auth for the
-  optional real-auth-in-dev toggle; the primary local path is the dev actor, which is
-  unaffected.
-
-### Patch Changes
 
 - f2428a9: **The Dashboard UI — the tenant-facing surface, built from the design review (docs/design/dashboard-ui.md).**
 
@@ -70,6 +42,19 @@
   and provisioning each app as a separate deployment via the control plane — until then a bound
   hostname is recorded but does not yet resolve.
 
+### Patch Changes
+
+- b09b120: **Create-app URL preview shows `.global.substrat.run`, matching the real binding.**
+
+  The Configure step previewed `<slug>.substrat.run`, but provisioning binds
+  `<slug>.global.substrat.run` (K-30: `<slug>.<jurisdiction>.substrat.run`, jurisdiction
+  defaults to `global`). Fixed the suffix so the preview matches what actually gets bound.
+
+- 10b9805: **Delete app tolerates a double-click.** A fast second click re-sent `DELETE` for an
+  already-deleted app → `list-apps` no longer had it → 404 "app not found" (an error
+  toast, though the first delete succeeded). The handler now guards against a concurrent
+  in-flight delete (an `in-flight` ref) and treats a 404 as the desired end state (already
+  gone) rather than an error.
 - Updated dependencies [73c0cdb]
 - Updated dependencies [1dff2bd]
 - Updated dependencies [f2428a9]
@@ -78,74 +63,3 @@
 - Updated dependencies [0572a3b]
   - @substrat-run/contracts@0.12.0
   - @substrat-run/ui@0.1.0
-  - @substrat-run/kernel@0.12.0
-
-## 0.0.9
-
-### Patch Changes
-
-- Updated dependencies [7e17b16]
-- Updated dependencies [858912e]
-- Updated dependencies [e4db6ed]
-- Updated dependencies [e4db6ed]
-  - @substrat-run/kernel@0.11.0
-  - @substrat-run/contracts@0.11.0
-
-## 0.0.8
-
-### Patch Changes
-
-- Updated dependencies [9c1f0bb]
-- Updated dependencies [113160a]
-- Updated dependencies [3fb38da]
-- Updated dependencies [2becfd5]
-- Updated dependencies [d881f75]
-  - @substrat-run/contracts@0.10.0
-  - @substrat-run/kernel@0.10.0
-
-## 0.0.7
-
-### Patch Changes
-
-- Updated dependencies [27872cc]
-  - @substrat-run/kernel@0.9.0
-  - @substrat-run/contracts@0.9.0
-
-## 0.0.6
-
-### Patch Changes
-
-- @substrat-run/contracts@0.8.0
-- @substrat-run/kernel@0.8.0
-
-## 0.0.5
-
-### Patch Changes
-
-- Updated dependencies [c54637b]
-- Updated dependencies [8c48c93]
-- Updated dependencies [33fb5dd]
-  - @substrat-run/contracts@0.7.0
-  - @substrat-run/kernel@0.7.0
-
-## 0.0.4
-
-### Patch Changes
-
-- @substrat-run/contracts@0.6.0
-- @substrat-run/kernel@0.6.0
-
-## 0.0.3
-
-### Patch Changes
-
-- @substrat-run/contracts@0.5.0
-- @substrat-run/kernel@0.5.0
-
-## 0.0.2
-
-### Patch Changes
-
-- Updated dependencies [6900431]
-  - @substrat-run/contracts@0.4.0
-  - @substrat-run/kernel@0.4.0

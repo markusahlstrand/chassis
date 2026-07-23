@@ -1,5 +1,105 @@
 # @substrat-run/contracts
 
+## 0.12.0
+
+### Minor Changes
+
+- 73c0cdb: **A vertical now records its owning tenant (builder-plane.md Phase 1b).** The registry
+  gains an `owner_tenant` column: `NULL` = platform-owned (Callout, the dashboard), a value
+  = the tenant that pushed it. Ownership is the gate a later phase checks for who may push
+  new versions and manage a vertical's non-prod channels.
+
+  - **`vertical.ownerTenant`** (contracts) — nullable branded `TenantId`; `registerVerticalInput`
+    takes it optional (defaults to `null`, so a staff/platform push keeps passing
+    `{slug, name, source}` unchanged).
+  - **Migration in each adapter** — `owner_tenant TEXT` added idempotently to the `verticals`
+    table (`ensureDirectoryColumns` in sqlite, `addColumn` in `control-plane-do`), so an
+    existing directory backfills to platform-owned.
+  - **Claim-on-first-push** — `registerVertical` fixes a slug's owner at first push: a later
+    registration under a _different_ owner (or an attempt to claim a platform vertical) is
+    refused, naming both owners. Identical re-registration stays idempotent.
+
+  The `<tenant>/<name>` slug prefix that keeps builder slugs globally unique is constructed at
+  push time in a later phase; this change is the ownership column + claim mechanism it rests on.
+
+  Verified: sqlite (147) + cloudflare (146) suites pass, including a new shared assertion that
+  a registered owner round-trips through `listVerticals` and that a conflicting owner is refused.
+
+- 1dff2bd: **Builder writes — self-serve deploy, end to end (builder-plane.md Phase 3).** A tenant user
+  can now `substrat login`, `push`, and `promote` their own verticals without staff, and the
+  control plane forms the `<tenantSlug>/<name>` id they never type. This makes the Phase-2
+  authz mechanism live.
+
+  - **Prefixed vertical ids (`verticalSlug`)** — a new contracts brand allows an optional single
+    `<tenantSlug>/` prefix; the registry schemas use it. A builder pushes a **bare** `--slug`;
+    the control plane prepends their authenticated tenant's slug, so two tenants can each own a
+    `helpdesk` with **no global claim race** (Vercel-style non-scarce namespace). Platform
+    verticals stay bare. `deploymentRefFor` already flattens the `/`; hostnames never carry it.
+  - **The live builder reader** (`oidcBuilderReader`, control-plane worker) — the same signed
+    session the CLI/console carries resolves via the shared identity directory to the tenants a
+    user belongs to, narrowed to the selected one → a `(actor, tenantId, tenantSlug)` builder
+    principal. **No vetting roster**: self-serve is the point; a user with no workspace is
+    declined (sign up in the dashboard first). The audited actor is a stable
+    `PlatformActorId` derived from the OIDC subject.
+  - **`effectiveSlug`** threads the prefix through every builder vertical route
+    (`control-plane-api`), so ownership, filtering and dispatch all key on the real id.
+  - **`GET /api/auth/whoami`** — the session's user + the tenants it can build for. The CLI
+    calls it on `login` to store a default workspace (prompting when there are several).
+  - **CLI** — `substrat whoami`; `substrat promote <slug> --channel dev|staging --version <id>`
+    (a builder self-serves non-prod; prod + admission stay staff, model B); `--tenant` /
+    `SUBSTRAT_TENANT` / a stored default, sent as `x-substrat-tenant` with a browser session.
+
+  Scope: no auto-bootstrap of a workspace from the CLI (a builder signs up once in the
+  dashboard, then the CLI just works) — flagged as a follow-up.
+
+  Verified: control-plane-api (71) incl. the reworked builder matrix under prefixing (each
+  tenant gets its own namespace, no collision), control-plane worker (17) incl. a live
+  end-to-end builder path (bare push → `acme-co/helpdesk`, whoami, fail-closed no-workspace),
+  adapter suites (147 + 153) and `pnpm -r typecheck` all pass.
+
+- 66e752b: **The router dispatches on the scope's bound version (orchestration.md Phase 3, §5.4).**
+
+  `routeTarget` gains `deploymentRef` (nullable): the dispatch script the scope's bound
+  version deploys as. The directory read (`resolveHostname` / `readHostname`) now LEFT-joins
+  `scope → vertical_version` to resolve it in the same one DO call, so the hot path stays a
+  single read.
+
+  The router's `verticalFor` becomes `env.DISPATCH.get(deploymentRef)` when the namespace is
+  bound and the scope has a version — the one-line swap K-28 anticipated — falling back to the
+  static `VERTICAL_<SLUG>` service binding for a route with no version. A pushed vertical is
+  now reachable through the router without redeploying it. The bounded `Worker not found.`
+  retry (K-29), armed since K-28, is now live: it fires on the dispatch path.
+
+  Adapters (`adapter-sqlite`, `adapter-cloudflare`) version with contracts (fixed group).
+
+### Patch Changes
+
+- 0572a3b: **Typecheck on the native (Go) TypeScript compiler — `typescript` 5.6 → 7.**
+
+  TypeScript 7 (the native compiler, formerly the `tsgo`/`@typescript/native-preview`
+  rewrite) is now GA as `typescript@latest`. The binary is still `tsc`, so every package's
+  `tsc -p … --noEmit` script is unchanged — only the toolchain pin moves. No source or
+  public API changes; this bumps the published packages solely because their build now runs
+  through the native compiler.
+
+  Full-workspace `pnpm -r typecheck` drops to ~3s wall; per-package the native checker is
+  roughly an order of magnitude faster (kernel 1.33s → 0.07s, control-plane-api 1.50s →
+  0.12s, engine-invoicing 0.91s → 0.06s on this machine).
+
+  Two migration deltas TS7's stricter resolution surfaced (both green on 5.6, red on 7):
+
+  - **CSS side-effect imports (`TS2882`).** `import './ui.css'` in the six Vite app/admin
+    surfaces now needs an ambient declaration. Fixed the way `demos/meridian/app` already
+    did it — `"types": ["vite/client"]` in each app `tsconfig.json` (vite/client declares
+    `*.css`) — rather than adding a stray `vite-env.d.ts`.
+  - **`boundary-lint` node globals (`TS2584`/`TS2591`).** The linter CLI's `process`,
+    `console`, and `node:fs`/`node:path` imports stopped resolving because the base tsconfig
+    leaves `types` unset and TS7 no longer implicitly pulls in `@types/node` here. Added an
+    explicit `"types": ["node"]` to `packages/boundary-lint/tsconfig.json`.
+
+  Note: TS7 is a major bump that drops deprecated 5.x behavior. Editors should run their
+  TS Server on 7 to keep CLI and IDE diagnostics aligned.
+
 ## 0.11.0
 
 ### Minor Changes
@@ -258,7 +358,7 @@ surface)` a router asserted in `x-substrat-*` headers and decides whether to tru
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-                      z.object({ facility: entityRef, unitPrice: money })
+                        z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is

@@ -1,0 +1,91 @@
+# @substrat-run/cli
+
+## 0.1.0
+
+### Minor Changes
+
+- 1dff2bd: **Builder writes — self-serve deploy, end to end (builder-plane.md Phase 3).** A tenant user
+  can now `substrat login`, `push`, and `promote` their own verticals without staff, and the
+  control plane forms the `<tenantSlug>/<name>` id they never type. This makes the Phase-2
+  authz mechanism live.
+
+  - **Prefixed vertical ids (`verticalSlug`)** — a new contracts brand allows an optional single
+    `<tenantSlug>/` prefix; the registry schemas use it. A builder pushes a **bare** `--slug`;
+    the control plane prepends their authenticated tenant's slug, so two tenants can each own a
+    `helpdesk` with **no global claim race** (Vercel-style non-scarce namespace). Platform
+    verticals stay bare. `deploymentRefFor` already flattens the `/`; hostnames never carry it.
+  - **The live builder reader** (`oidcBuilderReader`, control-plane worker) — the same signed
+    session the CLI/console carries resolves via the shared identity directory to the tenants a
+    user belongs to, narrowed to the selected one → a `(actor, tenantId, tenantSlug)` builder
+    principal. **No vetting roster**: self-serve is the point; a user with no workspace is
+    declined (sign up in the dashboard first). The audited actor is a stable
+    `PlatformActorId` derived from the OIDC subject.
+  - **`effectiveSlug`** threads the prefix through every builder vertical route
+    (`control-plane-api`), so ownership, filtering and dispatch all key on the real id.
+  - **`GET /api/auth/whoami`** — the session's user + the tenants it can build for. The CLI
+    calls it on `login` to store a default workspace (prompting when there are several).
+  - **CLI** — `substrat whoami`; `substrat promote <slug> --channel dev|staging --version <id>`
+    (a builder self-serves non-prod; prod + admission stay staff, model B); `--tenant` /
+    `SUBSTRAT_TENANT` / a stored default, sent as `x-substrat-tenant` with a browser session.
+
+  Scope: no auto-bootstrap of a workspace from the CLI (a builder signs up once in the
+  dashboard, then the CLI just works) — flagged as a follow-up.
+
+  Verified: control-plane-api (71) incl. the reworked builder matrix under prefixing (each
+  tenant gets its own namespace, no collision), control-plane worker (17) incl. a live
+  end-to-end builder path (bare push → `acme-co/helpdesk`, whoami, fail-closed no-workspace),
+  adapter suites (147 + 153) and `pnpm -r typecheck` all pass.
+
+- cc5f2ca: **`substrat login` — a real browser login for the CLI (loopback OAuth, no AuthHero change).**
+
+  `substrat login` now pops the browser and authenticates you as yourself — the `wrangler login` / `gh auth login` experience — instead of pasting a shared token. The CLI never touches AuthHero: it logs in **through the control plane**, which already brokers AuthHero for the console, and gets back the same signed session it issues to a browser.
+
+  - **The flow (PKCE, CLI ↔ control plane):** the CLI starts a localhost server, opens `…/api/auth/cli?port&state&challenge`; the broker signs the user in (bouncing through the existing `/api/auth/login` if there's no session yet, via a new same-origin `returnTo`) and redirects to `127.0.0.1:PORT/callback?code`; the CLI exchanges `code + verifier` for the session token. The token never transits a URL — only the PKCE-bound `code` does — and the exchange fails without the matching verifier.
+  - **`@substrat-run/oidc-rp`**: exports `mintSession` (refactored out of `completeLogin`), `signEphemeral`/`verifyEphemeral`, `pkceS256`, and `safePath`; `mountOidcRoutes` honours a validated same-origin `returnTo`.
+  - **`apps/control-plane`**: `oidcStaffBearerReader` accepts the session as `Authorization: Bearer` (the same `verifySession`, the **same staff roster** gate as the cookie); `cli-auth.ts` mounts the broker routes. Pushes are attributed to the **human**, not a shared actor. **No AuthHero client or redirect URI is added** — AuthHero still only ever redirects to the console.
+  - **`@substrat-run/cli`**: the loopback `login` flow (default); `login --token` / `SUBSTRAT_SERVICE_TOKEN` still stores a service credential for CI. `push` sends whichever the config resolves — a bearer session (per-human) or `x-service-token` (service actor).
+
+  Verified: oidc-rp, control-plane, dashboard and cli typecheck; a new workerd test drives the whole broker end-to-end — the PKCE round-trip issues a bearer the deploy surface accepts, a wrong verifier is refused (400), and a valid session for a non-rostered user is refused (401, fail closed).
+
+- 9d3c4a3: **`@substrat-run/cli` is now public — published to npm under Apache-2.0.** The deploy CLI holds
+  no platform IP (it builds your vertical locally and POSTs a bundle; the control plane holds the
+  Cloudflare credential), so it ships permissively — the industry norm for a deploy CLI — while
+  the rest of the platform stays AGPL + commercial.
+
+  - `private: true` removed; `publishConfig.access: public`, `repository`, `homepage`, `keywords`,
+    and `engines` (`node >= 20`) added; license changed from AGPL-3.0-or-later to **Apache-2.0**
+    (with a per-package `LICENSE`, shipped in the tarball).
+  - Install: `npm install -g @substrat-run/cli`.
+
+  Docs: the [Deploying a vertical](https://substrat.net/guide/deploying) guide is rewritten for
+  the builder plane (the `<workspace>/<slug>` prefix, `whoami`, `--tenant`, `promote`, the
+  dashboard Deployments view), a new `@substrat-run/cli` reference page is added, and the
+  dashboard platform page documents the Deployments tab.
+
+- ed99919: **`substrat versions <slug>`** — list a vertical's versions and which channels point at
+  them, from the CLI. The first slice of _builder self-service visibility_: seeing the
+  verticals you pushed without the staff console.
+
+  It reads the existing registry endpoints (`/verticals/:slug/versions`, `/channels`), so
+  it works for staff today and — once builder-scoped authz + slug ownership land — for
+  builders viewing their own verticals. Read-only; admission and prod promotion stay the
+  staff trust gate (self-serve-deploy.md model B).
+
+- 7070588: **Push forwards `compatibility_flags`, and the deploy endpoint surfaces upload failures.**
+
+  A pushed vertical that needs a compat flag — `nodejs_compat` for Better Auth / any `node:*` import — was being uploaded **without** it: the CLI manifest, the deploy schema, and the WfP metadata all carried only `compatibility_date`. So the script couldn't start, Cloudflare rejected the upload, and `deployVertical` threw — which the generic handler flattened into an anonymous `500 {"error":"internal error"}`, undiagnosable without worker logs. Callout hit exactly this.
+
+  - **`compatibility_flags` now travels end to end**: `substrat push` reads it from `wrangler.jsonc` into the manifest (`deployManifest`/`VerticalBundle` gain `compatibilityFlags`), and `createWfpUploader` emits it in the script metadata.
+  - **The deploy endpoint wraps `deployVertical`** and returns **`502 { error, detail }`** with the runtime's actual message (the builder is authenticated — this is platform/runtime error detail, not a bad request), plus a `console.error`, instead of a blank 500.
+
+  Verified: control-plane-api suites pass, including new tests that `nodejs_compat` survives to the uploader and that an upload failure surfaces as a 502 with detail.
+
+- fbd2627: **A real `substrat` CLI — authenticated vertical deploys (replaces `tools/substrat-push.mjs`).**
+
+  The push capability is now a proper package (`@substrat-run/cli`, `bin: substrat`) with a stored credential, instead of a bare script that only worked against a dev control plane.
+
+  - **`substrat login`** stores the control-plane URL + `SERVICE_TOKEN` in `~/.substrat/config.json` (chmod 600, token prompt hidden). **`substrat push <dir> --slug --version`** builds the vertical (`wrangler --dry-run`, running its own `build.command`), assembles the manifest (DO + D1 bindings), and uploads. Auth resolves flag → env (`SUBSTRAT_CP_URL` / `SUBSTRAT_SERVICE_TOKEN`) → config.
+  - **Authenticates as the platform service actor via `x-service-token`** (`serviceTokenAuth`), not the dev-only `x-platform-actor` header the old script sent. That header is trusted only under `ALLOW_DEV_ACTOR=true`, so the old script could not push to a production control plane at all; this can. No `--actor` is chosen — the service token _is_ the identity. No control-plane change: `serviceTokenAuth` was already wired.
+  - Removed `tools/substrat-push.mjs`; `pnpm substrat …` (root script) and `demos/callout/wrangler.example.jsonc` point at the CLI. Push stays PENDING — admission in the console still gates serving.
+
+  Run: `pnpm -r build` then `pnpm substrat login` → `pnpm substrat push demos/callout --slug callout --version 0.1.0`.

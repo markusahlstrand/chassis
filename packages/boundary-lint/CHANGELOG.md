@@ -1,9 +1,15 @@
-# @substrat-run/engine-invites
+# @substrat-run/boundary-lint
 
-## 0.0.8
+## 0.0.2
 
 ### Patch Changes
 
+- d0cb7a6: Treat `page.ts` and `oidc.ts` as harness. A served SPA (an HTML/JS string the worker
+  returns) is edge wiring, not module code reachable from a `ModuleRegistration` — its
+  `fetch` is browser code. `oidc.ts` is an OIDC relying party at the server edge (token
+  exchange, JWKS) — the same node/network-touching auth-adapter class as `auth.ts`.
+  Both added to `DEFAULT_HARNESS` alongside `worker.ts`/`routes.ts`, so R3 (no network
+  in module code) no longer false-positives on a vertical's served page or auth edge.
 - 0572a3b: **Typecheck on the native (Go) TypeScript compiler — `typescript` 5.6 → 7.**
 
   TypeScript 7 (the native compiler, formerly the `tsgo`/`@typescript/native-preview`
@@ -29,65 +35,3 @@
 
   Note: TS7 is a major bump that drops deprecated 5.x behavior. Editors should run their
   TS Server on 7 to keep CLI and IDE diagnostics aligned.
-
-- Updated dependencies [73c0cdb]
-- Updated dependencies [1dff2bd]
-- Updated dependencies [66e752b]
-- Updated dependencies [0572a3b]
-  - @substrat-run/contracts@0.12.0
-  - @substrat-run/kernel@0.12.0
-
-## 0.0.7
-
-### Patch Changes
-
-- Updated dependencies [7e17b16]
-- Updated dependencies [858912e]
-- Updated dependencies [e4db6ed]
-- Updated dependencies [e4db6ed]
-  - @substrat-run/kernel@0.11.0
-  - @substrat-run/contracts@0.11.0
-
-## 0.0.6
-
-### Patch Changes
-
-- Updated dependencies [9c1f0bb]
-- Updated dependencies [113160a]
-- Updated dependencies [3fb38da]
-- Updated dependencies [2becfd5]
-- Updated dependencies [d881f75]
-  - @substrat-run/contracts@0.10.0
-  - @substrat-run/kernel@0.10.0
-
-## 0.0.5
-
-### Patch Changes
-
-- Updated dependencies [27872cc]
-  - @substrat-run/kernel@0.9.0
-  - @substrat-run/contracts@0.9.0
-
-## 0.0.4
-
-### Patch Changes
-
-- @substrat-run/contracts@0.8.0
-- @substrat-run/kernel@0.8.0
-
-## 0.0.3
-
-### Patch Changes
-
-- Updated dependencies [c54637b]
-- Updated dependencies [8c48c93]
-- Updated dependencies [33fb5dd]
-  - @substrat-run/contracts@0.7.0
-  - @substrat-run/kernel@0.7.0
-
-## 0.0.2
-
-### Patch Changes
-
-- @substrat-run/contracts@0.6.0
-- @substrat-run/kernel@0.6.0

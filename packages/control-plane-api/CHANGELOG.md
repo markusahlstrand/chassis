@@ -1,5 +1,194 @@
 # @substrat-run/control-plane-api
 
+## 0.12.0
+
+### Minor Changes
+
+- 05291fa: **Builder authz on the control-plane API (builder-plane.md Phase 2).** A second principal
+  kind — a _tenant user_ — joins staff/service on the same surface, confined to the
+  vertical-management routes and to the verticals their tenant **owns** (the `owner_tenant`
+  column from Phase 1b). The mechanism ships tested against a stub; the real builder-session
+  reader (session → user → selected tenant) and CLI wiring land with Phase 3.
+
+  - **`authenticateBuilder?: BuilderAuth`** — a new, optional `createControlPlaneApi` option
+    resolving a request to a `{ actor, tenantId }` builder principal. Tried only after
+    `authenticate` (staff/service) declines, so staff auth is **unchanged** and remains a
+    superset. Absent ⇒ the surface is staff/service-only exactly as before.
+  - **Fail-closed confinement** — a builder reaches only an explicit allowlist of
+    vertical-management routes (`GET`/`POST /verticals`, `…/versions`, `…/channels`, promote,
+    deploy). Everything else — tenants, scopes, hostnames, admin-log, instance provisioning,
+    and `versions/:id/{admit,reject}` — is `403` for a builder. Default-deny by design: a
+    route not on the allowlist denies builders (a missing feature), never escalates.
+  - **Ownership checks** — register/deploy **claim** an unregistered slug for the caller's
+    tenant or require they already own it (`403` otherwise); publish/promote require ownership;
+    `GET` of an unowned vertical is `404` (indistinguishable from absent, K-3's reflex). The
+    owner is stamped from the principal, never trusted from the body. Staff pushes preserve the
+    existing owner rather than clobbering it.
+  - **Model B, staff keep the prod gate** — a builder self-serves `dev`/`staging` promotion;
+    **`prod` promotion and admission stay staff-only**, the trust boundary self-serve-deploy.md
+    §3 draws.
+  - **`GET /verticals`** is filtered to the caller's owned verticals for a builder; staff see
+    the whole registry.
+
+  Internally the auth middleware now sets both `actor` (the audited subject, unchanged for
+  every HostAdmin call) and a new `principal` (the authz distinction) — existing routes are
+  untouched. `errors.ts` maps the Phase-1b claim conflict (`is owned by …`) to 409.
+
+  Verified: control-plane-api suite (71) incl. a new builder-authz matrix — claim, cross-tenant
+  refusal, list filtering, non-prod self-serve, staff-only prod/admit, deploy-path claim — and
+  the control-plane worker suite (13) both pass; `pnpm -r typecheck` clean.
+
+- 1dff2bd: **Builder writes — self-serve deploy, end to end (builder-plane.md Phase 3).** A tenant user
+  can now `substrat login`, `push`, and `promote` their own verticals without staff, and the
+  control plane forms the `<tenantSlug>/<name>` id they never type. This makes the Phase-2
+  authz mechanism live.
+
+  - **Prefixed vertical ids (`verticalSlug`)** — a new contracts brand allows an optional single
+    `<tenantSlug>/` prefix; the registry schemas use it. A builder pushes a **bare** `--slug`;
+    the control plane prepends their authenticated tenant's slug, so two tenants can each own a
+    `helpdesk` with **no global claim race** (Vercel-style non-scarce namespace). Platform
+    verticals stay bare. `deploymentRefFor` already flattens the `/`; hostnames never carry it.
+  - **The live builder reader** (`oidcBuilderReader`, control-plane worker) — the same signed
+    session the CLI/console carries resolves via the shared identity directory to the tenants a
+    user belongs to, narrowed to the selected one → a `(actor, tenantId, tenantSlug)` builder
+    principal. **No vetting roster**: self-serve is the point; a user with no workspace is
+    declined (sign up in the dashboard first). The audited actor is a stable
+    `PlatformActorId` derived from the OIDC subject.
+  - **`effectiveSlug`** threads the prefix through every builder vertical route
+    (`control-plane-api`), so ownership, filtering and dispatch all key on the real id.
+  - **`GET /api/auth/whoami`** — the session's user + the tenants it can build for. The CLI
+    calls it on `login` to store a default workspace (prompting when there are several).
+  - **CLI** — `substrat whoami`; `substrat promote <slug> --channel dev|staging --version <id>`
+    (a builder self-serves non-prod; prod + admission stay staff, model B); `--tenant` /
+    `SUBSTRAT_TENANT` / a stored default, sent as `x-substrat-tenant` with a browser session.
+
+  Scope: no auto-bootstrap of a workspace from the CLI (a builder signs up once in the
+  dashboard, then the CLI just works) — flagged as a follow-up.
+
+  Verified: control-plane-api (71) incl. the reworked builder matrix under prefixing (each
+  tenant gets its own namespace, no collision), control-plane worker (17) incl. a live
+  end-to-end builder path (bare push → `acme-co/helpdesk`, whoami, fail-closed no-workspace),
+  adapter suites (147 + 153) and `pnpm -r typecheck` all pass.
+
+- 7070588: **Push forwards `compatibility_flags`, and the deploy endpoint surfaces upload failures.**
+
+  A pushed vertical that needs a compat flag — `nodejs_compat` for Better Auth / any `node:*` import — was being uploaded **without** it: the CLI manifest, the deploy schema, and the WfP metadata all carried only `compatibility_date`. So the script couldn't start, Cloudflare rejected the upload, and `deployVertical` threw — which the generic handler flattened into an anonymous `500 {"error":"internal error"}`, undiagnosable without worker logs. Callout hit exactly this.
+
+  - **`compatibility_flags` now travels end to end**: `substrat push` reads it from `wrangler.jsonc` into the manifest (`deployManifest`/`VerticalBundle` gain `compatibilityFlags`), and `createWfpUploader` emits it in the script metadata.
+  - **The deploy endpoint wraps `deployVertical`** and returns **`502 { error, detail }`** with the runtime's actual message (the builder is authenticated — this is platform/runtime error detail, not a bad request), plus a `console.error`, instead of a blank 500.
+
+  Verified: control-plane-api suites pass, including new tests that `nodejs_compat` survives to the uploader and that an upload failure surfaces as a 502 with detail.
+
+- 66e752b: **Add the deploy seam: `POST /verticals/:slug/deploy` (self-serve-deploy.md foundation).**
+
+  A `substrat push` uploads a _built_ worker bundle to this endpoint, which validates the
+  **sandbox contract**, forwards the bundle to an injected uploader (the host holds the
+  Cloudflare credential — the builder never does, D-34), and records a **pending** version.
+  A push is not a deploy; admission still gates serving.
+
+  - New `deployVertical?: DeployVerticalFn` option — injected so the package holds no
+    Cloudflare SDK and is unit-testable with a fake. Absent ⇒ the route 501s.
+  - `assertSandboxContract` (self-serve-deploy.md §4): refuses an upload whose declared
+    bindings would reach platform infrastructure — a `CONTROL_PLANE` binding, a cross-script
+    DO binding, or a service binding to a platform worker → `403`. Structural refusal, not
+    code inspection, is the primary defence against untrusted bundles.
+  - `deploymentRef` is `<slug>-<versionId>` (a lowercased ULID) — a valid Cloudflare Worker
+    script name, unlike the `@version` label the RFC sketched (`@`/`.` are illegal in script
+    names). The human label stays on the version record.
+  - Exports `assertSandboxContract`, `deployManifest`, `deploymentRefFor`, and the
+    `DeployVerticalFn` / `VerticalBundle` types for hosts to implement the real uploader.
+  - `createWfpUploader({ accountId, namespace, apiToken })` — a `DeployVerticalFn` that
+    uploads the bundle into a Workers-for-Platforms dispatch namespace (pure `fetch` +
+    `FormData`, so it runs in a Worker or node). Wired into `apps/control-plane` (behind the
+    `CF_API_TOKEN`/`CF_ACCOUNT_ID` env) and the dev server. The `tools/substrat-push.mjs` CLI
+    builds a vertical and pushes it to `/verticals/:slug/deploy`.
+  - New `resolveVertical?: (slug, actor) => Promise<VerticalClient | undefined>` option — the
+    provisioning dispatch swap (orchestration.md §5.4), tried after the static `verticals` map.
+    `apps/control-plane` resolves a pushed vertical's `prod` version → `env.DISPATCH.get(ref)`,
+    so `POST /verticals/:slug/instances` reaches a pushed vertical with no redeploy.
+
+- cedaf1a: **Deploy path forwards a vertical's own D1 bindings (self-serve-deploy.md §4).**
+
+  A `substrat push` now carries a vertical's `d1_databases` through to the Workers-for-Platforms upload, so a pushed vertical actually has its own data stores — not just its `ScopeDO`. This is what a CP-less vertical like Callout needs for its Better-Auth `AUTH_DB` to exist on the deployed worker.
+
+  - **`DeclaredBinding` / `deployManifest`** gain an optional `id` — a `d1` binding's `database_id`, which previously would have been stripped at manifest parse.
+  - **`tools/substrat-push.mjs`** maps `wrangler.jsonc`'s `d1_databases` to `{ type: 'd1', name: <binding>, id: <database_id> }` bindings alongside the DO bindings; `createWfpUploader` already forwards the binding set verbatim into the script metadata, which is the shape Cloudflare expects for a D1 binding.
+  - **`assertSandboxContract`** still refuses only the platform's infrastructure (`CONTROL_PLANE`, service bindings, cross-script / foreign DO classes); a vertical's own `d1` store falls through and is allowed, matching §4 ("no `AUTH_DB` it did not create" — its own is fine). Documented open question: this check doesn't yet prove the vertical _owns_ the declared `database_id` rather than pointing at another tenant's DB — under model B that gap is closed by human admission, and by per-vertical store provisioning when self-serve opens wider.
+
+  Not covered here (a separate mechanism, tracked next): **static assets.** A pushed vertical's SPA is not a binding — Cloudflare uploads it via a blake3-hashed assets-upload-session, which needs a server-side implementation in the uploader. Callout still needs that before it serves its UI from the dispatch namespace.
+
+  Verified: control-plane-api suites pass, including a new deploy test that a `d1` binding (with its `database_id`) is accepted by the sandbox contract and forwarded to the uploader.
+
+- 0de890b: **The platform injects `PLATFORM_SECRET` + `ROUTER_SECRET` into every pushed vertical.**
+
+  A pushed vertical needs the platform's shared secrets to _verify_ inbound calls — `PLATFORM_SECRET` to accept the control plane's `/internal/provision` (K-31), `ROUTER_SECRET` to trust the router-asserted node (K-27). But `wrangler secret put` can't target a WfP dispatch-namespace script, so there was no clean way to set them per-vertical. And they aren't the builder's secrets — they're the platform's.
+
+  - **`createWfpUploader` gains `injectSecrets`** — a name→value map added as `secret_text` bindings on every uploaded script. Injected server-side, _after_ the §4 sandbox check on the vertical's declared bindings (the platform is granting verification secrets, not the vertical reaching for a platform binding). Empty values are skipped.
+  - **The control plane passes `env.PLATFORM_SECRET` + `env.ROUTER_SECRET`** into the uploader, so a pushed vertical is provisionable + servable with zero per-vertical secret setup.
+
+  Set both on the control plane, redeploy, and re-push a vertical — it comes up holding the secrets it needs. Verified: control-plane-api suites pass, including new tests that the secrets land as `secret_text` bindings beside the vertical's own, and that an unset one is skipped.
+
+- d5a7d5e: **Expose the vertical + version registry over the control-plane HTTP API (orchestration.md Phase 1a).**
+
+  The registry data model — verticals, versions, channels, admission, and the digest-diff
+  promotion gate — was already built at the `HostAdmin` + adapter layer but had no HTTP
+  surface. This adds thin pass-through routes so a staff caller (and the console) can drive it:
+
+  - `GET/POST /verticals` — list, register
+  - `GET/POST /verticals/:slug/versions` — list, publish (lands **pending**; body slug must
+    match the path, K-3-style cross-check)
+  - `POST /verticals/:slug/versions/:id/{admit,reject}` — the admission checkpoint
+  - `GET /verticals/:slug/channels` + `POST /verticals/:slug/channels/:channel/promote` — the
+    promotion checkpoint, which refuses a changed permission/migration digest unless
+    acknowledged
+  - `POST /tenants/:tenantId/scopes/:scopeId/version` — bind a scope to an admitted version
+
+  `errors.ts` gains status mappings so registry refusals surface as `404`/`409` rather than
+  `500`. No `deploy` route (the worker uploader) — that is Phase 2. The actor is still stamped
+  from the authenticated request, never the body.
+
+### Patch Changes
+
+- 097a3aa: **`deploymentRefFor` is prefix-safe** — builder plane Phase 1 groundwork.
+
+  A builder-owned vertical's slug will be `<tenant>/<name>` (builder-plane.md). The
+  dispatch script name must stay Cloudflare-safe (`[a-z0-9_-]`), so `deploymentRefFor`
+  now flattens the `/` (and any other stray char) to `-`. A bare platform slug is
+  unaffected (`callout-<id>`), so it's fully backward-compatible.
+
+- 0572a3b: **Typecheck on the native (Go) TypeScript compiler — `typescript` 5.6 → 7.**
+
+  TypeScript 7 (the native compiler, formerly the `tsgo`/`@typescript/native-preview`
+  rewrite) is now GA as `typescript@latest`. The binary is still `tsc`, so every package's
+  `tsc -p … --noEmit` script is unchanged — only the toolchain pin moves. No source or
+  public API changes; this bumps the published packages solely because their build now runs
+  through the native compiler.
+
+  Full-workspace `pnpm -r typecheck` drops to ~3s wall; per-package the native checker is
+  roughly an order of magnitude faster (kernel 1.33s → 0.07s, control-plane-api 1.50s →
+  0.12s, engine-invoicing 0.91s → 0.06s on this machine).
+
+  Two migration deltas TS7's stricter resolution surfaced (both green on 5.6, red on 7):
+
+  - **CSS side-effect imports (`TS2882`).** `import './ui.css'` in the six Vite app/admin
+    surfaces now needs an ambient declaration. Fixed the way `demos/meridian/app` already
+    did it — `"types": ["vite/client"]` in each app `tsconfig.json` (vite/client declares
+    `*.css`) — rather than adding a stray `vite-env.d.ts`.
+  - **`boundary-lint` node globals (`TS2584`/`TS2591`).** The linter CLI's `process`,
+    `console`, and `node:fs`/`node:path` imports stopped resolving because the base tsconfig
+    leaves `types` unset and TS7 no longer implicitly pulls in `@types/node` here. Added an
+    explicit `"types": ["node"]` to `packages/boundary-lint/tsconfig.json`.
+
+  Note: TS7 is a major bump that drops deprecated 5.x behavior. Editors should run their
+  TS Server on 7 to keep CLI and IDE diagnostics aligned.
+
+- Updated dependencies [73c0cdb]
+- Updated dependencies [1dff2bd]
+- Updated dependencies [66e752b]
+- Updated dependencies [0572a3b]
+  - @substrat-run/contracts@0.12.0
+  - @substrat-run/kernel@0.12.0
+
 ## 0.11.0
 
 ### Patch Changes
