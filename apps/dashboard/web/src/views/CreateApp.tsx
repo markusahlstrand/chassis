@@ -45,6 +45,7 @@ export function CreateApp({
   if (!source) {
     return (
       <ChooseSource
+        catalog={catalog}
         onCancel={onCancel}
         onPick={(s) => setSource({ ...s, verticalSlug: resolveSlug(s.wantedSlug) })}
       />
@@ -96,7 +97,11 @@ function SourceRow({ title, subtitle, accent, action, onAction, height = 52 }: {
 
 type PickedSource = Omit<Source, 'verticalSlug'> & { wantedSlug: string };
 
-function ChooseSource({ onCancel, onPick }: { onCancel: () => void; onPick: (s: PickedSource) => void }) {
+function ChooseSource({ catalog, onCancel, onPick }: { catalog: CatalogEntry[]; onCancel: () => void; onPick: (s: PickedSource) => void }) {
+  // Only offer marketplace tiles the live catalog can actually provision — a tile whose
+  // slug the backend doesn't advertise (e.g. a vertical not yet deployed to the hosted
+  // plane) would otherwise silently fall back to another vertical via `resolveSlug`.
+  const marketplace = MARKETPLACE.filter((m) => catalog.some((c) => c.slug === m.slug));
   return (
     <Page maxWidth={960}>
       <Header onCancel={onCancel} />
@@ -136,7 +141,10 @@ function ChooseSource({ onCancel, onPick }: { onCancel: () => void; onPick: (s: 
               <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>Start from the marketplace</span>
               <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>ready-made projects</span>
             </div>
-            {MARKETPLACE.map((m) => (
+            {marketplace.length === 0 && (
+              <div style={{ padding: '12px 16px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>No marketplace projects are available on your plan yet.</div>
+            )}
+            {marketplace.map((m) => (
               <SourceRow
                 key={m.name}
                 title={m.name}

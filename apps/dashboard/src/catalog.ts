@@ -1,0 +1,95 @@
+import type { PermissionKey, PlatformActorId } from '@substrat-run/contracts';
+import type { ScopeHost } from '@substrat-run/kernel';
+import { PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
+import { PERM as WO } from '@substrat-run/engine-workorder';
+import { INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+import { SC_PERM } from '@substrat-run/demo-callout/module';
+import { HR_PERM } from '@substrat-run/demo-meridian/module';
+
+/**
+ * The catalog — the verticals a customer can instantiate, and the provisioning
+ * specifics the version registry does not carry (the SKU the app loads under, what the
+ * owner is granted in a fresh app). Kept free of Cloudflare imports so the availability
+ * rules below are unit-testable in node (the worker itself pulls in `cloudflare:workers`).
+ */
+export interface CatalogEntry {
+  name: string;
+  entitlements: string[];
+  ownerGrants: PermissionKey[];
+  /**
+   * Is this vertical provisionable on the SHARED control plane (hosted / production)?
+   * The plane provisions via a static `VERTICAL_<slug>` binding or a promoted
+   * dispatch-namespace version; a vertical with neither returns 501 "no deployment is
+   * bound". Defaults to provisionable; set `false` for one that is bundled here (so
+   * embedded/standalone can run it) but not yet deployed to the plane — the catalog then
+   * hides it in connected mode instead of offering an install that always fails. Flip to
+   * true (or drop the flag) once the vertical is deployed + promoted to prod.
+   */
+  connected?: boolean;
+}
+
+export const CATALOG: Record<string, CatalogEntry> = {
+  protocol: {
+    name: 'Documents',
+    entitlements: ['protocol'],
+    ownerGrants: [PROTO.create, PROTO.read] as PermissionKey[],
+  },
+  // Callout composes three engines, so its SKU is three entitlement flags, and its
+  // owner receives the `office-admin` permission set (demos/callout provision.ts)
+  // as a flat grant — the Dashboard grants perms per-principal rather than defining
+  // roles in the app scope.
+  callout: {
+    name: 'Callout',
+    entitlements: ['workorder', 'invoicing', 'protocol', 'callout'],
+    ownerGrants: [
+      SC_PERM.customerManage, SC_PERM.facilityManage,
+      WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
+      INV.read, INV.export,
+      PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
+    ] as PermissionKey[],
+  },
+  // Meridian runs the HR domain on the kernel plus protocol (onboarding). Its SKU is
+  // two flags (`meridian` + `protocol`); the installing owner receives the `hr-admin`
+  // permission set (demos/meridian provision.ts `hrAdminPerms`) as a flat grant, so a
+  // freshly-installed instance's owner can define leave types, create employees and
+  // projects, approve leave/expenses, and drive onboarding contracts from day one.
+  meridian: {
+    name: 'Meridian',
+    // Bundled here so embedded (tests/standalone) can provision it, but NOT yet deployed
+    // to the shared control plane's dispatch namespace — so the hosted catalog hides it
+    // until it is. Flip to true (or drop) once Meridian is pushed + promoted to prod.
+    connected: false,
+    entitlements: ['meridian', 'protocol'],
+    ownerGrants: [
+      HR_PERM.employeeManage, HR_PERM.absenceConfigure, HR_PERM.absenceApprove, HR_PERM.absenceRead,
+      HR_PERM.timeRead, HR_PERM.projectManage, HR_PERM.expenseApprove, HR_PERM.expenseRead, HR_PERM.payrollExport,
+      // PROTO.recordSignature is deliberately excluded — it speaks for the signing
+      // provider (a connection holds it), never a human role (provision.ts).
+      PROTO.create, PROTO.fill, PROTO.bind, PROTO.requestSignature, PROTO.sign, PROTO.read, PROTO.void,
+    ] as PermissionKey[],
+  },
+};
+
+/** Seed the registry from the catalog (idempotent) — what `GET /api/catalog` lists. */
+export async function ensureCatalog(host: ScopeHost, staff: PlatformActorId): Promise<void> {
+  for (const [slug, e] of Object.entries(CATALOG)) {
+    await host.admin.registerVertical(staff, { slug, name: e.name, source: 'builtin' });
+  }
+}
+
+/**
+ * The verticals to advertise, for the current provisioning mode. In CONNECTED mode
+ * (a shared control plane is bound) we only offer entries that plane can actually
+ * provision (`connected !== false`); advertising one it can't hands the user a
+ * marketplace tile whose install always 501s. Embedded/standalone bundles every module
+ * in-process, so every catalog entry is provisionable there. `verticals` is the registry
+ * listing; the result is the `{ slug, name }[]` the catalog endpoint returns.
+ */
+export function availableCatalog(
+  verticals: readonly { slug: string; name: string }[],
+  opts: { connected: boolean },
+): Array<{ slug: string; name: string }> {
+  return verticals
+    .filter((v) => CATALOG[v.slug] && (!opts.connected || CATALOG[v.slug]!.connected !== false))
+    .map((v) => ({ slug: v.slug, name: v.name }));
+}

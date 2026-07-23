@@ -15,18 +15,19 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { principalId, scopeId, tenantId, orgId, platformActorId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
-import { protocolModule, PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
-import { workorderModule, PERM as WO } from '@substrat-run/engine-workorder';
-import { invoicingModule, INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
+import { protocolModule } from '@substrat-run/engine-protocol';
+import { workorderModule } from '@substrat-run/engine-workorder';
+import { invoicingModule } from '@substrat-run/engine-invoicing';
 import { invitesModule } from '@substrat-run/engine-invites';
 // The worker-safe subpath: the Callout domain module + perms only, never the demo's
 // seed/auth (node + better-auth). M0 bundles the vertical here as a stand-in; the
 // production model deploys Callout separately (dashboard.md §6) and — per master-plan
 // D-33 — a demo is a template that is COPIED, not imported. This import is the M0 seam.
-import { calloutModule, SC_PERM } from '@substrat-run/demo-callout/module';
-// The worker-safe subpath of the Meridian (HR) vertical: its domain module + perms
-// only, never the demo's node/better-auth seed. M0 bundles it here, same seam as Callout.
-import { meridianModule, HR_PERM } from '@substrat-run/demo-meridian/module';
+import { calloutModule } from '@substrat-run/demo-callout/module';
+// The worker-safe subpath of the Meridian (HR) vertical: its domain module only, never
+// the demo's node/better-auth seed. M0 bundles it here, same seam as Callout.
+import { meridianModule } from '@substrat-run/demo-meridian/module';
+import { CATALOG, ensureCatalog, availableCatalog } from './catalog.js';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
 import { createApp, deprovisionApp, retryApp, provisionDashboard, type DashboardNode } from './provision.js';
@@ -68,57 +69,10 @@ export { ControlPlaneDO };
 
 const STAFF = platformActorId.parse('01JZ000000000000000000DAS1');
 
-/**
- * The catalog: the verticals a customer can instantiate. The LIST is served from
- * the version registry (`registerVertical`/`listVerticals`) — the same registry
- * the operator console will use; `ensureCatalog` seeds it. This map adds the
- * provisioning specifics the registry does not carry (the SKU the app loads under
- * and what the owner is granted inside a fresh app).
- */
-const CATALOG: Record<string, { name: string; entitlements: string[]; ownerGrants: PermissionKey[] }> = {
-  protocol: {
-    name: 'Documents',
-    entitlements: ['protocol'],
-    ownerGrants: [PROTO.create, PROTO.read] as PermissionKey[],
-  },
-  // Callout composes three engines, so its SKU is three entitlement flags, and its
-  // owner receives the `office-admin` permission set (demos/callout provision.ts)
-  // as a flat grant — the Dashboard grants perms per-principal rather than defining
-  // roles in the app scope.
-  callout: {
-    name: 'Callout',
-    entitlements: ['workorder', 'invoicing', 'protocol', 'callout'],
-    ownerGrants: [
-      SC_PERM.customerManage, SC_PERM.facilityManage,
-      WO.create, WO.read, WO.assign, WO.report, WO.complete, WO.close,
-      INV.read, INV.export,
-      PROTO.create, PROTO.fill, PROTO.sign, PROTO.read, PROTO.void,
-    ] as PermissionKey[],
-  },
-  // Meridian runs the HR domain on the kernel plus protocol (onboarding). Its SKU is
-  // two flags (`meridian` + `protocol`); the installing owner receives the `hr-admin`
-  // permission set (demos/meridian provision.ts `hrAdminPerms`) as a flat grant, so a
-  // freshly-installed instance's owner can define leave types, create employees and
-  // projects, approve leave/expenses, and drive onboarding contracts from day one.
-  meridian: {
-    name: 'Meridian',
-    entitlements: ['meridian', 'protocol'],
-    ownerGrants: [
-      HR_PERM.employeeManage, HR_PERM.absenceConfigure, HR_PERM.absenceApprove, HR_PERM.absenceRead,
-      HR_PERM.timeRead, HR_PERM.projectManage, HR_PERM.expenseApprove, HR_PERM.expenseRead, HR_PERM.payrollExport,
-      // PROTO.recordSignature is deliberately excluded — it speaks for the signing
-      // provider (a connection holds it), never a human role (provision.ts).
-      PROTO.create, PROTO.fill, PROTO.bind, PROTO.requestSignature, PROTO.sign, PROTO.read, PROTO.void,
-    ] as PermissionKey[],
-  },
-};
-
-/** Seed the registry from the catalog (idempotent) — what `GET /api/catalog` lists. */
-async function ensureCatalog(host: ScopeHost): Promise<void> {
-  for (const [slug, e] of Object.entries(CATALOG)) {
-    await host.admin.registerVertical(STAFF, { slug, name: e.name, source: 'builtin' });
-  }
-}
+// The catalog (verticals a customer can instantiate + their provisioning specifics) and
+// its availability rules live in ./catalog.ts — kept free of Cloudflare imports so the
+// connected-mode gating is unit-testable. `CATALOG`/`ensureCatalog`/`availableCatalog`
+// are imported at the top of the file.
 
 interface Env extends OidcEnv {
   SCOPE: DurableObjectNamespace;
@@ -352,12 +306,20 @@ const app = new Hono<{ Bindings: Env }>();
 // OIDC relying party (AuthHero): /api/auth/login → /callback → /logout.
 mountOidcRoutes(app);
 
-/** The catalog — the verticals you can instantiate, from the registry. */
+/**
+ * The catalog — the verticals you can instantiate, from the registry. In CONNECTED
+ * mode (a shared control plane is bound) we only advertise verticals that plane can
+ * actually provision (`connected !== false`); offering one it can't would hand the
+ * user a marketplace tile whose install always 501s. Embedded/standalone bundles every
+ * module in-process, so it lists them all. Mode is detected exactly as provisioning is
+ * (`controlPlaneFor`): both keys present ⇒ connected.
+ */
 app.get('/api/catalog', async (c) => {
   const host = hostFor(c.env);
-  await ensureCatalog(host);
+  await ensureCatalog(host, STAFF);
   const verticals = await host.admin.listVerticals(STAFF);
-  return c.json(verticals.filter((v) => CATALOG[v.slug]).map((v) => ({ slug: v.slug, name: v.name })));
+  const connected = !!(c.env.CONTROL_PLANE_SVC && c.env.CP_SERVICE_TOKEN);
+  return c.json(availableCatalog(verticals, { connected }));
 });
 
 /**
