@@ -2784,6 +2784,15 @@ export class SqliteScopeHost implements ScopeHost {
           { provider: parsed.provider, externalId: parsed.externalId, principal: parsed.principal },
         );
       },
+      unlinkIdentity: async (actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId) => {
+        // DELETE, not a tombstone — the identity map is current state (audit is the log),
+        // and re-inviting must be able to re-link a fresh principal for the same person.
+        const info = this.directory
+          .prepare(`DELETE FROM _substrat_identities WHERE tenant_id = ? AND principal_id = ?`)
+          .run(tenantId, principal);
+        if (info.changes === 0) return; // no link — idempotent, unaudited
+        this.recordAdmin(actor, 'unlinkIdentity', { tenantId, scopeId: null }, { principal }, null);
+      },
       resolveIdentity: async (
         tenantId: TenantId,
         provider: string,

@@ -67,6 +67,23 @@ describe('control-plane identity mapping', () => {
     expect(links[0]!.actor).toBe(staff);
   });
 
+  it('unlinks a principal — resolve stops returning it, is idempotent, and the key frees for re-link', async () => {
+    const frank = principalId.parse(ulid());
+    await host.admin.linkIdentity(staff, { provider: 'better-auth', externalId: 'ba-frank', principal: frank, tenantId: t, scopeId: s });
+    expect(await host.admin.resolveIdentity(t, 'better-auth', 'ba-frank')).toEqual({ principal: frank, scopeId: s });
+
+    await host.admin.unlinkIdentity(staff, t, frank);
+    expect(await host.admin.resolveIdentity(t, 'better-auth', 'ba-frank')).toBeUndefined();
+
+    // Idempotent: unlinking a principal with no link is a silent no-op.
+    await host.admin.unlinkIdentity(staff, t, frank);
+
+    // A DELETE, not a tombstone — the key is free, so a re-invite re-links a fresh principal.
+    const frank2 = principalId.parse(ulid());
+    await host.admin.linkIdentity(staff, { provider: 'better-auth', externalId: 'ba-frank', principal: frank2, tenantId: t, scopeId: s });
+    expect(await host.admin.resolveIdentity(t, 'better-auth', 'ba-frank')).toEqual({ principal: frank2, scopeId: s });
+  });
+
   it('keys by provider — the same externalId under a different provider is distinct', async () => {
     const otto = principalId.parse(ulid());
     await host.admin.linkIdentity(staff, {

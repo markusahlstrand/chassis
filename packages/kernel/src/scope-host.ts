@@ -794,6 +794,18 @@ export interface HostAdmin {
   linkIdentity(actor: PlatformActorId, input: IdentityLink): Promise<void>;
 
   /**
+   * Remove a principal's identity link(s) in a tenant — the inverse of `linkIdentity`,
+   * keyed by principal (not external id) so a caller who removed a member can sever
+   * their login from the team without knowing their external subject. After this,
+   * `listIdentityTenants` no longer returns the tenant for that person and
+   * `resolveIdentity` no longer resolves — so the team disappears from their switcher.
+   * A DELETE, not a tombstone: the identity map is current operational state (the audit
+   * is the admin log), and re-inviting must be able to re-link a fresh principal.
+   * Idempotent: unlinking a principal with no link is a silent no-op.
+   */
+  unlinkIdentity(actor: PlatformActorId, tenantId: TenantId, principal: PrincipalId): Promise<void>;
+
+  /**
    * Register an identity pool and its topology (K-23). A provider must be registered
    * before it may link: an unregistered pool has not said whether the same
    * `externalId` in two tenants is one human or two, and the kernel will not guess.

@@ -46,6 +46,7 @@ export const adminAction = z.enum([
   'grantEntitlement', // §4.3 — the SKU flag turned on for a tenant
   'revokeEntitlement', // §4.3
   'linkIdentity', // D-16 — bind an external identity to a principal
+  'unlinkIdentity', // the inverse — sever a principal's login from a tenant
   // #101 — the integrations hub. The credential itself is NEVER in before/after:
   // this log is append-only, so a secret written here could never be removed.
   'createConnection',

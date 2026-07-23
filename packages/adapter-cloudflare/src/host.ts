@@ -308,6 +308,8 @@ interface ControlPlaneStub {
     scopeId: string | null,
     createdAt: string,
   ): Promise<boolean>;
+  /** Delete a principal's identity link(s) in a tenant. Idempotent (returns whether it changed). */
+  unlinkIdentity(tenantId: string, principal: string): Promise<boolean>;
   readPool(
     provider: string,
   ): Promise<{ provider: string; topology: string; tenant_id: string | null } | undefined>;
@@ -1748,6 +1750,13 @@ export class CloudflareScopeHost implements ScopeHost {
           null,
           { provider: parsed.provider, externalId: parsed.externalId, principal: parsed.principal },
         );
+      },
+      unlinkIdentity: async (actor, tenantId: TenantId, principal: PrincipalId) => {
+        // DELETE by principal (audit is the log), so the caller who removed a member
+        // can sever their login without knowing the external subject. Idempotent.
+        const changed = await this.cp.unlinkIdentity(tenantId, principal);
+        if (!changed) return;
+        await this.recordAdmin(actor, 'unlinkIdentity', { tenantId, scopeId: null }, { principal }, null);
       },
       resolveIdentity: async (
         tenantId,

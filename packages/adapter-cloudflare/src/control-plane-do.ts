@@ -1504,6 +1504,25 @@ export class ControlPlaneDO extends DurableObject {
     return true;
   }
 
+  /** Remove a principal's identity link(s) in a tenant. Returns whether a row was
+   *  deleted so a no-op stays silent (idempotent). */
+  unlinkIdentity(tenantId: string, principal: string): boolean {
+    const before = this.sql
+      .exec(
+        `SELECT 1 FROM _substrat_identities WHERE tenant_id = ? AND principal_id = ?`,
+        tenantId,
+        principal,
+      )
+      .toArray();
+    if (before.length === 0) return false;
+    this.sql.exec(
+      `DELETE FROM _substrat_identities WHERE tenant_id = ? AND principal_id = ?`,
+      tenantId,
+      principal,
+    );
+    return true;
+  }
+
   resolveIdentity(
     tenantId: string,
     provider: string,
