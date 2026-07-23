@@ -14,6 +14,7 @@
  */
 import { createInterface } from 'node:readline';
 import { loadConfig, saveConfig, resolveAuth } from './config.js';
+import { browserLogin } from './login.js';
 import { push } from './push.js';
 
 const argv = process.argv.slice(2);
@@ -24,21 +25,12 @@ function flag(name: string): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
-/** Prompt on the TTY; `hidden` mutes the echo (for secrets). */
-function ask(question: string, hidden = false): Promise<string> {
+/** Prompt on the TTY for a plain (non-secret) value. */
+function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   return new Promise((resolve) => {
-    if (hidden) {
-      // Mute the echoed keystrokes but still print the question itself.
-      const iface = rl as unknown as { _writeToOutput?: (s: string) => void };
-      const original = iface._writeToOutput?.bind(rl);
-      iface._writeToOutput = (s: string) => {
-        if (s.includes(question)) original?.(s);
-      };
-    }
     rl.question(question, (answer) => {
       rl.close();
-      if (hidden) process.stdout.write('\n');
       resolve(answer.trim());
     });
   });
@@ -47,28 +39,35 @@ function ask(question: string, hidden = false): Promise<string> {
 const USAGE = `substrat — authenticated deploy tooling
 
 Usage:
-  substrat login  [--cp <url>] [--token <serviceToken>]
+  substrat login  [--cp <url>]              sign in via the browser (per-human)
+  substrat login  --token <serviceToken>    store a service credential (CI)
   substrat push   <verticalDir> --slug <slug> --version <v> [--name <name>]
 
 Options (any command):
   --cp <url>       control-plane API base, e.g. https://console.substrat.net/api
-  --token <tok>    the control plane's SERVICE_TOKEN (service-actor credential)
+  --token <tok>    the control plane's SERVICE_TOKEN (service-actor credential, for CI)
 
-Auth resolves flag → env (SUBSTRAT_CP_URL / SUBSTRAT_SERVICE_TOKEN) → ~/.substrat/config.json.
+Auth resolves: explicit --token/SUBSTRAT_SERVICE_TOKEN → stored browser session →
+stored service token. URL resolves flag → SUBSTRAT_CP_URL → ~/.substrat/config.json.
 `;
 
 async function cmdLogin(): Promise<void> {
   const existing = loadConfig();
   const cpDefault = existing.controlPlaneUrl ?? 'https://console.substrat.net/api';
-  const cp = (flag('cp') ?? (await ask(`control-plane URL [${cpDefault}]: `))) || cpDefault;
-  const token = (flag('token') ?? (await ask('service token (input hidden): ', true))) || existing.serviceToken;
-  if (!token) {
-    console.error('login aborted: no service token provided');
-    process.exit(1);
+  const cp = ((flag('cp') ?? (await ask(`control-plane URL [${cpDefault}]: `))) || cpDefault).replace(/\/$/, '');
+
+  // CI path: a service credential, no browser.
+  const serviceToken = flag('token');
+  if (serviceToken) {
+    const path = saveConfig({ ...existing, controlPlaneUrl: cp, serviceToken });
+    console.log(`✓ saved service credential → ${path}`);
+    return;
   }
-  const path = saveConfig({ controlPlaneUrl: cp.replace(/\/$/, ''), serviceToken: token });
-  console.log(`✓ saved to ${path}`);
-  console.log(`  control plane: ${cp.replace(/\/$/, '')}`);
+
+  // Default: browser loopback login → a per-human session token.
+  const bearerToken = await browserLogin(cp);
+  const path = saveConfig({ ...existing, controlPlaneUrl: cp, bearerToken });
+  console.log(`✓ signed in. session saved to ${path}`);
 }
 
 async function cmdPush(): Promise<void> {
@@ -83,8 +82,9 @@ async function cmdPush(): Promise<void> {
     console.error('missing --slug and/or --version');
     process.exit(1);
   }
-  const { controlPlaneUrl, serviceToken } = resolveAuth({ cp: flag('cp'), token: flag('token') });
-  const v = await push({ dir, slug, version, name: flag('name'), controlPlaneUrl, serviceToken });
+  const { controlPlaneUrl, header, as } = resolveAuth({ cp: flag('cp'), token: flag('token') });
+  console.log(`authenticating with ${as}`);
+  const v = await push({ dir, slug, version, name: flag('name'), controlPlaneUrl, authHeader: header });
   console.log(`✓ pushed. version ${v.id} is ${v.admission}; deploymentRef=${v.deploymentRef}`);
   console.log('  admit it in the console to let a scope bind it.');
 }

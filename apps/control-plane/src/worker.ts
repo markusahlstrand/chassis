@@ -36,8 +36,9 @@ import {
 } from '@substrat-run/control-plane-api';
 import { VerticalClient } from '@substrat-run/control-plane-api';
 import { mountOidcRoutes, type OidcEnv } from '@substrat-run/oidc-rp';
-import { oidcStaffSessionReader } from './staff-auth.js';
+import { oidcStaffSessionReader, oidcStaffBearerReader } from './staff-auth.js';
 import { d1StaffRoster } from './staff-roster.js';
+import { mountCliAuthRoutes } from './cli-auth.js';
 
 /** The placeholder scope-DO class: kernel only, no modules. */
 export const ScopeDO = defineScopeDO([], {});
@@ -163,7 +164,12 @@ function authFor(env: Env): PlatformActorAuth {
   if (env.AUTH_DB) {
     // The roster is DATA, not config (#42): one actor per human, revocable by a
     // timestamp rather than by editing a secret. migrations/0002_staff_roster.sql.
-    readers.push(sessionPlatformAuth(oidcStaffSessionReader(env), d1StaffRoster(env.AUTH_DB)));
+    const roster = d1StaffRoster(env.AUTH_DB);
+    // A browser presents the session as the `sb_session` cookie; the CLI presents the
+    // SAME signed session as a bearer token (obtained via the login broker, cli-auth.ts).
+    // Both reduce to the same roster gate — the CLI is a staff human, not a shared actor.
+    readers.push(sessionPlatformAuth(oidcStaffSessionReader(env), roster));
+    readers.push(sessionPlatformAuth(oidcStaffBearerReader(env), roster));
   }
   // A connected vertical registers as a service (shared token), not staff.
   if (env.SERVICE_TOKEN) readers.push(serviceTokenAuth(env.SERVICE_TOKEN, SERVICE_ACTOR));
@@ -180,6 +186,11 @@ export default {
     // /logout. Same-origin with the console, so the session cookie just carries.
     // Registered before the /api router so these paths win over it.
     mountOidcRoutes(app);
+
+    // The CLI login broker (`substrat login`): /api/auth/cli + /api/auth/cli/token.
+    // A loopback OAuth flow that reuses the AuthHero round-trip above and hands the CLI
+    // the same signed session as a bearer. Also before the /api router.
+    mountCliAuthRoutes(app);
 
     // Who is signed in — the console SPA polls this (null when there is no session).
     app.get('/api/auth/session', async (c) => {

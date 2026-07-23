@@ -4,9 +4,6 @@ import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { webcrypto } from 'node:crypto';
 
-/** The header the control plane's `serviceTokenAuth` reads (control-plane-api/src/auth.ts). */
-const SERVICE_TOKEN_HEADER = 'x-service-token';
-
 interface DeclaredBinding {
   type: string;
   name: string;
@@ -34,15 +31,17 @@ export interface PushOptions {
   version: string;
   name?: string;
   controlPlaneUrl: string;
-  serviceToken: string;
+  /** The auth header to send — a bearer session or an x-service-token (see config.resolveAuth). */
+  authHeader: Record<string, string>;
 }
 
 /**
  * Build a vertical and push its bundle to the platform's deploy endpoint
  * (self-serve-deploy.md). The worker is built with `wrangler --dry-run --outdir` — the
  * control plane holds the Cloudflare credential, this never does (D-34). The version
- * lands PENDING; admission still gates serving. Authenticated as the platform's service
- * actor via `x-service-token`, so no `--actor` is chosen here.
+ * lands PENDING; admission still gates serving. Authenticated with the caller's own
+ * credential (`opts.authHeader` — a browser session or a service token), never a
+ * hand-picked `--actor`.
  */
 export async function push(opts: PushOptions): Promise<{ id: string; admission: string; deploymentRef: string }> {
   const cfg = readJsonc(join(opts.dir, 'wrangler.jsonc'));
@@ -107,7 +106,7 @@ export async function push(opts: PushOptions): Promise<{ id: string; admission: 
   console.log(`pushing ${entry} (+${modules.length - 1} modules) → ${url}`);
   const res = await fetch(url, {
     method: 'POST',
-    headers: { [SERVICE_TOKEN_HEADER]: opts.serviceToken },
+    headers: opts.authHeader,
     body: form,
   });
   const body = await res.text();
