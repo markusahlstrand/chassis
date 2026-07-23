@@ -104,6 +104,25 @@ export interface Deployment {
   channels: Array<{ channel: string; versionId: string }>;
 }
 
+/** One importable repo the tenant's GitHub connection can see (worker's github.ts shape). */
+export interface GitRepo {
+  fullName: string;
+  defaultBranch: string;
+  private: boolean;
+  updatedAt: string;
+}
+
+/** `GET /api/github/repos` — the Git-import card's live state. */
+export interface GitReposResult {
+  /** Is the GitHub App configured on this deployment at all? `false` ⇒ show nothing/hint. */
+  configured: boolean;
+  /** Has this tenant connected GitHub? `false` ⇒ show the Connect button. */
+  connected: boolean;
+  /** The connected GitHub account (org/user login), when connected. */
+  account?: string | null;
+  repos: GitRepo[];
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -184,6 +203,8 @@ export const api = {
   deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   retryApp: (scopeId: string) => call<AppRow>(`/apps/${encodeURIComponent(scopeId)}/retry`, { method: 'POST' }),
   listDeployments: () => call<Deployment[]>('/deployments'),
+  /** The tenant's GitHub-import state — connection status + the repos it can see. */
+  gitRepos: () => call<GitReposResult>('/github/repos'),
   promoteDeployment: (slug: string, channel: 'dev' | 'staging', versionId: string) =>
     call<void>(`/deployments/${encodeURIComponent(slug)}/promote`, {
       method: 'POST',
@@ -205,6 +226,10 @@ export const signIn = (
   if (opts.screenHint) p.set('screen_hint', opts.screenHint);
   const qs = p.toString();
   window.location.href = `/api/auth/login${qs ? `?${qs}` : ''}`;
+};
+/** Connect GitHub — a full-page redirect to the App install flow (returns to #/apps/new). */
+export const connectGithub = () => {
+  window.location.href = '/api/github/connect';
 };
 export const signOut = (opts: { returnTo?: string } = {}) => {
   const rt = typeof opts?.returnTo === 'string' ? opts.returnTo : undefined;

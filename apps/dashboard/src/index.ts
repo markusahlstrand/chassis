@@ -9,6 +9,7 @@ export {
   createApp,
   deprovisionApp,
   retryApp,
+  reconcileRoles,
   MODULES,
   ROLES,
   VERTICAL,

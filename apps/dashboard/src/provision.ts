@@ -34,6 +34,27 @@ export const ROLES: RoleDefinition[] = Object.entries(MEMBER_ROLES).map(([key, p
   source: 'vertical',
 }));
 
+/**
+ * Bring an already-provisioned tenant's role definitions up to date with the current
+ * `ROLES`. Role permission sets are written to the directory at provisioning time, so
+ * when a permission is later ADDED to a role in code (e.g. `dashboard:manage-integrations`),
+ * existing tenants keep the old set and their owners silently lack the new key. `defineRole`
+ * is an upsert and permission checks resolve principal→role→stored-permissions, so
+ * re-defining a drifted role grants the new key to every current holder at once. Gated on
+ * drift: it writes at most once per tenant after a `ROLES` change, and is a pure read
+ * thereafter — cheap enough to run on the resolve path so every tenant self-heals on its
+ * next request, with no migration or manual backfill.
+ */
+export async function reconcileRoles(host: ScopeHost, staff: PlatformActorId, tenantId: TenantId): Promise<void> {
+  const current = await host.admin.listRoles(staff, { tenantId });
+  const have = new Map(current.map((r) => [r.key, new Set<string>(r.permissions)]));
+  for (const role of ROLES) {
+    const set = have.get(role.key);
+    const drift = !set || set.size !== role.permissions.length || role.permissions.some((p) => !set.has(p));
+    if (drift) await host.admin.defineRole(staff, tenantId, role);
+  }
+}
+
 /** The customer's dashboard node + who they are — everything an app action needs, all ambient. */
 export interface DashboardNode {
   tenantId: TenantId;

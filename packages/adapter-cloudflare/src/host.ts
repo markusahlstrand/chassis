@@ -1601,7 +1601,9 @@ export class CloudflareScopeHost implements ScopeHost {
           externalAccountRef: input.externalAccountRef ?? null,
           scopes: JSON.stringify(input.scopes),
           expiresAt: input.expiresAt ?? null,
-          createdBy: actor,
+          // The authorizing principal when supplied (a self-serve connect), else the
+          // effecting platform actor. See connections.md §3.5.1 / createConnectionInput.
+          createdBy: input.createdBy ?? actor,
           createdAt: now,
           keyId: sealed.keyId,
           ciphertext: sealed.ciphertext,
@@ -1619,6 +1621,7 @@ export class CloudflareScopeHost implements ScopeHost {
             label: input.label,
             scopes: input.scopes,
             externalAccountRef: input.externalAccountRef ?? null,
+            createdBy: input.createdBy ?? actor,
           },
         );
       },

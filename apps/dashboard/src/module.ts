@@ -29,6 +29,12 @@ export const DASHBOARD_PERM = {
   read: permissionKey.parse('dashboard:read'),
   /** Invite/remove members and see the roster — the tenant-admin membership surface. */
   manageMembers: permissionKey.parse('dashboard:manage-members'),
+  /**
+   * Connect/disconnect third-party providers (GitHub, Scrive, …) for this tenant.
+   * The in-scope authorization for a self-serve connect (connections.md §3.5.1): the
+   * host effects the sealed write, but the *right* to connect is checked here.
+   */
+  manageIntegrations: permissionKey.parse('dashboard:manage-integrations'),
 };
 
 /**
@@ -44,8 +50,8 @@ export const DASHBOARD_PERM = {
  * but cannot manage the team; `viewer` is read-only.
  */
 export const MEMBER_ROLES: Record<string, PermissionKey[]> = {
-  owner: [DASHBOARD_PERM.provisionApp, DASHBOARD_PERM.read, DASHBOARD_PERM.manageMembers, INVITES_PERM.send, INVITES_PERM.read, INVITES_PERM.revoke],
-  admin: [DASHBOARD_PERM.provisionApp, DASHBOARD_PERM.read, DASHBOARD_PERM.manageMembers, INVITES_PERM.send, INVITES_PERM.read, INVITES_PERM.revoke],
+  owner: [DASHBOARD_PERM.provisionApp, DASHBOARD_PERM.read, DASHBOARD_PERM.manageMembers, DASHBOARD_PERM.manageIntegrations, INVITES_PERM.send, INVITES_PERM.read, INVITES_PERM.revoke],
+  admin: [DASHBOARD_PERM.provisionApp, DASHBOARD_PERM.read, DASHBOARD_PERM.manageMembers, DASHBOARD_PERM.manageIntegrations, INVITES_PERM.send, INVITES_PERM.read, INVITES_PERM.revoke],
   member: [DASHBOARD_PERM.provisionApp, DASHBOARD_PERM.read],
   viewer: [DASHBOARD_PERM.read],
 };
@@ -66,6 +72,10 @@ export const dashboardManifest = moduleManifest.parse({
     {
       key: 'dashboard:manage-members',
       description: 'Invite and remove team members and see the roster',
+    },
+    {
+      key: 'dashboard:manage-integrations',
+      description: 'Connect and disconnect third-party providers (GitHub, Scrive) for this tenant',
     },
   ],
   events: { emits: [], consumes: [] },
@@ -474,6 +484,23 @@ const removeMemberOp: OperationHandler<z.infer<typeof removeMemberInput>, { prin
   return { principal: row.principal, roleKey: row.role_key };
 };
 
+const beginConnectionInput = z.object({ provider: z.string().min(1).max(64) });
+
+/**
+ * Authorize a self-serve provider connection (connections.md §3.5.1). This is the
+ * *in-scope* half of B: it does nothing but assert the caller may connect providers
+ * for this tenant. The host effects the sealed `createConnection` afterwards (it
+ * holds the SecretBox + the OAuth secret), attributed to `ctx.principal` — so the
+ * authority originates here, in a permission-checked tenant act, not from a platform
+ * actor conjured in a request handler. Returns the authorizing principal for the
+ * host to stamp onto the connection + bind into the signed OAuth state.
+ */
+const beginConnectionOp: OperationHandler<z.infer<typeof beginConnectionInput>, { principal: string }> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.manageIntegrations));
+  beginConnectionInput.parse(raw);
+  return { principal: ctx.principal };
+};
+
 export const dashboardModule: ModuleRegistration = {
   manifest: dashboardManifest,
   migrations: dashboardMigrations,
@@ -492,5 +519,6 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/list-members': listMembersOp as OperationHandler<never, unknown>,
     'dashboard/remove-member': removeMemberOp as OperationHandler<never, unknown>,
     'dashboard/leave-self': leaveSelfOp as OperationHandler<never, unknown>,
+    'dashboard/begin-connection': beginConnectionOp as OperationHandler<never, unknown>,
   },
 };

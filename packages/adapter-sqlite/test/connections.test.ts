@@ -74,4 +74,39 @@ describe('connection store (pure adapter)', () => {
     expect(rows[0]!.ciphertext).not.toContain('plaintext-canary-value');
     expect(JSON.stringify(admin)).not.toContain('plaintext-canary-value');
   });
+
+  it('attributes createdBy to the authorizing principal when supplied, else the actor', async () => {
+    // B (connections.md §3.5.1): a self-serve connect is a tenant admin's in-scope act,
+    // effected by the host with platform authority — so the connection must record the
+    // *principal* who authorized it, never the effecting STAFF actor (the D-31 laundering).
+    const { host, staff, t } = await world(webCryptoSecretBox('k', new Uint8Array(32).fill(1)));
+    const principal = ulid(); // stands in for the tenant admin from the signed OAuth state
+
+    const selfServe = connectionId.parse(ulid());
+    await host.admin.createConnection(staff, {
+      id: selfServe,
+      tenantId: t,
+      vertical: 'dashboard',
+      provider: 'github',
+      label: 'GitHub — acme',
+      secret: { installationId: '42' },
+      createdBy: principal,
+    });
+
+    const platformDriven = connectionId.parse(ulid());
+    await host.admin.createConnection(staff, {
+      id: platformDriven,
+      tenantId: t,
+      vertical: 'callout',
+      provider: 'scrive',
+      label: 'staff-connected',
+      secret: { accessToken: 'tok' },
+    });
+
+    const conns = await host.admin.listConnections(staff, { tenantId: t });
+    const byId = new Map(conns.map((c) => [c.id, c.createdBy]));
+    expect(byId.get(selfServe)).toBe(principal); // attributed to the admin, not STAFF
+    expect(byId.get(platformDriven)).toBe(staff); // omitted ⇒ the effecting actor, unchanged
+    await host.close();
+  });
 });

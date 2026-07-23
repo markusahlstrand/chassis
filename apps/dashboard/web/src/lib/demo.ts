@@ -242,18 +242,8 @@ export const REPOS: RepoRow[] = [
   { name: 'acme-inc/legal-docs', meta: 'Documents engine · updated 1w ago', accent: LAYER.vertical, slug: 'protocol' },
   { name: 'acme-inc/field-ops', meta: 'Work Orders engine · updated 2w ago', accent: LAYER.engine, slug: 'callout' },
 ];
-export interface MarketplaceRow {
-  name: string;
-  meta: string;
-  accent: string;
-  slug: string;
-}
-export const MARKETPLACE: MarketplaceRow[] = [
-  { name: 'Meridian — HR', meta: 'Directory, leave & absence, time, expenses, onboarding', accent: LAYER.kernel, slug: 'meridian' },
-  { name: 'Callout — field service', meta: 'Work orders, time & material, self-inspection', accent: LAYER.engine, slug: 'callout' },
-  { name: 'Kallkälla Kaffe — e-commerce', meta: 'Catalog, cart, stock, discounts, orders', accent: LAYER.vertical, slug: 'protocol' },
-  { name: 'Handlebar — bike workshop', meta: 'The same engines, re-vocabularied to a workshop', accent: LAYER.engine, slug: 'callout' },
-];
+// The marketplace column of Create App is now live — it renders the real catalog
+// (GET /api/catalog) rather than fixtures. See views/CreateApp.tsx.
 
 // -- select option lists (mirror the gallery) -------------------------------
 
