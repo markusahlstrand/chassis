@@ -647,7 +647,13 @@ describe('control-plane API — deploy', () => {
   const auth = { [DEV_ACTOR_HEADER]: staff };
   const deployed: {
     ref: string;
-    bundle: { doClasses: string[]; entry: string; modules: unknown[]; bindings: { type: string; name: string; id?: string }[] };
+    bundle: {
+      doClasses: string[];
+      entry: string;
+      modules: unknown[];
+      bindings: { type: string; name: string; id?: string }[];
+      compatibilityFlags: string[];
+    };
   }[] = [];
 
   beforeAll(() => {
@@ -696,6 +702,25 @@ describe('control-plane API — deploy', () => {
     expect(deployed.at(-1)!.bundle.modules).toHaveLength(1);
     const verticals = await (await app.request('/verticals', { headers: auth })).json();
     expect(verticals).toContainEqual(expect.objectContaining({ slug: 'fsm', source: 'cli' }));
+  });
+
+  it('forwards compatibility flags to the uploader (nodejs_compat must survive)', async () => {
+    const res = await push('flagsdemo', form(manifest({ compatibilityFlags: ['nodejs_compat'] })));
+    expect(res.status).toBe(201);
+    expect(deployed.at(-1)!.bundle.compatibilityFlags).toEqual(['nodejs_compat']);
+  });
+
+  it('surfaces an upload failure as a 502 with detail, not a blank 500', async () => {
+    const boom = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      deployVertical: async () => {
+        throw new Error('WfP upload failed (400): compatibility flag nodejs_compat required');
+      },
+    });
+    const res = await boom.request('/verticals/boom/deploy', { method: 'POST', headers: auth, body: form(manifest()) });
+    expect(res.status).toBe(502);
+    expect((await res.json()).detail).toMatch(/WfP upload failed/);
   });
 
   it("forwards a vertical's own D1 binding (with its database id) to the uploader", async () => {

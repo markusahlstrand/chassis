@@ -33,6 +33,9 @@ export interface DeclaredBinding {
 export interface VerticalBundle {
   entry: string;
   compatibilityDate: string;
+  /** Runtime compat flags (e.g. `nodejs_compat`). Without these a script that imports
+   *  `node:*` cannot start, and the upload is rejected — so they must travel. */
+  compatibilityFlags: string[];
   modules: { name: string; content: Uint8Array; contentType: string }[];
   /** DO classes to migrate as SQLite (`new_sqlite_classes`). */
   doClasses: string[];
@@ -61,6 +64,7 @@ export const deployManifest = z.object({
   /** Filename of the main module among the uploaded parts. */
   entry: z.string().min(1),
   compatibilityDate: z.string().min(1),
+  compatibilityFlags: z.array(z.string().min(1)).default([]),
   doClasses: z.array(z.string().min(1)).default([]),
   bindings: z.array(declaredBinding).default([]),
   /** Computed by the builder's toolchain; what the promotion checkpoint compares. */

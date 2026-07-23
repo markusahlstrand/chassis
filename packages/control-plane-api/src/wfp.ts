@@ -20,6 +20,9 @@ export function createWfpUploader(opts: WfpUploaderOptions): DeployVerticalFn {
     const metadata = {
       main_module: bundle.entry,
       compatibility_date: bundle.compatibilityDate,
+      // Without the declared flags (e.g. `nodejs_compat`) a script importing `node:*`
+      // fails to start and the upload is rejected — carry them through.
+      compatibility_flags: bundle.compatibilityFlags,
       bindings: bundle.bindings,
       // Every Substrat scope DO is SQLite-backed (new_sqlite_classes, not new_classes).
       migrations: { new_tag: 'v1', new_sqlite_classes: bundle.doClasses },
