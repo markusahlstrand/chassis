@@ -71,10 +71,10 @@ export function InviteBlocked({
           {teamName ? <>The invitation to <strong>{teamName}</strong> was sent to </> : <>This invitation was sent to </>}
           {invitedEmail ? <strong>{invitedEmail}</strong> : 'another address'}
           {signedInAs ? <>, but you’re signed in as <strong>{signedInAs}</strong>.</> : '.'}
-          {' '}Sign out and continue with the invited email to join.
+          {' '}Sign out to continue as {invitedEmail ? <strong>{invitedEmail}</strong> : 'the invited email'} — we’ll take you to sign-up if you don’t have an account yet.
         </div>
         <Button style={{ width: '100%', justifyContent: 'center' }} onClick={onSignOut}>
-          Sign out &amp; use another email
+          Sign out &amp; continue as {invitedEmail ?? 'the invited email'}
         </Button>
         <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', textAlign: 'center' }}>
           <a href="#" onClick={(e) => { e.preventDefault(); onContinue(); }}>Stay signed in as {signedInAs ?? 'this account'}</a>
