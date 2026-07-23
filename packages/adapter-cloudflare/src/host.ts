@@ -251,6 +251,8 @@ interface ControlPlaneStub {
   listOrgs(tenantId: string): Promise<OrgRow[]>;
   /** K-21 tombstone. Returns whether anything changed (idempotent revoke). */
   revokeMember(tenantId: string, subject: string, object: string, at: string): Promise<boolean>;
+  /** Tombstone any tenant tuple by exact (subject, relation, object) — e.g. a role. Idempotent. */
+  revokeTenantTuple(tenantId: string, subject: string, relation: string, object: string, at: string): Promise<boolean>;
   listMembers(
     tenantId: string,
     object: string,
@@ -385,6 +387,8 @@ interface ScopeStubRpc {
     object: string,
     expiresAt: string | null,
   ): Promise<void>;
+  /** Tombstone a scope tuple by exact (subject, relation, object). Idempotent. */
+  revokeTuple(subject: string, relation: string, object: string, at: string): Promise<boolean>;
   /** Scope-local projection (scope-local-permissions.md): replace the tenant's roles + tuples and flip to local. */
   applyProjection(
     tenantId: string,
@@ -1090,6 +1094,26 @@ export class CloudflareScopeHost implements ScopeHost {
         );
         // A scope-level assignment writes a scope tuple (already local); only a
         // tenant-level one changes the projected set and must fan out.
+        if (!assignment.node.scopeId) await this.fanOut(assignment.node.tenantId);
+      },
+      unassignRole: async (actor, assignment: RoleAssignment) => {
+        // Tombstone (K-21) — the checker skips revoked rows. A no-op returns false so
+        // a repeat unassign stays silent (no second audit row, no needless fan-out).
+        const subject = `principal:${assignment.principalId}`;
+        const relation = `role:${assignment.roleKey}`;
+        const now = new Date().toISOString();
+        const changed = assignment.node.scopeId
+          ? await this.scopeStub(assignment.node.scopeId).revokeTuple(subject, relation, `scope:${assignment.node.scopeId}`, now)
+          : await this.cp.revokeTenantTuple(assignment.node.tenantId, subject, relation, `tenant:${assignment.node.tenantId}`, now);
+        if (!changed) return;
+        await this.recordAdmin(
+          actor,
+          'unassignRole',
+          { tenantId: assignment.node.tenantId, scopeId: assignment.node.scopeId },
+          assignment,
+          null,
+        );
+        // A tenant-level revoke changes the projected set — the tombstone must reach scopes.
         if (!assignment.node.scopeId) await this.fanOut(assignment.node.tenantId);
       },
       grant: async (actor, grant: CapabilityGrant) => {

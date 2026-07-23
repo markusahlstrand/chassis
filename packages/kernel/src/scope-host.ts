@@ -379,6 +379,16 @@ export interface HostAdmin {
    */
   listRoles(actor: PlatformActorId, filter?: RoleFilter): Promise<TenantRole[]>;
   assignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
+  /**
+   * Revoke a role assignment — the inverse of `assignRole`, same `RoleAssignment`
+   * shape. Tombstones the role tuple (K-21, never DELETE), so the checker stops
+   * resolving it and the assignment stays visible to audit; a later `assignRole`
+   * of the same (principal, role, node) reactivates it. Idempotent: unassigning a
+   * role that was never assigned (or already revoked) is a silent no-op. Takes a
+   * `PlatformActorId` like every admin mutation — the caller's own authority to do
+   * this is decided above the kernel (e.g. the dashboard's manage-members check).
+   */
+  unassignRole(actor: PlatformActorId, assignment: RoleAssignment): Promise<void>;
   grant(actor: PlatformActorId, grant: CapabilityGrant): Promise<void>;
   /** Grant to an organization (portal customers); members reach it via membership tuples. */
   /**

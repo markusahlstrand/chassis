@@ -1061,24 +1061,38 @@ export class ControlPlaneDO extends DurableObject {
    * row. Returns whether it changed, so the coordinator can skip the audit write.
    */
   revokeMember(tenantId: string, subject: string, object: string, at: string): boolean {
+    return this.revokeTenantTuple(tenantId, subject, 'member', object, at);
+  }
+
+  /** Tombstone any tenant tuple by its exact (subject, relation, object). Returns
+   *  whether a live row changed, so a repeat revoke is a silent no-op. */
+  revokeTenantTuple(
+    tenantId: string,
+    subject: string,
+    relation: string,
+    object: string,
+    at: string,
+  ): boolean {
     const before = this.sql
       .exec(
         `SELECT 1 FROM _substrat_tenant_tuples
-         WHERE tenant_id = ? AND subject = ? AND relation = 'member' AND object = ?
+         WHERE tenant_id = ? AND subject = ? AND relation = ? AND object = ?
            AND revoked_at IS NULL`,
         tenantId,
         subject,
+        relation,
         object,
       )
       .toArray();
     if (before.length === 0) return false;
     this.sql.exec(
       `UPDATE _substrat_tenant_tuples SET revoked_at = ?
-       WHERE tenant_id = ? AND subject = ? AND relation = 'member' AND object = ?
+       WHERE tenant_id = ? AND subject = ? AND relation = ? AND object = ?
          AND revoked_at IS NULL`,
       at,
       tenantId,
       subject,
+      relation,
       object,
     );
     return true;

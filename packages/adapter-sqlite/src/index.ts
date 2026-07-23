@@ -1790,6 +1790,39 @@ export class SqliteScopeHost implements ScopeHost {
           assignment,
         );
       },
+      unassignRole: async (actor: PlatformActorId, assignment: RoleAssignment) => {
+        // Tombstone (K-21), never DELETE — the checker skips revoked_at rows, so the
+        // assignment stops resolving while staying visible to audit. Guarded on
+        // `revoked_at IS NULL` so a repeat unassign is a silent no-op.
+        const subject = `principal:${assignment.principalId}`;
+        const relation = `role:${assignment.roleKey}`;
+        const now = new Date().toISOString();
+        let changes: number;
+        if (assignment.node.scopeId) {
+          const rt = this.runtime(assignment.node.tenantId, assignment.node.scopeId);
+          changes = rt.db
+            .prepare(
+              `UPDATE _substrat_tuples SET revoked_at = ?
+               WHERE subject = ? AND relation = ? AND object = ? AND revoked_at IS NULL`,
+            )
+            .run(now, subject, relation, `scope:${assignment.node.scopeId}`).changes;
+        } else {
+          changes = this.directory
+            .prepare(
+              `UPDATE _substrat_tenant_tuples SET revoked_at = ?
+               WHERE tenant_id = ? AND subject = ? AND relation = ? AND object = ? AND revoked_at IS NULL`,
+            )
+            .run(now, assignment.node.tenantId, subject, relation, `tenant:${assignment.node.tenantId}`).changes;
+        }
+        if (changes === 0) return; // never assigned, or already revoked — idempotent, unaudited
+        this.recordAdmin(
+          actor,
+          'unassignRole',
+          { tenantId: assignment.node.tenantId, scopeId: assignment.node.scopeId },
+          assignment,
+          null,
+        );
+      },
       grant: async (actor: PlatformActorId, grant: CapabilityGrant) => {
         writeGrant(
           `principal:${grant.principalId}`,

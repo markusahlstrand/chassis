@@ -19,6 +19,7 @@ import {
 export const adminAction = z.enum([
   'defineRole',
   'assignRole',
+  'unassignRole', // the inverse of assignRole — tombstones the role tuple (K-21)
   'grant',
   'grantToOrg',
   'addMember',
