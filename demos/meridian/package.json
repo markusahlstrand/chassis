@@ -5,6 +5,10 @@
   "license": "Apache-2.0",
   "description": "HR demo vertical (Meridian) — see spec/concept.md",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./module": "./src/module.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "vitest run",

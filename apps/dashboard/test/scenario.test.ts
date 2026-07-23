@@ -9,6 +9,7 @@ import { protocolModule, PROTOCOL_PERM } from '@substrat-run/engine-protocol';
 import { workorderModule } from '@substrat-run/engine-workorder';
 import { invoicingModule } from '@substrat-run/engine-invoicing';
 import { calloutModule } from '@substrat-run/demo-callout/module';
+import { meridianModule, HR_PERM } from '@substrat-run/demo-meridian/module';
 import {
   MODULES,
   provisionDashboard,
@@ -39,7 +40,7 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     host = new SqliteScopeHost({ dir });
     for (const m of MODULES) host.registerModule(m); // the dashboard vertical
     // The verticals an app can run, bundled in-process (M0), mirroring worker.ts.
-    for (const m of [protocolModule, workorderModule, invoicingModule, calloutModule]) {
+    for (const m of [protocolModule, workorderModule, invoicingModule, calloutModule, meridianModule]) {
       host.registerModule(m);
     }
     staff = platformActorId.parse(ulid());
@@ -189,6 +190,36 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
       content: { kind: 'document', documentType: 'welcome', hashRecipe: 'sha256 over the terms' },
     });
     expect(await appScope.invoke('protocol/list-templates', {})).toHaveLength(1);
+  });
+
+  it('an owner installs Meridian from the catalog — a live HR scope the owner can set up from empty', async () => {
+    const acme = await bootstrap('acme-hr');
+    const appScopeId = scopeId.parse(ulid());
+
+    const app = await createApp(host, {
+      node: acme,
+      appScopeId,
+      verticalSlug: 'meridian',
+      name: 'People',
+      // Meridian's SKU is the HR domain module + protocol (onboarding).
+      appEntitlements: ['meridian', 'protocol'],
+      // The hr-admin subset the fresh-instance owner needs to set the org up.
+      appOwnerGrants: [HR_PERM.absenceConfigure, HR_PERM.employeeManage, HR_PERM.absenceRead] as PermissionKey[],
+    });
+    expect(app.status).toBe('active');
+    expect(app.vertical_slug).toBe('meridian');
+    expect(app.hostname).toBe('people.global.substrat.run');
+    expect(await scopeIds(acme.tenantId)).toContain(appScopeId);
+
+    // It's a LIVE scope running the Meridian bundle, EMPTY on install (no seed). The
+    // owner sets it up from zero: define a leave type, then create the first employee —
+    // the first-run path a freshly-installed instance offers.
+    const appScope = await host.getScope(acme.principal, acme.tenantId, appScopeId);
+    await appScope.invoke('hr/define-leave-type', { key: 'vacation', label: 'Vacation', kind: 'vacation', annualDays: '25' });
+    expect(await appScope.invoke('hr/list-leave-types', {})).toHaveLength(1);
+    const employee = await appScope.invoke<{ id: string }>('hr/create-employee', { number: 'E-001', name: 'Alex Meridian' });
+    expect(employee.id).toBeTruthy();
+    expect(await appScope.invoke('hr/roster', {})).toHaveLength(1);
   });
 
   it('a principal without dashboard:provision-app is refused — before anything is provisioned', async () => {

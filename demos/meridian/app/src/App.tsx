@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api, getPrincipal, setPrincipal, type CastMember } from './api';
-import { useAppData, useManagerData } from './data';
+import { useAppData, useManagerData, useAdminData } from './data';
 import { icons } from './ui';
 import { Expenses, Home, Me, TimeOff, TimesheetScreen, type FlowKind } from './screens';
 import { LogTime, Onboarding, RequestLeave, SubmitExpense } from './flows';
 import { Inbox, OnboardingView, Team, TeamCalendar, Timesheets } from './manage';
+import { ADMIN_TABS, AdminLeaveTypes, AdminPayroll, AdminPeople, AdminProjects, AdminSetup, type AdminTab } from './admin';
 
 type WorkTab = 'home' | 'timeoff' | 'timesheet' | 'expenses' | 'me';
 type ManageTab = 'inbox' | 'calendar' | 'timesheets' | 'onboarding' | 'team';
-type Section = 'work' | 'manage';
+type Section = 'work' | 'manage' | 'admin';
 type Theme = 'system' | 'light' | 'dark';
 
 const WORK_TABS: { key: WorkTab; label: string; icon: keyof typeof icons }[] = [
@@ -47,18 +48,22 @@ export default function App() {
   const me = empData?.me ?? null;
   const hasMyWork = !!me?.employeeId;
   const canManage = me?.role === 'manager' || me?.role === 'hr-admin';
+  const isAdmin = me?.role === 'hr-admin';
   const { data: mgrData, reload: reloadMgr } = useManagerData(personaKey, canManage);
+  const { data: adminData, loading: adminLoading, error: adminError, reload: reloadAdmin } = useAdminData(personaKey, isAdmin);
   const isDesktop = useIsDesktop();
 
   const [section, setSection] = useState<Section>('work');
   const [workTab, setWorkTab] = useState<WorkTab>('home');
   const [manageTab, setManageTab] = useState<ManageTab>('inbox');
+  const [adminTab, setAdminTab] = useState<AdminTab>('setup');
   const [flow, setFlow] = useState<FlowKind | null>(null);
 
-  // Land on the section this persona actually has.
+  // Land on the section this persona actually has. An HR admin (no own work) opens on
+  // Admin — their setup home — rather than Manage; everyone else lands on their work.
   useEffect(() => {
-    if (me) setSection(hasMyWork ? 'work' : 'manage');
-  }, [me?.key, hasMyWork]);
+    if (me) setSection(hasMyWork ? 'work' : isAdmin ? 'admin' : 'manage');
+  }, [me?.key, hasMyWork, isAdmin]);
 
   useEffect(() => {
     api.cast().then(setCast).catch(() => setCast([]));
@@ -78,6 +83,7 @@ export default function App() {
   const reloadAll = () => {
     reloadEmp();
     reloadMgr();
+    reloadAdmin();
   };
   useEffect(() => {
     const onVisible = () => {
@@ -97,6 +103,7 @@ export default function App() {
     setFlow(null);
     setWorkTab('home');
     setManageTab('inbox');
+    setAdminTab('setup');
   }
   function done(msg: string) {
     setFlow(null);
@@ -142,7 +149,24 @@ export default function App() {
       case 'team': return <Team d={mgrData} {...mgrActions} />;
     }
   }
-  const view = section === 'work' ? workView() : manageView();
+  function adminView() {
+    if (adminError && !adminData) return <Centered>{adminError}</Centered>;
+    if (!adminData) return <Centered>{adminLoading ? 'Loading…' : 'No access'}</Centered>;
+    const props = {
+      d: adminData,
+      reload: reloadAll,
+      toast: setToast,
+      go: (t: AdminTab) => { setSection('admin'); setAdminTab(t); },
+    };
+    switch (adminTab) {
+      case 'setup': return <AdminSetup {...props} />;
+      case 'leavetypes': return <AdminLeaveTypes {...props} />;
+      case 'people': return <AdminPeople {...props} />;
+      case 'projects': return <AdminProjects {...props} />;
+      case 'payroll': return <AdminPayroll {...props} />;
+    }
+  }
+  const view = section === 'work' ? workView() : section === 'manage' ? manageView() : adminView();
 
   const flowEl =
     flow === 'request' ? <RequestLeave d={empData!} onClose={() => setFlow(null)} onDone={done} />
@@ -196,6 +220,16 @@ export default function App() {
               ))}
             </>
           )}
+          {isAdmin && (
+            <>
+              <div className="nav-section">Admin</div>
+              {ADMIN_TABS.map((t) => (
+                <button key={t.key} className={`nav-item${section === 'admin' && adminTab === t.key ? ' active' : ''}`} onClick={() => { setSection('admin'); setAdminTab(t.key); }}>
+                  {icons[t.icon]}<span>{t.label}</span>
+                </button>
+              ))}
+            </>
+          )}
 
           <div className="nav-user">
             <button className="btn sm tint" onClick={reloadAll} style={{ height: 30 }}>↻ Refresh</button>
@@ -228,9 +262,16 @@ export default function App() {
 
   // -- mobile: bottom tabs ----------------------------------------------------
 
-  const tabs = section === 'work' ? WORK_TABS : MANAGE_TABS;
-  const activeKey = section === 'work' ? workTab : manageTab;
-  const setTab = (k: string) => (section === 'work' ? setWorkTab(k as WorkTab) : setManageTab(k as ManageTab));
+  // The sections this persona actually has — the mobile segment switches between them.
+  const sections: { key: Section; label: string }[] = [
+    ...(hasMyWork ? [{ key: 'work' as const, label: 'My work' }] : []),
+    ...(canManage ? [{ key: 'manage' as const, label: `Manage${pendingCount > 0 ? ` · ${pendingCount}` : ''}` }] : []),
+    ...(isAdmin ? [{ key: 'admin' as const, label: 'Admin' }] : []),
+  ];
+  const tabs = section === 'work' ? WORK_TABS : section === 'manage' ? MANAGE_TABS : ADMIN_TABS;
+  const activeKey = section === 'work' ? workTab : section === 'manage' ? manageTab : adminTab;
+  const setTab = (k: string) =>
+    section === 'work' ? setWorkTab(k as WorkTab) : section === 'manage' ? setManageTab(k as ManageTab) : setAdminTab(k as AdminTab);
 
   return (
     <div className="phone">
@@ -245,13 +286,14 @@ export default function App() {
         flowEl
       ) : (
         <>
-          {hasMyWork && canManage && (
+          {sections.length > 1 && (
             <div style={{ padding: '4px 18px 0' }}>
               <div className="segment">
-                <button className={section === 'work' ? 'active' : ''} onClick={() => setSection('work')}>My work</button>
-                <button className={section === 'manage' ? 'active' : ''} onClick={() => setSection('manage')}>
-                  Manage{pendingCount > 0 ? ` · ${pendingCount}` : ''}
-                </button>
+                {sections.map((s) => (
+                  <button key={s.key} className={section === s.key ? 'active' : ''} onClick={() => setSection(s.key)}>
+                    {s.label}
+                  </button>
+                ))}
               </div>
             </div>
           )}

@@ -17,6 +17,7 @@
     "@substrat-run/adapter-email": "workspace:^",
     "@substrat-run/contracts": "workspace:^",
     "@substrat-run/demo-callout": "workspace:^",
+    "@substrat-run/demo-meridian": "workspace:^",
     "@substrat-run/engine-invites": "workspace:^",
     "@substrat-run/engine-invoicing": "workspace:^",
     "@substrat-run/engine-protocol": "workspace:^",

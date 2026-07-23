@@ -119,6 +119,12 @@ export interface RosterMember {
   email: string | null;
   started_at: string | null;
 }
+export interface PayrollExport {
+  fromDate: string;
+  toDate: string;
+  expenses: { employeeId: string; amount: string; currency: string; category: string }[];
+  absence: { employeeId: string; leaveTypeKey: string; days: string }[];
+}
 export interface OnboardingSummary {
   instance: {
     id: string;
@@ -194,6 +200,23 @@ export const api = {
     invoke<unknown>('hr/decide-leave', { requestId, decision, ...(note ? { note } : {}) }),
   decideExpense: (expenseId: string, decision: 'approve' | 'reject') =>
     invoke<unknown>('hr/decide-expense', { expenseId, decision }),
+
+  // -- HR-admin setup (the Admin section) --
+  // The first-run surface: an installed instance is empty, so the owner defines the
+  // vocabulary (leave types), adds people, and sets up projects before anyone uses it.
+  defineLeaveType: (input: { key: string; label: string; kind: string; annualDays?: string }) =>
+    invoke<LeaveType>('hr/define-leave-type', input),
+  createEmployee: (input: { number: string; name: string; email?: string; nationalId?: string; startedAt?: string }) =>
+    invoke<RosterMember>('hr/create-employee', input),
+  createProject: (input: { code: string; name: string }) => invoke<Project>('hr/create-project', input),
+  // Node-level project list (HR admin holds time:read at the node, so no employee ref).
+  adminProjects: () => invoke<Project[]>('hr/list-projects'),
+  accrue: (input: { employeeId: string; leaveTypeKey: string; days: string; note?: string }) =>
+    invoke<unknown>('hr/accrue', input),
+  // Generate the variable-pay export for a period (the payroll boundary — §7). This
+  // MUTATES: approved expenses in range are marked exported so a re-run never double-pays.
+  payrollExport: (fromDate: string, toDate: string) =>
+    invoke<PayrollExport>('hr/payroll-export', { fromDate, toDate }),
 };
 
 /** Money/decimal formatting per country. */

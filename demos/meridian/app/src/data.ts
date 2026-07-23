@@ -164,6 +164,60 @@ export function useManagerData(personaKey: string, enabled: boolean): { data: Ma
   return { data, reload };
 }
 
+export interface AdminData {
+  leaveTypes: LeaveType[];
+  roster: RosterMember[];
+  projects: Project[];
+  country: 'SE' | 'ES';
+}
+
+/**
+ * The Admin (HR-setup) data — the vocabulary + people + projects an HR admin owns.
+ * Loaded only for the hr-admin role. On a freshly-installed instance every list is
+ * empty, which is exactly what the first-run setup checklist reads to guide the owner.
+ */
+export function useAdminData(personaKey: string, enabled: boolean): { data: AdminData | null; loading: boolean; error: string | null; reload: () => void } {
+  const [data, setData] = useState<AdminData | null>(null);
+  const [loading, setLoading] = useState(enabled);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(() => {
+    if (!enabled) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const [me, leaveTypes, roster, projects] = await Promise.all([
+          api.me(),
+          api.leaveTypes(),
+          api.roster(),
+          api.adminProjects(),
+        ]);
+        if (!cancelled) {
+          setData({ leaveTypes, roster, projects, country: me.country });
+          setLoading(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [personaKey, enabled]);
+
+  useEffect(() => reload(), [reload]);
+  return { data, loading, error, reload };
+}
+
 /** Working-days between two ISO dates, inclusive (Mon–Fri). */
 export function workingDays(startISO: string, endISO: string): number {
   const start = new Date(startISO + 'T00:00:00');
