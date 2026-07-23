@@ -75,8 +75,6 @@ no service binding, so it passes `assertSandboxContract`.
   employeeId }`) via `hr/whoami`, and owner **login-linking is done** — the first sign-in claims the
   owner seat (`hr-admin`), so a real signed-up owner lands on the Admin/setup surface. (Reconciled
   in from the data-contract change.)
-- **Dead files.** `src/auth.ts` + `src/auth-schema.ts` (the old D1 Better Auth) and the D1 auth
-  migrations are now unused (auth moved to the IdentityDO); safe to remove in a cleanup pass.
 - **Scrive reconcile.** The poll-path cron cannot run as a dispatch user-worker, so Scrive e-sign
   reconciliation is not wired in the pushed worker; it remains a standalone-mode feature until a
   platform-level sweep covers dispatch verticals.
