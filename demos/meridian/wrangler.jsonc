@@ -26,13 +26,13 @@
 	"durable_objects": {
 		"bindings": [
 			{ "name": "SCOPE", "class_name": "ScopeDO" },
-			{ "name": "AUTH", "class_name": "AuthDO" }
+			{ "name": "AUTH", "class_name": "IdentityDO" }
 		]
 	},
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": ["ScopeDO", "AuthDO"]
+			"new_sqlite_classes": ["ScopeDO", "IdentityDO"]
 		}
 	]
 	// Secrets on deploy (`wrangler secret put …` / injected by the platform on push):

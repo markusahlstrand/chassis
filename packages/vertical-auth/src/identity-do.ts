@@ -3,32 +3,31 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import * as schema from './auth-schema.js';
-import type { AuthProvider, AuthSubject } from './auth-provider.js';
+import type { AuthProvider, AuthSubject } from './provider.js';
 
 /**
- * SPIKE — auth as a separate Durable Object, behind the `AuthProvider` contract.
+ * The per-tenant IDENTITY Durable Object — one per tenant, running its OWN Better Auth
+ * over its OWN SQLite (Drizzle's Durable-Object driver, not a shared D1), and holding the
+ * provider-agnostic `sub → principal` directory. A tenant's users/sessions/credentials are
+ * isolated in its DO; there is NO per-worker `AUTH_DB` to leak across tenants.
  *
- * One `AuthDO` PER TENANT (keyed by tenant id in the worker), running its OWN Better Auth
- * instance over its OWN SQLite — via Drizzle's Durable-Object driver (`drizzle-orm/
- * durable-sqlite`), not a shared D1. So a tenant's users/sessions/credentials are isolated
- * in that tenant's DO, and there is NO per-worker `AUTH_DB` to leak across tenants. The
- * vertical worker never imports Better Auth on the request path — it holds a stub and
- * talks the contract (`doAuthProvider`), so the auth implementation is swappable.
+ * It runs in its own isolate (separate process + storage from the vertical's business-data
+ * DO), and is one of the vertical's OWN DO classes — a legal sandbox-clean binding (the
+ * contract refuses only cross-script / platform bindings).
  *
- * Runs in its own DO isolate: separate process + storage from the `ScopeDO` that holds the
- * business data. This is a legal sandbox-clean binding because `AuthDO` is one of the
- * vertical's OWN DO classes (not a cross-script binding, which the contract refuses).
+ * Two roles, either or both used per deployment:
+ *   - `doAuthProvider` (below) exposes Better Auth here as an `AuthProvider` (the
+ *     `better-auth-do` config). With an OIDC provider instead, Better Auth stays dormant.
+ *   - `setPendingOwner` / `resolvePrincipal` are the identity directory — used under EVERY
+ *     provider, since the subject → principal mapping is provider-independent.
  */
 
-// Better Auth's tables, created in THIS DO's SQLite on first use (idempotent). Mirrors
-// migrations/0001_better_auth.sql — inlined because a DO can't read a migrations dir.
 const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS user (
     id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
     email_verified INTEGER NOT NULL DEFAULT 0, image TEXT,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
-    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
-    principal_id TEXT)`,
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)))`,
   `CREATE TABLE IF NOT EXISTS session (
     id TEXT PRIMARY KEY NOT NULL, expires_at INTEGER NOT NULL, token TEXT NOT NULL UNIQUE,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
@@ -50,30 +49,25 @@ const SCHEMA_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS verification_identifier_idx ON verification (identifier)`,
   // The PROVIDER-AGNOSTIC identity directory: a verified subject (`sub`) → the Substrat
   // PrincipalId it maps to, per scope (K-22 — the same login is a different principal in
-  // each scope). Written when a login claims the instance; read on every request after.
-  // Independent of WHICH provider verified the subject (Better Auth here, or an OIDC issuer).
+  // each scope). Independent of WHICH provider verified the subject.
   `CREATE TABLE IF NOT EXISTS identity (scope_id TEXT NOT NULL, sub TEXT NOT NULL, principal TEXT NOT NULL, PRIMARY KEY (scope_id, sub))`,
   // The owner seat waiting to be claimed: set at provision, consumed by the first login.
   `CREATE TABLE IF NOT EXISTS pending_owner (scope_id TEXT PRIMARY KEY, principal TEXT NOT NULL)`,
 ];
 
-interface AuthDoEnv {
+export interface IdentityDoEnv {
   BETTER_AUTH_SECRET?: string;
 }
 
-export class AuthDO extends DurableObject<AuthDoEnv> {
-  constructor(ctx: DurableObjectState, env: AuthDoEnv) {
+export class IdentityDO extends DurableObject<IdentityDoEnv> {
+  constructor(ctx: DurableObjectState, env: IdentityDoEnv) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       for (const stmt of SCHEMA_STATEMENTS) ctx.storage.sql.exec(stmt);
     });
   }
 
-  /**
-   * Record the owner seat to be claimed by the first login into this scope (called at
-   * provision). Provider-agnostic — the subject that later claims it may come from Better
-   * Auth or an OIDC issuer.
-   */
+  /** Record the owner seat to be claimed by the first login into this scope (called at provision). */
   async setPendingOwner(scopeId: string, principal: string): Promise<void> {
     this.ctx.storage.sql.exec('INSERT OR REPLACE INTO pending_owner (scope_id, principal) VALUES (?, ?)', scopeId, principal);
   }
@@ -81,8 +75,8 @@ export class AuthDO extends DurableObject<AuthDoEnv> {
   /**
    * Map a verified subject to a PrincipalId in this scope. If already bound, return it. If
    * not, and the scope's owner seat is unclaimed, CLAIM it: bind this subject to the owner
-   * principal (the installer becomes `hr-admin`) and consume the pending seat. Otherwise
-   * return null — a stranger with a valid login but no seat has no access.
+   * principal and consume the pending seat. Otherwise null — a valid login with no seat has
+   * no access. Provider-agnostic: the subject may come from Better Auth or an OIDC issuer.
    */
   async resolvePrincipal(scopeId: string, sub: string): Promise<string | null> {
     const bound = [...this.ctx.storage.sql.exec('SELECT principal FROM identity WHERE scope_id = ? AND sub = ?', scopeId, sub)][0] as
@@ -104,16 +98,16 @@ export class AuthDO extends DurableObject<AuthDoEnv> {
     return betterAuth({
       database: drizzleAdapter(db, { provider: 'sqlite', schema }),
       emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 8 },
-      secret: this.env.BETTER_AUTH_SECRET ?? 'dev-only-secret-substrat-meridian-demo-32chars',
+      secret: this.env.BETTER_AUTH_SECRET ?? 'dev-only-secret-substrat-vertical-auth-32chars',
       baseURL: origin,
       trustedOrigins: [origin],
     });
   }
 
   /**
-   * The DO's HTTP surface. `/__session` resolves the request to an `AuthSubject` (the
-   * contract's `resolve`); everything else is a Better Auth request (the contract's
-   * `handle`). The worker forwards requests here; Better Auth never runs in the worker.
+   * The DO's HTTP surface (used only when Better Auth is the chosen provider). `/__session`
+   * resolves the request to an `AuthSubject`; everything else is a Better Auth request. The
+   * worker forwards requests here; Better Auth never runs in the worker.
    */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -129,12 +123,19 @@ export class AuthDO extends DurableObject<AuthDoEnv> {
   }
 }
 
+/** A minimal stub shape — the identity DO's callable surface (avoids leaking the full class type). */
+export type IdentityStub = {
+  fetch(request: Request): Promise<Response>;
+  setPendingOwner(scopeId: string, principal: string): Promise<void>;
+  resolvePrincipal(scopeId: string, sub: string): Promise<string | null>;
+};
+
 /**
- * The `AuthProvider` backed by a tenant's `AuthDO` stub. `handle` forwards the raw request;
- * `resolve` asks the DO's `/__session` probe, carrying the request's cookies. The worker
- * holds only this — never Better Auth itself.
+ * The `AuthProvider` backed by a tenant's identity-DO stub (the `better-auth-do` config).
+ * `handle` forwards the raw request; `resolve` asks the DO's `/__session` probe, carrying
+ * the request's cookies. The worker holds only this — never Better Auth itself.
  */
-export function doAuthProvider(stub: DurableObjectStub, origin: string): AuthProvider {
+export function doAuthProvider(stub: Pick<IdentityStub, 'fetch'>, origin: string): AuthProvider {
   return {
     handle: (request) => stub.fetch(request),
     async resolve(headers) {

@@ -1,5 +1,5 @@
 import { jwtVerify, createRemoteJWKSet, type JWTVerifyGetKey } from 'jose';
-import type { AuthProvider, AuthSubject } from './auth-provider.js';
+import type { AuthProvider, AuthSubject } from './provider.js';
 
 /**
  * Standard OIDC as an `AuthProvider` — token-based, so it covers Supabase (now an OIDC

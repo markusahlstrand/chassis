@@ -28,14 +28,12 @@ import type { PrincipalId } from '@substrat-run/contracts';
 import { MODULES, ROLES } from './provision.js';
 import { serveAsset } from './assets.js';
 import type { CompanyNode } from './auth-adapters.js';
-import { AuthDO, doAuthProvider } from './auth-do.js';
-import { oidcAuthProvider } from './auth-oidc.js';
-import type { AuthProvider } from './auth-provider.js';
+import { IdentityDO, doAuthProvider, oidcAuthProvider, type AuthProvider } from '@substrat-run/vertical-auth';
 
 /** The scope-DO class = the app binary: kernel + protocol + Meridian, bundled. */
 export const ScopeDO = defineScopeDO(MODULES, {});
-/** The per-tenant identity DO — the sub→principal directory, and Better Auth when that provider is chosen. */
-export { AuthDO };
+/** The per-tenant identity DO (shared @substrat-run/vertical-auth) — bound as AUTH; wrangler needs the export. */
+export { IdentityDO };
 
 // A fixed dev node (valid ULIDs). Behind the router the node comes from the resolved
 // hostname; this is ONLY the fallback for local `wrangler dev`, where there is no router
@@ -51,7 +49,7 @@ interface Env {
   // tenant). No shared D1 `AUTH_DB`, no CONTROL_PLANE binding, no service binding — all
   // refused by assertSandboxContract. AUTH being an OWN class is what keeps it legal.
   SCOPE: DurableObjectNamespace;
-  AUTH: DurableObjectNamespace<AuthDO>;
+  AUTH: DurableObjectNamespace<IdentityDO>;
   /**
    * Which auth the app runs — the config section. `better-auth-do` (default): Better Auth
    * in the per-tenant AUTH DO. `oidc`: verify a bearer token against an OIDC issuer
