@@ -63,6 +63,9 @@ export async function push(opts: PushOptions): Promise<{ id: string; admission: 
   const migrations = (cfg.migrations as { new_sqlite_classes?: string[] }[] | undefined) ?? [];
   const doClasses = migrations.flatMap((m) => m.new_sqlite_classes ?? []);
   const compatibilityDate = (cfg.compatibility_date as string | undefined) ?? '2025-01-01';
+  // Flags travel with the bundle: a vertical needing `nodejs_compat` (Better Auth, node
+  // built-ins) can't start without them, and the runtime rejects the upload.
+  const compatibilityFlags = (cfg.compatibility_flags as string[] | undefined) ?? [];
   const mainPath = cfg.main as string;
 
   // Build the bundle (runs the vertical's own wrangler `build.command` first).
@@ -87,6 +90,7 @@ export async function push(opts: PushOptions): Promise<{ id: string; admission: 
     name: opts.name ?? opts.slug,
     entry,
     compatibilityDate,
+    compatibilityFlags,
     doClasses,
     bindings,
     digests: {

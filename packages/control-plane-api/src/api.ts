@@ -455,13 +455,24 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     // on it, so it is CF-valid and unique per version.
     const id = ulid();
     const deploymentRef = deploymentRefFor(slug, id);
-    await options.deployVertical(deploymentRef, {
-      entry: manifest.entry,
-      compatibilityDate: manifest.compatibilityDate,
-      modules,
-      doClasses: manifest.doClasses,
-      bindings: manifest.bindings,
-    });
+    try {
+      await options.deployVertical(deploymentRef, {
+        entry: manifest.entry,
+        compatibilityDate: manifest.compatibilityDate,
+        compatibilityFlags: manifest.compatibilityFlags,
+        modules,
+        doClasses: manifest.doClasses,
+        bindings: manifest.bindings,
+      });
+    } catch (e) {
+      // The upload to the runtime failed (e.g. Cloudflare rejected the script). This is
+      // a platform/runtime error, not a bad request — surface the detail (the builder is
+      // authenticated) rather than the anonymous 500 the generic handler would give, so a
+      // push failure is diagnosable without reading worker logs.
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error('deploy.upload.failed', { slug, deploymentRef, detail });
+      return c.json({ error: 'deploy upload failed', detail }, 502);
+    }
 
     // Register-then-publish, both idempotent-ish below the seam: a first push of a
     // slug registers it; publishVersion lands the version pending with deploymentRef.
