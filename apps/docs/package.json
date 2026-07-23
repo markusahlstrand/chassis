@@ -7,7 +7,7 @@
     "dev": "vitepress dev",
     "build": "vitepress build",
     "preview": "vitepress preview",
-    "deploy": "vitepress build && wrangler pages deploy",
+    "cf:deploy": "vitepress build && wrangler pages deploy",
     "typecheck": "exit 0",
     "test": "exit 0"
   },

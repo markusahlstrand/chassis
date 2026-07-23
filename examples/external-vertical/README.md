@@ -54,7 +54,7 @@ curl -s -H "x-principal: $U" http://localhost:8787/api/workorders   # [] — eng
 ## Deploy it
 
 ```sh
-pnpm deploy         # needs a Workers Paid plan (Durable Object SQLite)
+pnpm cf:deploy      # needs a Workers Paid plan (Durable Object SQLite)
 ```
 
 `ALLOW_DEV_HEADER` is **not** set on deploy, so a deployed worker is fail-closed

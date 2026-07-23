@@ -35,9 +35,10 @@ Substrat is a hosted substrate for vertical business software: a multi-tenant ke
   staff-facing surfaces are separate Vite apps against one API — the split is chrome and
   audience, never a second source of truth. Both origins must be trusted by Better Auth.
 - One vitest scenario per demo vertical: `pnpm --filter @substrat-run/demo-callout test`
-- `pnpm --filter @substrat-run/docs run deploy` — build + ship the docs site to
-  [substrat.ahlstrand.es](https://substrat.ahlstrand.es) (Cloudflare Pages). The `run`
-  is required: pnpm's built-in `deploy` shadows the script.
+- `pnpm --filter @substrat-run/docs cf:deploy` — build + ship the docs site to
+  [substrat.ahlstrand.es](https://substrat.ahlstrand.es) (Cloudflare Pages). Every deployable
+  workspace uses the `cf:deploy` script name (dashboard, control-plane, router, docs, demos) —
+  chosen over `deploy` so `pnpm cf:deploy` never collides with pnpm's built-in `deploy` command.
 
 ## The three-layer rule (never violated)
 
