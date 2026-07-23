@@ -112,7 +112,7 @@ export interface GitRepo {
   updatedAt: string;
 }
 
-/** `GET /api/git/repos` — the Git-import card's live state. */
+/** `GET /api/github/repos` — the Git-import card's live state. */
 export interface GitReposResult {
   /** Is the GitHub App configured on this deployment at all? `false` ⇒ show nothing/hint. */
   configured: boolean;
@@ -204,7 +204,7 @@ export const api = {
   retryApp: (scopeId: string) => call<AppRow>(`/apps/${encodeURIComponent(scopeId)}/retry`, { method: 'POST' }),
   listDeployments: () => call<Deployment[]>('/deployments'),
   /** The tenant's GitHub-import state — connection status + the repos it can see. */
-  gitRepos: () => call<GitReposResult>('/git/repos'),
+  gitRepos: () => call<GitReposResult>('/github/repos'),
   promoteDeployment: (slug: string, channel: 'dev' | 'staging', versionId: string) =>
     call<void>(`/deployments/${encodeURIComponent(slug)}/promote`, {
       method: 'POST',
@@ -229,7 +229,7 @@ export const signIn = (
 };
 /** Connect GitHub — a full-page redirect to the App install flow (returns to #/apps/new). */
 export const connectGithub = () => {
-  window.location.href = '/api/git/connect';
+  window.location.href = '/api/github/connect';
 };
 export const signOut = (opts: { returnTo?: string } = {}) => {
   const rt = typeof opts?.returnTo === 'string' ? opts.returnTo : undefined;

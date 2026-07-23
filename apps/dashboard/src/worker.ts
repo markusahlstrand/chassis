@@ -841,7 +841,7 @@ const GIT_VERTICAL = 'dashboard';
  * page carrying a signed state that binds this connect to the authorizing principal +
  * tenant. B's authority originates here — not in the callback, not from a platform actor.
  */
-app.get('/api/git/connect', async (c) => {
+app.get('/api/github/connect', async (c) => {
   const cfg = githubConfig(c.env);
   if (!cfg) throw new HTTPException(503, { message: 'GitHub is not configured' });
   const host = hostFor(c.env);
@@ -860,7 +860,7 @@ app.get('/api/git/connect', async (c) => {
  * same principal, then record the connection: the installationId sealed, attributed to
  * the principal (`createdBy`), effected with platform authority.
  */
-app.get('/api/git/callback', async (c) => {
+app.get('/api/github/callback', async (c) => {
   const cfg = githubConfig(c.env);
   if (!cfg) throw new HTTPException(503, { message: 'GitHub is not configured' });
   const installationId = c.req.query('installation_id');
@@ -898,7 +898,7 @@ app.get('/api/git/callback', async (c) => {
  * exists yet (the UI shows Connect). The installation token is minted fresh from the
  * stored installationId on each call, so nothing durable is a bearer secret.
  */
-app.get('/api/git/repos', async (c) => {
+app.get('/api/github/repos', async (c) => {
   const cfg = githubConfig(c.env);
   if (!cfg) return c.json({ configured: false, connected: false, repos: [] });
   const host = hostFor(c.env);
