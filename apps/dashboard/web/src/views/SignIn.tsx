@@ -26,7 +26,7 @@ export function SignIn({ error }: { error?: boolean }) {
           </div>
         )}
         <Input label="Email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <Button style={{ width: '100%', justifyContent: 'center' }} onClick={signIn}>
+        <Button style={{ width: '100%', justifyContent: 'center' }} onClick={() => signIn({ loginHint: email || undefined })}>
           Continue
         </Button>
         <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', textAlign: 'center' }}>
@@ -34,6 +34,52 @@ export function SignIn({ error }: { error?: boolean }) {
         </div>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>SSO options land here later — room reserved.</div>
+    </div>
+  );
+}
+
+/**
+ * Shown when someone follows an invite link while signed in as the WRONG account —
+ * the accept was refused because the verified email doesn't match the invited one.
+ * A dead-end into "create a team" would be baffling here; this names the mismatch and
+ * offers the two real ways out: sign out to use the invited email, or keep this account.
+ */
+export function InviteBlocked({
+  teamName,
+  invitedEmail,
+  signedInAs,
+  onSignOut,
+  onContinue,
+}: {
+  teamName?: string;
+  invitedEmail?: string;
+  signedInAs?: string;
+  onSignOut: () => void;
+  onContinue: () => void;
+}) {
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--surface-page)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, padding: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <StrataGlyph size={20} />
+        <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>substrat</span>
+      </div>
+      <div style={{ width: 380, maxWidth: '100%', background: 'var(--surface-card)', border: '1px solid var(--border-default)', borderRadius: 12, boxShadow: 'var(--shadow-sm)', padding: 24, display: 'flex', flexDirection: 'column', gap: 14, boxSizing: 'border-box' }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
+          This invite is for a different email
+        </div>
+        <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+          {teamName ? <>The invitation to <strong>{teamName}</strong> was sent to </> : <>This invitation was sent to </>}
+          {invitedEmail ? <strong>{invitedEmail}</strong> : 'another address'}
+          {signedInAs ? <>, but you’re signed in as <strong>{signedInAs}</strong>.</> : '.'}
+          {' '}Sign out and continue with the invited email to join.
+        </div>
+        <Button style={{ width: '100%', justifyContent: 'center' }} onClick={onSignOut}>
+          Sign out &amp; use another email
+        </Button>
+        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', textAlign: 'center' }}>
+          <a href="#" onClick={(e) => { e.preventDefault(); onContinue(); }}>Stay signed in as {signedInAs ?? 'this account'}</a>
+        </div>
+      </div>
     </div>
   );
 }

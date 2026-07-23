@@ -6,7 +6,7 @@ import { verticalMeta } from './lib/demo';
 import { DashShell, type Crumb, type NavKey } from './components/DashShell';
 import { CommandPalette } from './components/CommandPalette';
 import { NotificationsPopover } from './components/NotificationsPopover';
-import { SignIn, Interstitial } from './views/SignIn';
+import { SignIn, Interstitial, InviteBlocked } from './views/SignIn';
 import { Onboarding } from './views/Onboarding';
 import { Apps } from './views/Apps';
 import { Deployments } from './views/Deployments';
@@ -68,6 +68,9 @@ export function App() {
   const [notifs, setNotifs] = useState(false);
   const [unread, setUnread] = useState(true);
   const [toast, setToast] = useState<{ status: 'success' | 'danger'; title: string; detail?: string }>();
+  // Set when a signed-in user follows an invite meant for a different email — shown
+  // instead of dropping them into onboarding ("create a team").
+  const [inviteBlock, setInviteBlock] = useState<{ teamName?: string; invitedEmail?: string; signedInAs?: string } | null>(null);
 
   // Theme → data-theme on the root (every token flips; no per-theme overrides).
   useEffect(() => {
@@ -123,28 +126,36 @@ export function App() {
     }
     let live = true;
     void (async () => {
-      // 1. Invite acceptance. A pathname link, or a token stashed before we sent the
-      //    recipient to sign in (the OIDC round-trip returns them to '/').
-      const PENDING = 'substrat.pendingInvite';
-      const pathToken = window.location.pathname.match(/^\/invite\/([^/]+)$/)?.[1];
-      const token = pathToken ?? localStorage.getItem(PENDING) ?? null;
+      // 1. Invite acceptance. The invite is carried THROUGH auth by the OIDC layer's
+      //    `returnTo` (the callback returns here to `/invite/<token>`), so there is no
+      //    localStorage stash and the accept always runs with a session in hand.
+      const token = window.location.pathname.match(/^\/invite\/([^/]+)$/)?.[1] ?? null;
       if (token) {
         const who = await api.me();
         if (!who) {
-          // Not signed in yet — remember the invite, then authenticate.
-          localStorage.setItem(PENDING, token);
-          signIn();
+          // Not signed in. Prefill the invited email and default to the sign-up screen
+          // (invitees are usually new), then come back to this same link to accept.
+          const email = await api.previewInvite(token).then((p) => p.email).catch(() => undefined);
+          signIn({ returnTo: `/invite/${token}`, loginHint: email, screenHint: 'signup' });
           return;
         }
-        localStorage.removeItem(PENDING);
         try {
           await api.acceptInvite(token);
           window.history.replaceState(null, '', '/#/team');
           window.location.reload();
           return;
-        } catch (e) {
+        } catch {
+          // Signed in, but the engine refused (this invite is for a different verified
+          // email, or it lapsed). Show a clear block, never the onboarding dead-end.
+          if (!live) return;
+          const preview = await api.previewInvite(token).catch(() => null);
           window.history.replaceState(null, '', '/');
-          setToast({ status: 'danger', title: 'Could not accept invite', detail: e instanceof Error ? e.message : String(e) });
+          setInviteBlock({
+            teamName: preview?.teamName,
+            invitedEmail: preview?.email,
+            signedInAs: (who as { email?: string | null }).email ?? undefined,
+          });
+          return;
         }
       }
 
@@ -394,6 +405,17 @@ export function App() {
 
   // Session mode: checking → interstitial; signed out → sign-in; signed in but
   // teamless → onboarding (name your first team).
+  if (inviteBlock) {
+    return (
+      <InviteBlocked
+        teamName={inviteBlock.teamName}
+        invitedEmail={inviteBlock.invitedEmail}
+        signedInAs={inviteBlock.signedInAs}
+        onSignOut={signOut}
+        onContinue={() => window.location.assign('/')}
+      />
+    );
+  }
   if (me === undefined) return <Interstitial />;
   if (me === null) {
     const failed = new URLSearchParams(window.location.search).get('error') === 'auth';

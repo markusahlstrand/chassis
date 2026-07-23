@@ -356,6 +356,28 @@ const acceptInviteOp: OperationHandler<z.infer<typeof acceptInviteInput>, { role
   return { roleKey: invitation.role_key };
 };
 
+const previewInviteInput = z.object({ invitationId: z.string().min(1) });
+
+/**
+ * Preview a pending invitation: its invited address + role. Deliberately does NO
+ * permission check — like `accept-invite`, the authority is the signed invite token
+ * the worker verifies before invoking, not a role in this scope (the invitee is not
+ * a member yet, and may not even be signed in). Only ever returns the invite's OWN
+ * address, and only while it is still open — enough to prefill the login email and
+ * name the team on the accept screen, never a roster read. `null` if not pending.
+ */
+const previewInviteOp: OperationHandler<
+  z.infer<typeof previewInviteInput>,
+  { email: string; roleKey: string } | null
+> = async (ctx, raw) => {
+  const input = previewInviteInput.parse(raw);
+  const row = ctx.sql.query<DashboardMemberRow>(
+    `SELECT email, role_key FROM dashboard_members WHERE invitation_id = ? AND status = 'invited'`,
+    [input.invitationId],
+  )[0];
+  return row ? { email: row.email, roleKey: row.role_key } : null;
+};
+
 const resendInviteInput = z.object({ invitationId: z.string().min(1) });
 
 /**
@@ -464,6 +486,7 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/init-team': initTeamOp as OperationHandler<never, unknown>,
     'dashboard/invite-member': inviteMemberOp as OperationHandler<never, unknown>,
     'dashboard/accept-invite': acceptInviteOp as OperationHandler<never, unknown>,
+    'dashboard/preview-invite': previewInviteOp as OperationHandler<never, unknown>,
     'dashboard/resend-invite': resendInviteOp as OperationHandler<never, unknown>,
     'dashboard/revoke-invite': revokeInviteOp as OperationHandler<never, unknown>,
     'dashboard/list-members': listMembersOp as OperationHandler<never, unknown>,

@@ -211,6 +211,29 @@ describe('Dashboard teams — invite + accept', () => {
     expect(res.roleKey).toBe('member');
   });
 
+  it('previews a pending invite (email + role) and returns null once it is settled', async () => {
+    const acme = await makeTeam('acme10', 'owner@acme10.com');
+    const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    const { invitationId } = await ownerScope.invoke<{ invitationId: string }>('dashboard/invite-member', {
+      email: 'ivy@acme10.com',
+      roleKey: 'admin',
+    });
+
+    // Preview needs no role — the signed token is the authority (the worker verifies it
+    // before invoking). Here we invoke as a fresh, unrelated principal to prove that.
+    const stranger = principalId.parse(ulid());
+    const strangerScope = await host.getScope(stranger, acme.tenantId, acme.scopeId);
+    const preview = await strangerScope.invoke<{ email: string; roleKey: string } | null>('dashboard/preview-invite', {
+      invitationId,
+    });
+    expect(preview).toEqual({ email: 'ivy@acme10.com', roleKey: 'admin' });
+
+    // Once revoked it is no longer pending, so there is nothing to preview.
+    await ownerScope.invoke('dashboard/revoke-invite', { invitationId });
+    await expect(strangerScope.invoke('dashboard/preview-invite', { invitationId })).resolves.toBeNull();
+    await expect(strangerScope.invoke('dashboard/preview-invite', { invitationId: ulid() })).resolves.toBeNull();
+  });
+
   it('resending a non-existent (or already settled) invite returns null', async () => {
     const acme = await makeTeam('acme9', 'owner@acme9.com');
     const ownerScope = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
