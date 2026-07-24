@@ -1,4 +1,11 @@
-import type { PrincipalId, ScopeId, TenantId } from '@substrat-run/contracts';
+import type {
+  PrincipalId,
+  ReadScopeTableInput,
+  ScopeId,
+  ScopeTable,
+  ScopeTablePage,
+  TenantId,
+} from '@substrat-run/contracts';
 import { PLATFORM_SECRET_HEADER } from '@substrat-run/kernel';
 import { ControlPlaneError } from './client.js';
 
@@ -11,9 +18,10 @@ import { ControlPlaneError } from './client.js';
  * because only the vertical can create a usable scope DO — the DO class bundles the
  * modules and lives in the vertical's own deployment.
  *
- * Deliberately tiny. Provisioning is the only thing the platform asks a vertical to
- * do, and every additional verb here would be authority the platform holds over
- * someone else's code.
+ * Deliberately tiny. The platform asks a vertical to do two kinds of thing: create an
+ * instance (K-31), and — read-only — introspect a scope's own database (§5.4), because
+ * the scope's data DO lives in the vertical's deployment, not the platform's. Every
+ * other verb would be authority the platform holds over someone else's code.
  */
 
 export interface VerticalClientOptions {
@@ -75,5 +83,45 @@ export class VerticalClient {
       );
     }
     return (await res.json()) as ProvisionedInstance;
+  }
+
+  /**
+   * Read the scope's OWN database tables (kernel-design §5.4 admin-query RPC).
+   *
+   * The platform asks the vertical because the scope's data DO lives in the vertical's
+   * deployment (K-31), not the control plane's own (empty-module) scope host. Read-only
+   * and table-shaped — the platform never sends SQL, only a scope id (and, below, a
+   * table name the vertical validates against its live schema).
+   */
+  async listScopeTables(scopeId: ScopeId): Promise<ScopeTable[]> {
+    return this.getInternal<ScopeTable[]>(`/internal/tables?scopeId=${encodeURIComponent(scopeId)}`);
+  }
+
+  /** A bounded page of one of the scope's tables. */
+  async readScopeTable(scopeId: ScopeId, input: ReadScopeTableInput): Promise<ScopeTablePage> {
+    const q = new URLSearchParams({
+      scopeId,
+      limit: String(input.limit),
+      offset: String(input.offset),
+    });
+    return this.getInternal<ScopeTablePage>(
+      `/internal/tables/${encodeURIComponent(input.table)}?${q}`,
+    );
+  }
+
+  /** A platform-authenticated GET to the vertical's `/internal/*` surface. */
+  private async getInternal<T>(path: string): Promise<T> {
+    const base = this.options.baseUrl ?? 'https://vertical.invalid';
+    const res = await this.options.fetch(`${base}${path}`, {
+      headers: { [PLATFORM_SECRET_HEADER]: this.options.platformSecret },
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new ControlPlaneError(
+        res.status,
+        body?.error ?? `vertical refused introspection: ${res.status} ${res.statusText}`,
+      );
+    }
+    return (await res.json()) as T;
   }
 }

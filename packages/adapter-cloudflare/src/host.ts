@@ -56,11 +56,14 @@ import {
   type Vertical,
   type VerticalVersion,
   type ResolvedIdentity,
+  type ReadScopeTableInput,
   type RoleAssignment,
   type RoleDefinition,
   type Scope,
   type ScopeId,
   type ScopeStatus,
+  type ScopeTable,
+  type ScopeTablePage,
   type Tenant,
   type TenantId,
   type TenantRole,
@@ -397,6 +400,9 @@ interface ScopeStubRpc {
     roles: { role_key: string; permissions: string; source: string }[],
     tuples: { subject: string; relation: string; object: string; expires_at: string | null; revoked_at: string | null }[],
   ): Promise<void>;
+  /** Read-only introspection of this scope's DB (§5.4 admin-query RPC). */
+  introspectTables(): Promise<ScopeTable[]>;
+  introspectTable(table: string, limit: number, offset: number): Promise<ScopeTablePage>;
 }
 
 export interface CloudflareScopeHostOptions {
@@ -692,6 +698,22 @@ export class CloudflareScopeHost implements ScopeHost {
     await this.cp.validateScopeAccess(tenantId, scopeId);
     await this.migrateAndRecord(scopeId);
     return this.scopeStub(scopeId).executorDeadLetters();
+  }
+
+  /**
+   * Read-only introspection of a scope's OWN database, reaching the scope DO directly
+   * (kernel-design §5.4's admin-query RPC). Unlike `admin.listScopeTables`, this does
+   * NOT consult the control-plane directory — so it works in a **CP-less vertical**, the
+   * deployment that actually holds the scope's data (its ScopeDO runs the modules). The
+   * vertical's platform-gated `/internal/tables` route calls it; authorization is that
+   * gate (the caller is the control plane, which did the K-3 check + audit on its side).
+   */
+  async introspectScopeTables(scopeId: ScopeId): Promise<ScopeTable[]> {
+    return this.scopeStub(scopeId).introspectTables();
+  }
+
+  async introspectScopeTable(scopeId: ScopeId, input: ReadScopeTableInput): Promise<ScopeTablePage> {
+    return this.scopeStub(scopeId).introspectTable(input.table, input.limit, input.offset);
   }
 
   registerModule(registration: ModuleRegistration): void {
@@ -1515,6 +1537,33 @@ export class CloudflareScopeHost implements ScopeHost {
         const row = await this.cp.getScopeRecord(tenantId, scopeId);
         await this.recordAccess(actor, 'getScopeRecord', { tenantId, scopeId }, null, row ? 1 : 0);
         return row ? mapScope(row) : undefined;
+      },
+      listScopeTables: async (actor, tenantId, scopeId): Promise<ScopeTable[]> => {
+        // K-3 cross-check on the shared directory BEFORE reaching the scope DO: a pair
+        // that does not resolve is unreachable, never another tenant's database.
+        const row = await this.cp.getScopeRecord(tenantId, scopeId);
+        if (!row) throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
+        const tables = await this.scopeStub(scopeId).introspectTables();
+        await this.recordAccess(actor, 'listScopeTables', { tenantId, scopeId }, null, tables.length);
+        return tables;
+      },
+      readScopeTable: async (
+        actor,
+        tenantId,
+        scopeId,
+        input: ReadScopeTableInput,
+      ): Promise<ScopeTablePage> => {
+        const row = await this.cp.getScopeRecord(tenantId, scopeId);
+        if (!row) throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
+        const page = await this.scopeStub(scopeId).introspectTable(input.table, input.limit, input.offset);
+        await this.recordAccess(
+          actor,
+          'readScopeTable',
+          { tenantId, scopeId },
+          { table: input.table, limit: page.limit, offset: page.offset },
+          page.rows.length,
+        );
+        return page;
       },
       activateScope: async (actor, tenantId, scopeId) => {
         // Idempotent on `active`, unaudited because nothing changed. Provisioning is

@@ -272,6 +272,28 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     const employee = await appScope.invoke<{ id: string }>('hr/create-employee', { number: 'E-001', name: 'Alex Meridian' });
     expect(employee.id).toBeTruthy();
     expect(await appScope.invoke('hr/roster', {})).toHaveLength(1);
+
+    // The Data tab reads THIS app's own database (§5.4 admin-query RPC). After the
+    // writes above, its tables are live: Meridian's own tables carry rows and the
+    // `_substrat_*` spine is present and flagged system. This is the exact path the
+    // dashboard's /api/apps/:scopeId/tables route drives (host.admin, STAFF actor).
+    const tables = await host.admin.listScopeTables(staff, acme.tenantId, appScopeId);
+    expect(tables.length).toBeGreaterThan(0);
+    expect(tables.some((t) => t.name.startsWith('_substrat') && t.system)).toBe(true);
+    expect(tables.some((t) => !t.system && t.rowCount > 0)).toBe(true);
+    // A row-bearing Meridian table pages back with columns + positional rows.
+    const populated = tables.find((t) => !t.system && t.rowCount > 0)!;
+    const page = await host.admin.readScopeTable(staff, acme.tenantId, appScopeId, {
+      table: populated.name,
+      limit: 50,
+      offset: 0,
+    });
+    expect(page.columns.length).toBeGreaterThan(0);
+    expect(page.rows.length).toBe(Math.min(populated.rowCount, 50));
+    // An unknown table is rejected, never queried blind.
+    await expect(
+      host.admin.readScopeTable(staff, acme.tenantId, appScopeId, { table: 'nope', limit: 50, offset: 0 }),
+    ).rejects.toThrow(/unknown table/);
   });
 
   it('records a per-app audit trail — created + active on success, created + failed(reason) on failure', async () => {

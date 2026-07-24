@@ -1,4 +1,12 @@
-import type { Scope, ScopeId, Tenant, TenantId } from '@substrat-run/contracts';
+import type {
+  ReadScopeTableInput,
+  Scope,
+  ScopeId,
+  ScopeTable,
+  ScopeTablePage,
+  Tenant,
+  TenantId,
+} from '@substrat-run/contracts';
 import { DEV_ACTOR_HEADER, SERVICE_TOKEN_HEADER } from './auth.js';
 
 /**
@@ -137,6 +145,25 @@ export class ControlPlaneClient {
 
   listEntitlements(tenantId: TenantId): Promise<string[]> {
     return this.call(`/tenants/${tenantId}/entitlements`);
+  }
+
+  // -- read-only scope-DB introspection (§5.4 admin-query RPC) ----------------
+
+  /** Every table in the scope's own database, with row counts (Data view). */
+  listScopeTables(tenantId: TenantId, scopeId: ScopeId): Promise<ScopeTable[]> {
+    return this.call(`/tenants/${tenantId}/scopes/${scopeId}/tables`);
+  }
+
+  /** A bounded page of one table of the scope's database. */
+  readScopeTable(
+    tenantId: TenantId,
+    scopeId: ScopeId,
+    input: ReadScopeTableInput,
+  ): Promise<ScopeTablePage> {
+    const q = new URLSearchParams({ limit: String(input.limit), offset: String(input.offset) });
+    return this.call(
+      `/tenants/${tenantId}/scopes/${scopeId}/tables/${encodeURIComponent(input.table)}?${q}`,
+    );
   }
 
   /**

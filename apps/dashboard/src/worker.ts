@@ -12,7 +12,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { principalId, scopeId, tenantId, orgId, platformActorId, connectionId, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
+import { principalId, scopeId, tenantId, orgId, platformActorId, connectionId, readScopeTableInput, z, type PermissionKey, type TenantId } from '@substrat-run/contracts';
 import { defineScopeDO, ControlPlaneDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
 import { ulid, webCryptoSecretBox, type ScopeHost, type SecretBox } from '@substrat-run/kernel';
 import { protocolModule } from '@substrat-run/engine-protocol';
@@ -764,6 +764,58 @@ app.get('/api/apps/:scopeId/deployments', async (c) => {
         host.admin.getScopeRecord(STAFF, node.tenantId, scope).then((r) => r?.verticalVersionId ?? null),
       ]);
   return c.json({ ...deployment, boundVersionId });
+});
+
+/**
+ * One app's Data tab — a read-only window into the app's OWN database (kernel-design
+ * §5.4's admin-query RPC). Two reads: the table list, and a bounded page of one table.
+ *
+ * Authorized in the caller's OWN dashboard scope: the app is resolved from the
+ * tenant-scoped `list-apps`, so another tenant's scope id is a 404 here — and the
+ * platform layer cross-checks (tenantId, scopeId) again below (K-3). Connected mode
+ * reads through the tenant-narrowed control plane; embedded mode reads the host
+ * directly with the platform STAFF actor. Read-only by construction — no user SQL.
+ */
+app.get('/api/apps/:scopeId/tables', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  const scope = scopeId.parse(appRow.app_scope_id);
+  const cp = controlPlaneFor(c.env, node.tenantId);
+  const tables = cp
+    ? await cp.listScopeTables(scope)
+    : await host.admin.listScopeTables(STAFF, node.tenantId, scope);
+  // Never emit an empty 200: an undefined here means the control plane answered with a
+  // non-JSON body (e.g. a route it doesn't have yet), which must surface as an error the
+  // UI can show — not a silent empty response the client parses as "Unexpected end of JSON".
+  if (tables == null) throw new HTTPException(502, { message: 'the platform returned no data for this scope' });
+  return c.json(tables);
+});
+
+app.get('/api/apps/:scopeId/tables/:table', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  const scope = scopeId.parse(appRow.app_scope_id);
+  const input = readScopeTableInput.parse({
+    table: c.req.param('table'),
+    limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    offset: c.req.query('offset') ? Number(c.req.query('offset')) : undefined,
+  });
+  const cp = controlPlaneFor(c.env, node.tenantId);
+  const page = cp
+    ? await cp.readScopeTable(scope, input)
+    : await host.admin.readScopeTable(STAFF, node.tenantId, scope, input);
+  if (page == null) throw new HTTPException(502, { message: 'the platform returned no data for this table' });
+  return c.json(page);
 });
 
 /**

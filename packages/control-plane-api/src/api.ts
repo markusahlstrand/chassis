@@ -9,6 +9,7 @@ import {
   promotionAcknowledgement,
   provisionableJurisdiction,
   publishVersionInput,
+  readScopeTableInput,
   registerVerticalInput,
   scopeId as scopeIdSchema,
   scopeStatus,
@@ -336,6 +337,56 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
     // Absent, or present under another tenant — indistinguishable on purpose (K-3).
     if (!record) return c.json({ error: `unknown scope for tenant: (${tenantId}, ${scopeId})` }, 404);
     return c.json(record);
+  });
+
+  // Read-only introspection of a scope's own database (kernel-design §5.4 admin-query
+  // RPC) — the console/dashboard "Data" view.
+  //
+  // The scope's DATA lives in the vertical's own deployment (K-31), NOT in this control
+  // plane's own (empty-module) scope host — so we DELEGATE to the vertical, the mirror
+  // of `/verticals/:slug/instances`. `getScopeRecord` first does the K-3 cross-check +
+  // access-log entry and tells us which vertical backs the scope; then the same
+  // `verticals[slug] ?? resolveVertical(slug)` resolution provisioning uses reaches it.
+  // When no vertical resolves (a co-located host, or the contract tests), we fall back
+  // to reading this host's own scope DB directly — correct when the data is right here.
+  const verticalForScope = async (
+    c: { get: (k: 'actor') => PlatformActorId },
+    scope: { vertical: string | null },
+  ): Promise<VerticalClient | undefined> => {
+    const slug = scope.vertical;
+    if (!slug) return undefined;
+    return options.verticals?.[slug] ?? (await options.resolveVertical?.(slug, c.get('actor')));
+  };
+
+  app.get('/tenants/:tenantId/scopes/:scopeId/tables', async (c) => {
+    const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
+    const scopeId = scopeIdSchema.parse(c.req.param('scopeId'));
+    const scope = await admin.getScopeRecord(c.get('actor'), tenantId, scopeId);
+    if (!scope) return c.json({ error: `unknown scope for tenant: (${tenantId}, ${scopeId})` }, 404);
+    const vertical = await verticalForScope(c, scope);
+    return c.json(
+      vertical
+        ? await vertical.listScopeTables(scopeId)
+        : await admin.listScopeTables(c.get('actor'), tenantId, scopeId),
+    );
+  });
+
+  app.get('/tenants/:tenantId/scopes/:scopeId/tables/:table', async (c) => {
+    const tenantId = tenantIdSchema.parse(c.req.param('tenantId'));
+    const scopeId = scopeIdSchema.parse(c.req.param('scopeId'));
+    const input = readScopeTableInput.parse({
+      table: c.req.param('table'),
+      limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+      offset: c.req.query('offset') ? Number(c.req.query('offset')) : undefined,
+    });
+    const scope = await admin.getScopeRecord(c.get('actor'), tenantId, scopeId);
+    if (!scope) return c.json({ error: `unknown scope for tenant: (${tenantId}, ${scopeId})` }, 404);
+    const vertical = await verticalForScope(c, scope);
+    return c.json(
+      vertical
+        ? await vertical.readScopeTable(scopeId, input)
+        : await admin.readScopeTable(c.get('actor'), tenantId, scopeId, input),
+    );
   });
 
   // The four lifecycle transitions, one route each — mirroring the four audited

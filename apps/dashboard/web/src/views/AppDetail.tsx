@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Dialog, Input, Tabs } from '@substrat-run/ui';
-import { api, type AppRow, type AppEvent, type Deployment } from '../lib/api';
-import { verticalMeta, APP_TABS, ENV_VARS, INTEGRATIONS, ENV_OPTS, type EnvVar } from '../lib/demo';
+import { api, type AppRow, type AppEvent, type Deployment, type ScopeTable, type ScopeTablePage } from '../lib/api';
+import { verticalMeta, APP_TABS, ENV_VARS, INTEGRATIONS, ENV_OPTS, MOCK_SCOPE_TABLES, MOCK_SCOPE_TABLE_PAGES, type EnvVar } from '../lib/demo';
 import { DEV_MOCK, MOCK_DEPLOYMENTS } from '../lib/mock';
 import { relativeTime, shortDate, shortId } from '../lib/format';
 import { Ic } from '../lib/icons';
@@ -53,6 +53,7 @@ export function AppDetail({
       />
 
       {tab === 'overview' && <Overview app={app} meta={meta} statusKind={statusKind} statusLabel={statusLabel} />}
+      {tab === 'data' && <DataBrowser app={app} />}
       {tab === 'deployments' && <Deployments app={app} />}
       {tab === 'env' && <EnvVars />}
       {tab === 'domains' && <AppDomains />}
@@ -310,6 +311,179 @@ function Deployments({ app }: { app: AppRow }) {
     </div>
   );
 }
+
+const DATA_PAGE = 50;
+
+/**
+ * The Data tab — a read-only browser of the app's OWN database (kernel-design §5.4's
+ * admin-query RPC). Left: the tables of this scope's DB (the vertical's own, plus the
+ * `_substrat_*` spine grouped apart). Right: a paged view of the selected table.
+ * Read-only by design — raw writes would bypass the event log and forge invariants.
+ */
+function DataBrowser({ app }: { app: AppRow }) {
+  const [tables, setTables] = useState<ScopeTable[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [page, setPage] = useState<ScopeTablePage | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [pageErr, setPageErr] = useState<string | null>(null);
+
+  // The table list. Auto-select the first non-system table (the vertical's own data
+  // is what you usually want), falling back to the first table of any kind.
+  useEffect(() => {
+    if (DEV_MOCK) {
+      setTables(MOCK_SCOPE_TABLES);
+      setSelected(MOCK_SCOPE_TABLES.find((t) => !t.system)?.name ?? MOCK_SCOPE_TABLES[0]?.name ?? null);
+      return;
+    }
+    let live = true;
+    api
+      .appTables(app.app_scope_id)
+      .then((ts) => {
+        if (!live) return;
+        setTables(ts);
+        setSelected(ts.find((t) => !t.system)?.name ?? ts[0]?.name ?? null);
+      })
+      .catch((e) => live && setErr(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [app.app_scope_id]);
+
+  // A page of the selected table. Refetch on table change (offset reset) or paging.
+  useEffect(() => {
+    if (!selected) return;
+    setPageErr(null);
+    if (DEV_MOCK) {
+      const mock = MOCK_SCOPE_TABLE_PAGES[selected];
+      const rowCount = tables?.find((t) => t.name === selected)?.rowCount ?? mock?.rows.length ?? 0;
+      setPage(
+        mock
+          ? { table: selected, columns: mock.columns, rows: mock.rows, rowCount, limit: DATA_PAGE, offset: 0 }
+          : { table: selected, columns: [], rows: [], rowCount, limit: DATA_PAGE, offset: 0 },
+      );
+      return;
+    }
+    let live = true;
+    setPage(null);
+    api
+      .appTableRows(app.app_scope_id, selected, { limit: DATA_PAGE, offset })
+      .then((p) => live && setPage(p))
+      .catch((e) => live && setPageErr(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [app.app_scope_id, selected, offset, tables]);
+
+  const pickTable = (name: string) => {
+    setSelected(name);
+    setOffset(0);
+  };
+
+  if (err) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--status-danger-fg)' }}>Couldn’t load the database — {err}</div>;
+  if (!tables) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>Loading database…</div>;
+  if (tables.length === 0) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>This app’s database has no tables yet.</div>;
+
+  const own = tables.filter((t) => !t.system);
+  const system = tables.filter((t) => t.system);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <HonestyBanner>Read-only. This is the app’s live database — the one Durable Object backing this scope. Every read is audited. Rows can’t be edited here: writes go through the app’s operations so the event log and invariants stay intact.</HonestyBanner>
+      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16, alignItems: 'start' }}>
+        <div style={{ ...card, overflow: 'hidden' }}>
+          <TableGroup label="Tables" tables={own} selected={selected} onPick={pickTable} />
+          {system.length > 0 && <TableGroup label="System" tables={system} selected={selected} onPick={pickTable} />}
+        </div>
+        <div style={{ ...card, overflow: 'hidden' }}>
+          {!selected ? (
+            <div style={{ padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>Select a table.</div>
+          ) : pageErr ? (
+            <div style={{ padding: 20, fontSize: 13, color: 'var(--status-danger-fg)' }}>Couldn’t load {selected} — {pageErr}</div>
+          ) : !page ? (
+            <div style={{ padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>Loading {selected}…</div>
+          ) : (
+            <TablePage page={page} onPrev={() => setOffset((o) => Math.max(0, o - DATA_PAGE))} onNext={() => setOffset((o) => o + DATA_PAGE)} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TableGroup({ label, tables, selected, onPick }: { label: string; tables: ScopeTable[]; selected: string | null; onPick: (name: string) => void }) {
+  return (
+    <div>
+      <div style={{ padding: '10px 14px 6px', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>{label}</div>
+      {tables.map((t) => (
+        <button
+          key={t.name}
+          type="button"
+          onClick={() => onPick(t.name)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 0, cursor: 'pointer', textAlign: 'left',
+            padding: '7px 14px', fontSize: 12.5,
+            background: selected === t.name ? 'var(--surface-brand-subtle)' : 'transparent',
+            color: selected === t.name ? 'var(--text-brand)' : 'var(--text-secondary)',
+          }}
+        >
+          <span style={{ flex: 1, fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.rowCount}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TablePage({ page, onPrev, onNext }: { page: ScopeTablePage; onPrev: () => void; onNext: () => void }) {
+  const from = page.rowCount === 0 ? 0 : page.offset + 1;
+  const to = page.offset + page.rows.length;
+  const hasPrev = page.offset > 0;
+  const hasNext = to < page.rowCount;
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-primary)' }}>{page.table}</span>
+        <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{from}–{to} of {page.rowCount}</span>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onPrev} disabled={!hasPrev} style={pagerBtn(hasPrev)}>← Prev</button>
+        <button type="button" onClick={onNext} disabled={!hasNext} style={pagerBtn(hasNext)}>Next →</button>
+      </div>
+      {page.columns.length === 0 ? (
+        <div style={{ padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>This table is empty.</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+            <thead>
+              <tr>
+                {page.columns.map((col) => (
+                  <th key={col} style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase', fontSize: 10.5, color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>{col}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {page.rows.map((row, i) => (
+                <tr key={i}>
+                  {row.map((cell, j) => (
+                    <td key={j} style={{ padding: '7px 12px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', color: cell == null ? 'var(--text-tertiary)' : 'var(--text-primary)', whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }} title={cell == null ? 'null' : String(cell)}>
+                      {cell == null ? 'null' : String(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const pagerBtn = (enabled: boolean): React.CSSProperties => ({
+  border: '1px solid var(--border-default)', background: 'var(--surface-card)', borderRadius: 6,
+  padding: '4px 10px', fontSize: 12, cursor: enabled ? 'pointer' : 'default',
+  color: enabled ? 'var(--text-secondary)' : 'var(--text-tertiary)', opacity: enabled ? 1 : 0.5,
+});
 
 function EnvVars() {
   const [rows, setRows] = useState<EnvVar[]>(ENV_VARS);

@@ -215,6 +215,63 @@ describe('control-plane API', () => {
     expect((await req(`/tenants/${t2}/scopes/${s1}`)).status).toBe(404);
   });
 
+  it('introspects a scope database, read-only (§5.4 admin-query RPC)', async () => {
+    // The table list — a fresh scope already has the `_substrat_*` spine, flagged system.
+    const tablesRes = await req(`/tenants/${t1}/scopes/${s1}/tables`);
+    expect(tablesRes.status).toBe(200);
+    const tables = (await tablesRes.json()) as { name: string; rowCount: number; system: boolean }[];
+    expect(tables.length).toBeGreaterThan(0);
+    expect(tables.every((t) => (t.name.startsWith('_substrat') ? t.system : true))).toBe(true);
+    const spine = tables.find((t) => t.name === '_substrat_migrations');
+    expect(spine?.system).toBe(true);
+
+    // A bounded page of one table — columns come back, rows are positional.
+    const pageRes = await req(`/tenants/${t1}/scopes/${s1}/tables/_substrat_migrations?limit=5`);
+    expect(pageRes.status).toBe(200);
+    const page = (await pageRes.json()) as { columns: string[]; limit: number };
+    expect(page.columns.length).toBeGreaterThan(0);
+    expect(page.limit).toBe(5);
+
+    // An unknown table is a 404, not a blind query.
+    expect((await req(`/tenants/${t1}/scopes/${s1}/tables/no_such_table`)).status).toBe(404);
+    // Cross-tenant fails closed (K-3): another tenant's pair reads as absent.
+    expect((await req(`/tenants/${t2}/scopes/${s1}/tables`)).status).toBe(404);
+  });
+
+  it('delegates introspection to the vertical that owns the scope (connected mode)', async () => {
+    // A scope whose data lives in a VERTICAL's deployment, not this control plane's own
+    // (empty-module) scope host — the real prod shape (K-31). The route must ask the vertical.
+    const sV = scopeId.parse(ulid());
+    await host.provisionScope(staff, { tenantId: t1, scopeId: sV, vertical: 'demo-vert' });
+    await host.admin.activateScope(staff, t1, sV);
+
+    const calls: string[] = [];
+    const fakeVertical = {
+      listScopeTables: async (s: string) => {
+        calls.push(`list:${s}`);
+        return [{ name: 'widget', rowCount: 2, system: false }];
+      },
+      readScopeTable: async (s: string, input: { table: string }) => {
+        calls.push(`read:${s}:${input.table}`);
+        return { table: input.table, columns: ['id'], rows: [['a'], ['b']], rowCount: 2, limit: 50, offset: 0 };
+      },
+    } as unknown as VerticalClient;
+
+    const delegated = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      verticals: { 'demo-vert': fakeVertical },
+    });
+    const dreq = (path: string) => delegated.request(path, { headers: auth });
+
+    expect(await (await dreq(`/tenants/${t1}/scopes/${sV}/tables`)).json()).toEqual([
+      { name: 'widget', rowCount: 2, system: false },
+    ]);
+    expect((await (await dreq(`/tenants/${t1}/scopes/${sV}/tables/widget`)).json()).rows).toEqual([['a'], ['b']]);
+    // Proof the read went to the VERTICAL, not this host's own (empty) scope DB.
+    expect(calls).toEqual([`list:${sV}`, `read:${sV}:widget`]);
+  });
+
   it('walks the lifecycle and maps an illegal transition to 409', async () => {
     const suspended = await json(`/tenants/${t1}/scopes/${s1}/suspend`, 'POST');
     expect(await suspended.json()).toMatchObject({ status: 'suspended' });

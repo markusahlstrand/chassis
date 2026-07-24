@@ -19,6 +19,7 @@ import {
   principalId,
   scopeId,
   tenantId,
+  readScopeTableInput,
   z,
 } from '@substrat-run/contracts';
 import { defineScopeDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
@@ -225,6 +226,40 @@ app.post('/internal/provision', async (c) => {
     ownerRoleKey: 'office-admin',
   });
   return c.json({ tenantId: body.tenantId, scopeId: body.scopeId, owner: body.owner }, 201);
+});
+
+/**
+ * Read-only introspection of a scope's OWN database on the platform's instruction
+ * (kernel-design §5.4's admin-query RPC) — the console/dashboard "Data" view. The
+ * scope's data DO lives HERE (K-31), so the control plane delegates to the vertical;
+ * the scope id is trusted from the platform-secret-gated call (the control plane did
+ * the K-3 cross-check + audit). Read-only, table-shaped, no SQL.
+ */
+app.get('/internal/tables', async (c) => {
+  try {
+    assertPlatformCall(c.req.raw.headers, { expectedSecret: c.env.PLATFORM_SECRET });
+  } catch (e) {
+    if (e instanceof PlatformCallError) throw new HTTPException(403, { message: e.message });
+    throw e;
+  }
+  const scope = scopeId.parse(c.req.query('scopeId'));
+  return c.json(await hostFor(c.env).introspectScopeTables(scope));
+});
+
+app.get('/internal/tables/:table', async (c) => {
+  try {
+    assertPlatformCall(c.req.raw.headers, { expectedSecret: c.env.PLATFORM_SECRET });
+  } catch (e) {
+    if (e instanceof PlatformCallError) throw new HTTPException(403, { message: e.message });
+    throw e;
+  }
+  const scope = scopeId.parse(c.req.query('scopeId'));
+  const input = readScopeTableInput.parse({
+    table: c.req.param('table'),
+    limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    offset: c.req.query('offset') ? Number(c.req.query('offset')) : undefined,
+  });
+  return c.json(await hostFor(c.env).introspectScopeTable(scope, input));
 });
 
 // A protected data route resolves the caller across the mounted adapters, then

@@ -416,6 +416,56 @@ export function scopeHostContractSuite(
       expect(after).toHaveLength(before.length);
     });
 
+    // -- scope data introspection: the §5.4 admin-query RPC --------------------
+    //
+    // A read-only window into a scope's OWN database (the console/dashboard Data
+    // view). The properties that matter: it sees the vertical's tables AND the
+    // spine (flagged apart), pages, refuses an unknown table, and fails closed on
+    // a mismatched (tenantId, scopeId) pair exactly as getScope does (K-3).
+
+    describe('scope data introspection (§5.4)', () => {
+      it('lists the scope tables, flagging the spine as system', async () => {
+        const stub = await host.getScope(alice, t1, s1);
+        await stub.invoke('test/write-marker', { v: 'introspect-me' });
+        const tables = await host.admin.listScopeTables(staff, t1, s1);
+        const byName = new Map(tables.map((t) => [t.name, t]));
+        // The vertical's own table: present, not flagged system, with rows.
+        expect(byName.get('marker')?.system).toBe(false);
+        expect(byName.get('marker')!.rowCount).toBeGreaterThan(0);
+        // The spine: present and flagged system, so the UI can group it apart.
+        expect(byName.get('_substrat_outbox')?.system).toBe(true);
+      });
+
+      it('reads a bounded page of a table', async () => {
+        const stub = await host.getScope(alice, t1, s1);
+        await stub.invoke('test/write-marker', { v: 'page-row' });
+        const page = await host.admin.readScopeTable(staff, t1, s1, { table: 'marker', limit: 50, offset: 0 });
+        expect(page.columns).toContain('v');
+        const vCol = page.columns.indexOf('v');
+        expect(page.rows.map((r) => r[vCol])).toContain('page-row');
+        expect(page.rowCount).toBeGreaterThanOrEqual(page.rows.length);
+      });
+
+      it('respects limit (paging)', async () => {
+        const page = await host.admin.readScopeTable(staff, t1, s1, { table: 'marker', limit: 1, offset: 0 });
+        expect(page.rows.length).toBeLessThanOrEqual(1);
+        expect(page.limit).toBe(1);
+      });
+
+      it('rejects an unknown table', async () => {
+        await expect(
+          host.admin.readScopeTable(staff, t1, s1, { table: 'no_such_table', limit: 50, offset: 0 }),
+        ).rejects.toThrow(/unknown table/);
+      });
+
+      it('fails closed on a mismatched (tenantId, scopeId) pair (K-3)', async () => {
+        await expect(host.admin.listScopeTables(staff, t2, s1)).rejects.toThrow();
+        await expect(
+          host.admin.readScopeTable(staff, t2, s1, { table: 'marker', limit: 50, offset: 0 }),
+        ).rejects.toThrow();
+      });
+    });
+
     // -- the integrations hub: connections (#101) -----------------------------
     //
     // The store exists so a vertical's connector can reach a tenant's provider
