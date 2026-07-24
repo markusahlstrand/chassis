@@ -130,6 +130,28 @@ function resolveVerticalFor(
   };
 }
 
+/**
+ * Resolve a pushed vertical at a SPECIFIC version: slug + versionId → that version's
+ * `deploymentRef` → `env.DISPATCH.get(...)`. The introspection path uses this to reach a
+ * scope's BOUND version's deployment — the one that actually holds its data DO and that
+ * the router serves it from — rather than the `prod` channel (which diverges once an
+ * installed app lags prod, and each version is a separate WfP script + DO namespace).
+ */
+function resolveVerticalVersionFor(
+  env: Env,
+): ((slug: string, versionId: string, actor: PlatformActorId) => Promise<VerticalClient | undefined>) | undefined {
+  const dispatch = env.DISPATCH;
+  const secret = env.PLATFORM_SECRET;
+  if (!dispatch || !secret) return undefined;
+  return async (slug, versionId, actor) => {
+    const host = hostFor(env);
+    const version = (await host.admin.listVersions(actor, slug)).find((v) => v.id === versionId);
+    if (!version?.deploymentRef) return undefined;
+    const fetcher = dispatch.get(version.deploymentRef);
+    return new VerticalClient({ fetch: fetcher.fetch.bind(fetcher), platformSecret: secret });
+  };
+}
+
 // The actor a connected vertical acts as when it registers (a service, not staff).
 const SERVICE_ACTOR = platformActorId.parse('01JZ00000000000000000000SV');
 
@@ -225,6 +247,7 @@ export default {
         authenticateBuilder: oidcBuilderReader(hostFor(env), env),
         verticals: verticalsFor(env),
         resolveVertical: resolveVerticalFor(env),
+        resolveVerticalVersion: resolveVerticalVersionFor(env),
         deployVertical: deployVerticalFor(env),
       }),
     );
