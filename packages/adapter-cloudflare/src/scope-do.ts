@@ -12,7 +12,10 @@ import {
   type PermissionKey,
   type PrincipalId,
   type ScopeId,
+  type ScopeTable,
+  type ScopeTablePage,
   type TenantId,
+  SCOPE_TABLE_PAGE_MAX,
 } from '@substrat-run/contracts';
 import {
   ulid,
@@ -173,6 +176,19 @@ function toRpcError(err: unknown): Error {
     return err.constructor === Error ? err : new Error(err.message);
   }
   return new Error(String(err));
+}
+
+/** The platform spine (`_substrat_*`) and SQLite internals — the UI groups these apart. */
+function isSystemTable(name: string): boolean {
+  return name.startsWith('_substrat') || name.startsWith('sqlite_');
+}
+
+/** SQLite cell → a JSON-safe value: bigints stringify, blobs (ArrayBuffer) read as null. */
+function cellToJson(v: unknown): unknown {
+  if (v == null) return null;
+  if (typeof v === 'bigint') return v.toString();
+  if (v instanceof ArrayBuffer || v instanceof Uint8Array) return null;
+  return v;
 }
 
 /**
@@ -665,6 +681,50 @@ export function defineScopeDO(
         error: r.error,
         lastAttemptAt: r.delivered_at,
       }));
+    }
+
+    // -- read-only introspection (kernel-design §5.4's admin-query RPC) --------
+    // The console/dashboard "Data" view reaches THIS scope's own SQLite. Read-only
+    // and table-shaped: no caller SQL, only a table name validated against the live
+    // schema plus a bounded page, so nothing here can write the spine or inject.
+    // Authorization + the (tenantId, scopeId) K-3 cross-check happen on the
+    // coordinator BEFORE this RPC is reached (host.ts admin.listScopeTables).
+
+    /** Every table in this scope's DB, with row counts; spine/internal tables flagged. */
+    introspectTables(): ScopeTable[] {
+      const names = (
+        this.sql
+          .exec(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+          .toArray() as unknown as { name: string }[]
+      ).map((r) => r.name);
+      return names.map((name) => ({
+        name,
+        rowCount: Number(
+          (this.sql.exec(`SELECT COUNT(*) AS c FROM "${name}"`).toArray()[0] as { c: number }).c,
+        ),
+        system: isSystemTable(name),
+      }));
+    }
+
+    /** A bounded page of one table. Unknown table names throw — never queried blind. */
+    introspectTable(table: string, limit: number, offset: number): ScopeTablePage {
+      const known = new Set(
+        (
+          this.sql
+            .exec(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .toArray() as unknown as { name: string }[]
+        ).map((r) => r.name),
+      );
+      if (!known.has(table)) throw new Error(`unknown table '${table}'`);
+      const l = Math.min(Math.max(1, limit), SCOPE_TABLE_PAGE_MAX);
+      const o = Math.max(0, offset);
+      const cursor = this.sql.exec(`SELECT * FROM "${table}" LIMIT ? OFFSET ?`, l, o);
+      const columns = cursor.columnNames;
+      const rows = Array.from(cursor.raw(), (row) => (row as unknown[]).map(cellToJson));
+      const rowCount = Number(
+        (this.sql.exec(`SELECT COUNT(*) AS c FROM "${table}"`).toArray()[0] as { c: number }).c,
+      );
+      return { table, columns, rows, rowCount, limit: l, offset: o };
     }
 
     // -- event dispatch (port of dispatch) ------------------------------------

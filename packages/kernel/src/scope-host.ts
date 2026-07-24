@@ -38,9 +38,12 @@ import type {
   ResolvedIdentity,
   RoleAssignment,
   RoleDefinition,
+  ReadScopeTableInput,
   Scope,
   ScopeId,
   ScopeStatus,
+  ScopeTable,
+  ScopeTablePage,
   StorageShape,
   Tenant,
   TenantId,
@@ -618,6 +621,41 @@ export interface HostAdmin {
     tenantId: TenantId,
     scopeId: ScopeId,
   ): Promise<Scope | undefined>;
+
+  // -- scope data introspection (kernel-design §5.4's admin-query RPC) --------
+  // A read-only window into a scope's OWN database — the console/dashboard "Data"
+  // view. §5.4 named this seam ("a grant is a tuple in the scope's own database and
+  // needs an admin-query RPC"); these two methods are it, deliberately narrow.
+  //
+  // Read-only and table-shaped ON PURPOSE. There is no user-supplied SQL: the caller
+  // picks a table from the live schema and a bounded page. So there is no write path
+  // to forge the spine (module rules §"never write _substrat_*") and no injection
+  // surface — the table name is validated against `listScopeTables`, never
+  // interpolated blind. Reads of the `_substrat_*` spine are allowed (projections
+  // already read it); they are flagged `system` so the UI can set them apart.
+  //
+  // Both take an ACTOR and record to the K-24 access log, like every directory read,
+  // and both cross-check (tenantId, scopeId) and FAIL CLOSED on a mismatch (K-3) —
+  // a confused-deputy scope id resolves to nothing, never another tenant's database.
+
+  /** Every table in the scope's database, with row counts; system tables flagged. */
+  listScopeTables(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    scopeId: ScopeId,
+  ): Promise<ScopeTable[]>;
+  /**
+   * A bounded page of rows from one table of the scope's database. The table name is
+   * validated against the live schema (an unknown one throws, never a blind query);
+   * `limit` is clamped to the contract ceiling and `offset` pages. Rows are positional
+   * arrays aligned to `columns`.
+   */
+  readScopeTable(
+    actor: PlatformActorId,
+    tenantId: TenantId,
+    scopeId: ScopeId,
+    input: ReadScopeTableInput,
+  ): Promise<ScopeTablePage>;
 
   // -- scope lifecycle (control-plane.md §4.2) -------------------------------
   // The §3.3 transitions that existed only on paper. Each fails closed on an

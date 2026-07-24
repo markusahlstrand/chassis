@@ -56,6 +56,8 @@ const STATUS_PATTERNS: readonly [RegExp, ContentfulStatusCode][] = [
   [/unknown tenant:/, 404],
   [/unknown scope for tenant/, 404],
   [/unknown scope /, 404],
+  // A read-only introspection read (§5.4) for a table the scope's schema does not have.
+  [/unknown table /, 404],
   [/unknown vertical /, 404],
   [/unknown version /, 404],
   [/scope has no tenant record/, 404],

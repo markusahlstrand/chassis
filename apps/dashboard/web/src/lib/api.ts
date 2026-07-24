@@ -147,6 +147,24 @@ export interface GitReposResult {
   repos: GitRepo[];
 }
 
+/** One table in an app's database — the Data tab's left list (mirrors ScopeTable). */
+export interface ScopeTable {
+  name: string;
+  rowCount: number;
+  /** `_substrat_*` spine + SQLite internals — grouped apart from the vertical's own tables. */
+  system: boolean;
+}
+
+/** A bounded page of one table (mirrors ScopeTablePage). Rows are positional, aligned to `columns`. */
+export interface ScopeTablePage {
+  table: string;
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  limit: number;
+  offset: number;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -229,6 +247,18 @@ export const api = {
   appEvents: (scopeId: string) => call<AppEvent[]>(`/apps/${encodeURIComponent(scopeId)}/events`),
   /** The app's vertical version registry + channels + the version THIS scope actually runs (`boundVersionId`). */
   appDeployments: (scopeId: string) => call<Deployment>(`/apps/${encodeURIComponent(scopeId)}/deployments`),
+  /** The tables of the app's own database (Data tab). */
+  appTables: (scopeId: string) => call<ScopeTable[]>(`/apps/${encodeURIComponent(scopeId)}/tables`),
+  /** A bounded page of one table of the app's database. */
+  appTableRows: (scopeId: string, table: string, opts: { limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.limit != null) q.set('limit', String(opts.limit));
+    if (opts.offset != null) q.set('offset', String(opts.offset));
+    const qs = q.toString();
+    return call<ScopeTablePage>(
+      `/apps/${encodeURIComponent(scopeId)}/tables/${encodeURIComponent(table)}${qs ? `?${qs}` : ''}`,
+    );
+  },
   /** Move the app to its vertical's current prod version (rebind the scope). No-op if already current. */
   updateApp: (scopeId: string) =>
     call<UpdateResult>(`/apps/${encodeURIComponent(scopeId)}/update`, { method: 'POST' }),

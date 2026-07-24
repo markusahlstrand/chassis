@@ -1,4 +1,10 @@
-import type { PrincipalId, ScopeId, TenantId } from '@substrat-run/contracts';
+import type {
+  PrincipalId,
+  ScopeId,
+  ScopeTable,
+  ScopeTablePage,
+  TenantId,
+} from '@substrat-run/contracts';
 
 /**
  * The tenant-narrowed platform authority — the crux of docs/design/dashboard.md §4.
@@ -227,5 +233,25 @@ export class TenantNarrowedControlPlane {
     } catch {
       return null;
     }
+  }
+
+  // -- read-only scope-DB introspection (§5.4 admin-query RPC; the Data tab) ---
+  // Pinned to this tenant like every other call, so a scope id from another tenant
+  // cannot be addressed — it fails closed below the seam (K-3) exactly as provisioning does.
+
+  /** Every table in the scope's own database, with row counts. */
+  listScopeTables(scopeId: ScopeId): Promise<ScopeTable[]> {
+    return this.call(`/tenants/${this.tenantId}/scopes/${scopeId}/tables`);
+  }
+
+  /** A bounded page of one table of the scope's database. */
+  readScopeTable(
+    scopeId: ScopeId,
+    input: { table: string; limit: number; offset: number },
+  ): Promise<ScopeTablePage> {
+    const q = new URLSearchParams({ limit: String(input.limit), offset: String(input.offset) });
+    return this.call(
+      `/tenants/${this.tenantId}/scopes/${scopeId}/tables/${encodeURIComponent(input.table)}?${q}`,
+    );
   }
 }

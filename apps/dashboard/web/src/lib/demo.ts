@@ -256,12 +256,36 @@ export const APP_FILTER = ['All apps', 'Acme HR', 'Acme Legal', 'Acme Field Ops'
 /** The per-app detail tabs (counts are demo). */
 export const APP_TABS: Array<{ value: string; label: string; count?: number; future?: boolean }> = [
   { value: 'overview', label: 'Overview' },
+  { value: 'data', label: 'Data' },
   { value: 'deployments', label: 'Deployments', future: true },
   { value: 'env', label: 'Environment Variables', count: 4 },
   { value: 'domains', label: 'Domains', count: 1 },
   { value: 'integrations', label: 'Integrations', count: 2 },
   { value: 'settings', label: 'Settings' },
 ];
+
+/** Dev-preview sample for the Data tab (no backend): a couple of tables of an app's DB. */
+export const MOCK_SCOPE_TABLES: Array<{ name: string; rowCount: number; system: boolean }> = [
+  { name: 'meridian_account', rowCount: 3, system: false },
+  { name: 'meridian_session', rowCount: 7, system: false },
+  { name: '_substrat_outbox', rowCount: 42, system: true },
+  { name: '_substrat_tuples', rowCount: 18, system: true },
+  { name: '_substrat_migrations', rowCount: 4, system: true },
+];
+
+export const MOCK_SCOPE_TABLE_PAGES: Record<
+  string,
+  { columns: string[]; rows: unknown[][] }
+> = {
+  meridian_account: {
+    columns: ['id', 'email', 'display_name', 'created_at'],
+    rows: [
+      ['01JZ…A1', 'ada@meridian.test', 'Ada Lovelace', '2026-07-01T09:12:00Z'],
+      ['01JZ…B2', 'grace@meridian.test', 'Grace Hopper', '2026-07-02T14:03:00Z'],
+      ['01JZ…C3', 'alan@meridian.test', 'Alan Turing', '2026-07-03T08:41:00Z'],
+    ],
+  },
+};
 
 export interface PaletteAction {
   label: string;

@@ -68,15 +68,20 @@ import {
   type Vertical,
   type VerticalVersion,
   type ResolvedIdentity,
+  type ReadScopeTableInput,
   type RoleAssignment,
   type RoleDefinition,
   type Scope,
   type ScopeId,
   type ScopeStatus,
+  type ScopeTable,
+  type ScopeTablePage,
   type Tenant,
   type TenantId,
   type TenantRole,
   type TenantStatus,
+  SCOPE_TABLE_PAGE_DEFAULT,
+  SCOPE_TABLE_PAGE_MAX,
 } from '@substrat-run/contracts';
 import {
   asPrincipal,
@@ -2410,6 +2415,52 @@ export class SqliteScopeHost implements ScopeHost {
         if (!found) return undefined;
         return mapScope(r);
       },
+      listScopeTables: async (actor, tenantId: TenantId, scopeId: ScopeId): Promise<ScopeTable[]> => {
+        // K-3: the (tenantId, scopeId) pair is cross-checked before we open anything;
+        // a scope under a different tenant is unreachable, never another tenant's DB.
+        const db = this.scopeDbFor(tenantId, scopeId);
+        const names = (
+          db
+            .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+            .all() as { name: string }[]
+        ).map((r) => r.name);
+        const tables: ScopeTable[] = names.map((name) => ({
+          name,
+          rowCount: (db.prepare(`SELECT COUNT(*) AS c FROM "${name}"`).get() as { c: number }).c,
+          system: isSystemTable(name),
+        }));
+        this.recordAccess(actor, 'listScopeTables', { tenantId, scopeId }, null, tables.length);
+        return tables;
+      },
+      readScopeTable: async (
+        actor,
+        tenantId: TenantId,
+        scopeId: ScopeId,
+        input: ReadScopeTableInput,
+      ): Promise<ScopeTablePage> => {
+        const db = this.scopeDbFor(tenantId, scopeId);
+        // Validate the table against the LIVE schema — an unknown name throws, it is
+        // never interpolated blind. That validated name is the only thing that reaches
+        // the query, so the quoted identifier below carries no user input.
+        const known = new Set(
+          (
+            db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as {
+              name: string;
+            }[]
+          ).map((r) => r.name),
+        );
+        if (!known.has(input.table)) throw new Error(`unknown table '${input.table}'`);
+        const limit = Math.min(Math.max(1, input.limit ?? SCOPE_TABLE_PAGE_DEFAULT), SCOPE_TABLE_PAGE_MAX);
+        const offset = Math.max(0, input.offset ?? 0);
+        const stmt = db.prepare(`SELECT * FROM "${input.table}" LIMIT ? OFFSET ?`).raw(true);
+        const rows = (stmt.all(limit, offset) as unknown[][]).map((row) => row.map(cellToJson));
+        const columns = stmt.columns().map((c) => c.name);
+        const rowCount = (
+          db.prepare(`SELECT COUNT(*) AS c FROM "${input.table}"`).get() as { c: number }
+        ).c;
+        this.recordAccess(actor, 'readScopeTable', { tenantId, scopeId }, { table: input.table, limit, offset }, rows.length);
+        return { table: input.table, columns, rows, rowCount, limit, offset };
+      },
       activateScope: async (actor, tenantId, scopeId) => {
         // Idempotent on `active`, unaudited because nothing changed. Provisioning is
         // a two-phase creation that the reconciliation sweep re-runs (K-31), so a
@@ -3251,6 +3302,20 @@ export class SqliteScopeHost implements ScopeHost {
       .run(version, failure.version, failure.error, new Date().toISOString(), rt.scopeId);
   }
 
+  /**
+   * The scope's own database handle, after cross-checking the (tenantId, scopeId)
+   * pair against the directory (K-3). A scope that is absent, or lives under a
+   * DIFFERENT tenant, throws — the introspection reads never open another tenant's
+   * DB, and never CREATE one for an id that was never provisioned.
+   */
+  private scopeDbFor(tenantId: TenantId, scopeId: ScopeId): Database.Database {
+    const r = this.directory.prepare('SELECT tenant_id FROM scopes WHERE scope_id = ?').get(scopeId) as
+      | { tenant_id: string }
+      | undefined;
+    if (!r || r.tenant_id !== tenantId) throw new Error(`unknown scope for tenant: (${tenantId}, ${scopeId})`);
+    return this.runtime(tenantId, scopeId).db;
+  }
+
   private runtime(tenantId: TenantId, scopeId: ScopeId): ScopeRuntime {
     const key = `${tenantId}/${scopeId}`;
     const existing = this.scopes.get(key);
@@ -3280,6 +3345,19 @@ export class SqliteScopeHost implements ScopeHost {
     this.scopesById.set(scopeId, created);
     return created;
   }
+}
+
+/** The platform spine (`_substrat_*`) and SQLite internals — the UI groups these apart. */
+function isSystemTable(name: string): boolean {
+  return name.startsWith('_substrat') || name.startsWith('sqlite_');
+}
+
+/** SQLite cell → a JSON-safe value: bigints stringify, blobs read as null (contract). */
+function cellToJson(v: unknown): unknown {
+  if (v == null) return null;
+  if (typeof v === 'bigint') return v.toString();
+  if (v instanceof Uint8Array) return null;
+  return v;
 }
 
 function scopedSql(db: Database.Database): ScopedSql {
