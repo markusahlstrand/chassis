@@ -1,5 +1,13 @@
 # @substrat-run/engine-invites
 
+## 0.0.9
+
+### Patch Changes
+
+- Updated dependencies [74c9d7b]
+  - @substrat-run/kernel@0.13.0
+  - @substrat-run/contracts@0.13.0
+
 ## 0.0.8
 
 ### Patch Changes

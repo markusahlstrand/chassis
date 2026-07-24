@@ -1,5 +1,189 @@
 # @substrat-run/demo-hr
 
+## 0.1.0
+
+### Minor Changes
+
+- 12acc59: **First-run setup state + invite-only sign-up (Phase 1).** A freshly-provisioned instance
+  now has an explicit setup state instead of a bare login: the IdentityDO exposes
+  `needsSetup(scopeId)` (the owner seat is still unclaimed), and Meridian uses it to
+
+  - serve a **"Set up your workspace — create the admin account"** screen on first visit
+    (`/api/me` returns `{ status: 'needs-setup' }` while unclaimed), instead of a plain
+    sign-in that gives no hint the first sign-up becomes the admin; and
+  - **close open sign-up once the admin has claimed it** — after first-run, a stranger who
+    finds the URL can no longer self-register (`/api/auth/sign-up/email` returns 403). The
+    window is exactly "owner unclaimed", so it closes the instant the admin is created.
+
+  The claim itself is unchanged (trust-on-first-use — first completed setup wins). The
+  member-invite path (how teammates join after setup) is the Phase 2 follow-up.
+
+- b1af840: **Meridian is installable from the dashboard marketplace, and usable from an empty install.**
+
+  Meridian (the HR vertical) can now be provisioned as an app from the tenant dashboard,
+  the same embedded-catalog seam Callout uses, and a freshly-installed (empty) instance
+  is set up from zero through a new in-app Admin surface.
+
+  - **Marketplace wiring.** `@substrat-run/demo-meridian` gains a worker-safe `./module`
+    export (its domain module + perms only, never the node/better-auth seed), mirroring
+    Callout. The dashboard worker bundles `meridianModule` into its `ScopeDO` and adds a
+    `meridian` catalog entry — SKU `['meridian', 'protocol']`, owner granted the `hr-admin`
+    permission set so the installer can run the app from day one. Meridian is added to the
+    frontend marketplace list, vertical metadata, and dev-mock catalog. A new dashboard
+    scenario test provisions a real Meridian app and drives `hr/define-leave-type` +
+    `hr/create-employee` on the empty scope — the first-run path, proven end to end.
+
+  - **First-run onboarding (the Admin section).** An installed instance starts empty (no
+    leave types, people or projects). The app gains an hr-admin-only **Admin** section — a
+    first-run setup checklist plus screens to define leave types (with SE/ES statutory
+    presets, spec §6), add employees, create projects, and generate the per-period
+    **payroll export** (the §7 boundary). Every screen carries proper empty/loading/error
+    states and accessible form labels; permission is still checked in the kernel on every
+    op, so a non-admin reaching these calls is refused (verified: a manager defining a
+    leave type gets `403 permission denied: absence:configure`).
+
+  GDPR employee erasure (spec §8) remains a deliberate follow-up: crypto-shredding is keyed
+  off event `piiClass`/`subjectId` at the kernel/lake level, and there is no vertical-callable
+  erase primitive yet — a table-only version would look structural without being so, so it is
+  left unbuilt rather than faked.
+
+- fa0707c: **Member invites (Phase 2) — the post-setup join path.** Once a workspace is set up it's
+  invite-only; this adds the flow that lets teammates in:
+
+  - **IdentityDO** gains an `invite` directory (token _hash_ only) + `createInvite` /
+    `listInvites` / `inviteExists` / `revokeInvite` / `claimInvite`. Claiming binds the
+    invitee's subject to a pre-minted member principal.
+  - **`CloudflareScopeHost.assignScopeRole(scopeId, principal, roleKey)`** — the member half
+    of `provisionScopeLocal`'s owner grant: grant a principal a role at scope level so its
+    permissions resolve from the scope's own storage (covered by two new workerd tests).
+  - **Meridian**: admin-only `POST/GET /api/invites` (+ `…/revoke`) mint/list invites (role
+    granted at creation, one-time accept link returned, plaintext token never stored);
+    `POST /api/accept-invite` claims one while signed in; the sign-up gate also opens for a
+    valid `?invite=` token. SPA: an admin **Access** tab (invite at a role, copy the link,
+    revoke) and an **AcceptInvite** screen driven by `?invite=<token>`.
+
+  Roles a teammate can be invited at are this vertical's roles (hr-admin | manager | payroll);
+  employees (HR records) remain separate.
+
+- e774c01: **Meridian is reshaped into a sandbox-clean, control-plane-less worker — the shape a vertical must have to be pushed into the platform's dispatch namespace and provisioned by the shared control plane.**
+
+  Meridian was built as a standalone worker that talked _back_ to the control plane (a
+  `ControlPlaneDO`, a `CONTROL_PLANE_SVC` service binding, connected-mode gating, an `ASSETS`
+  binding, a Scrive reconcile cron). The production platform provisions verticals through a
+  Workers-for-Platforms **dispatch namespace**, and `assertSandboxContract` refuses a
+  `CONTROL_PLANE` binding or a service binding to a platform worker — so that shape could never be
+  pushed. This converts Meridian to the same sandbox-clean pattern Callout uses:
+
+  - **`worker.ts`** — CP-less: `hostFor` builds `CloudflareScopeHost({ scope })` (no control plane);
+    `/internal/provision` sets up only the scope's own state via `provisionScopeLocal` (roles + the
+    owner's `hr-admin` at scope level), since the shared plane already wrote the directory row +
+    entitlements; permissions evaluate from the scope's own storage; the router asserts the node.
+    Dropped: the `ControlPlaneDO`, the connected-mode `assertScopeActive` gating, and the Scrive
+    connector + `scheduled()` cron.
+  - **CP-less identity** — the vertical's own Better Auth `user.principal_id` column is the
+    id→principal directory (new `IdentityDirectory` seam + `0002_principal_binding.sql`); `/internal/link`
+    binds a login to the provisioned owner. The node server keeps the central directory.
+  - **SPA bundled into the worker** — `scripts/gen-assets.mjs` inlines `app/dist` into
+    `src/assets.generated.ts` (gitignored), served by `src/assets.ts`; the `ASSETS` binding is gone.
+    gen-assets now writes only on change, so `wrangler dev`'s build hook doesn't loop on its output.
+  - **`wrangler.jsonc`** — sandbox-clean: only the `SCOPE` DO + `AUTH_DB`, a `build` step, no service
+    binding / cron / `CONTROL_PLANE`.
+
+  Verified on real `workerd` (`wrangler dev`): `GET /` serves the SPA; `/internal/provision` is
+  fail-closed (403 without `PLATFORM_SECRET`, 201 with it) and provisions CP-lessly; an authenticated
+  `hr/*` invoke by the `hr-admin` owner succeeds on DO SQLite. `wrangler deploy --dry-run` shows only
+  `SCOPE` + `AUTH_DB`. All 21 node tests still pass.
+
+  Deploy steps are in `demos/meridian/DEPLOY.md` (create the D1, `substrat push`, admit, promote to
+  prod, flip the dashboard catalog's `connected` flag). Known follow-ups for full hosted UX: the SPA's
+  `/api/me`/`/api/cast` data contract (still demo-shaped), owner login-linking on first sign-in, and
+  Scrive reconcile (no cron on a dispatch worker).
+
+- 6a0e253: **Pluggable, config-selected auth for verticals — a new `@substrat-run/vertical-auth` package, and Meridian on it.**
+
+  Auth is now a config choice behind a small contract, isolated per tenant, with no shared `AUTH_DB`.
+
+  - **`@substrat-run/vertical-auth`** (new): the `AuthProvider` contract (`handle` + `resolve`); an
+    OIDC provider (`oidcAuthProvider` — verifies a bearer JWT against the issuer's JWKS, covering
+    Supabase, Auth0, AuthHero, Keycloak); and a per-tenant **`IdentityDO`** — Better Auth over
+    `drizzle-orm/durable-sqlite` (its own SQLite, one DO per tenant) plus the provider-agnostic
+    `sub → principal` directory (`setPendingOwner` / `resolvePrincipal`). Source-exported (`.`,
+    `./provider`, `./oidc`).
+
+  - **Meridian** consumes it. The worker picks the provider by config (`AUTH_PROVIDER=better-auth-do`
+    default, or `oidc` + `OIDC_ISSUER`/`OIDC_AUDIENCE`); the app never learns which. `/internal/provision`
+    seeds the owner seat, and the first login **claims** it (the installer becomes `hr-admin`) —
+    provider-agnostically. The shared D1 `AUTH_DB` and its identity directory are gone; `wrangler
+--dry-run` shows only the `SCOPE` + `AUTH` (IdentityDO) Durable Objects, so the worker still passes
+    the sandbox contract and is pushable to the dispatch namespace.
+
+  Verified on real workerd (Better Auth path): provision → sign-up → invoke claims the owner seat →
+  `hr-admin` op succeeds → `/api/me` returns the claimed principal. OIDC verified with jose
+  (mint+verify): valid → subject; no token / wrong issuer / expired → null. 21 Meridian node tests pass.
+
+  Follow-ups (see `demos/meridian/DEPLOY.md`): fold the `hr/whoami` shape back into `/api/me` so the
+  owner lands on the Admin surface; adopt the package in Callout; remove the now-dead `src/auth.ts` /
+  `src/auth-schema.ts`.
+
+### Patch Changes
+
+- 32abe73: **`substrat push` needs no flags.** Run it from inside the vertical and it defaults everything:
+
+  - **dir** → `.` (the current directory).
+  - **`--slug` / `--name`** → from a `"substrat": { "slug", "name" }` block in the vertical's
+    `package.json`, or derived from the package name (`@substrat-run/demo-meridian` → `meridian`
+    / `Meridian`).
+  - **`--version`** → the registry's latest for that slug, **patch-bumped** — no more hand-tracking
+    the number (falls back to the package.json version for a slug's first-ever push).
+
+  So `cd demos/meridian && substrat push` replaces
+  `substrat push demos/meridian --slug meridian --version 0.0.13 --name Meridian`. Every flag still
+  works as an override. Adds `substrat` blocks to the Meridian + Callout demo package.json.
+
+- 57b1cfe: **The Meridian SPA works for a real single logged-in user, not just the demo cast.**
+
+  The pushed worker returned `/api/me` as `{ principal, via, display }` and had no `/api/cast`, but
+  the SPA centres on `{ key, display, role, country, employeeId }` + a persona switcher — so a
+  hosted install served an app that couldn't place the user. This closes that data-contract gap
+  without committing to any auth model:
+
+  - A new **`hr/whoami`** operation resolves the caller's role hint (`hr-admin` / `manager` /
+    `employee` / `none`, by probing their own grants) and linked employee from the scope itself. No
+    permission gate — it reveals only the caller's own role + own employee id — and the kernel still
+    enforces the real permission on every operation.
+  - The worker's **`/api/me`** returns the SPA shape via `hr/whoami`, so a real owner (holding
+    `hr-admin`) lands on the admin/setup surface and an employee on their own work — the same shape
+    the dev server already serves. **`/api/cast`** returns `[]` (the persona switcher is a dev-only
+    affordance).
+  - The app **hides the persona switcher** when the cast is empty, so a hosted single-user instance
+    shows no demo-character dropdown.
+
+  Verified on real `workerd`: after provision, `/api/me` as the owner returns
+  `{ role: "hr-admin", employeeId: null }` and lands the admin surface; an employee (created with a
+  `principalRef`) resolves to `{ role: "employee", employeeId: … }`; `/api/cast` is `[]`. 21 node
+  tests pass. Note: this does not change how identity is resolved (still Better Auth CP-less / the dev
+  header) — the auth-model decision (per-vertical vs. shared OIDC) is deliberately left open.
+
+- cfbcc6c: **Sign-in / sign-up screen for hosted Meridian.** A deployed instance returned 401 from `/api/me`
+  with no way to authenticate (production has no persona switcher), so users just saw "unauthorized".
+  The app now shows a **SignIn screen** (email + password, sign-in/sign-up) that posts to Better Auth
+  (`/api/auth/*` → the tenant's IdentityDO) and reloads on success. The **first sign-in claims the
+  owner seat** — the installer becomes `hr-admin` and lands on the Admin/setup surface with their real
+  name. `useAppData` now surfaces `unauthorized` (401) distinctly from errors; dev (persona/dev-header)
+  is unaffected. Verified on workerd: 401 → sign-up → `/api/me` returns the `hr-admin` shape.
+- Updated dependencies [12acc59]
+- Updated dependencies [fa0707c]
+- Updated dependencies [74c9d7b]
+- Updated dependencies [6a0e253]
+  - @substrat-run/vertical-auth@0.1.0
+  - @substrat-run/adapter-cloudflare@0.13.0
+  - @substrat-run/kernel@0.13.0
+  - @substrat-run/adapter-sqlite@0.13.0
+  - @substrat-run/contracts@0.13.0
+  - @substrat-run/connector-scrive@0.1.2
+  - @substrat-run/engine-protocol@0.4.4
+  - @substrat-run/control-plane-api@0.13.0
+
 ## 0.0.9
 
 ### Patch Changes

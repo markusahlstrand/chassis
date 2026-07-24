@@ -1,5 +1,23 @@
 # @substrat-run/control-plane
 
+## 0.1.1
+
+### Patch Changes
+
+- 6abbce9: **Standardize the deploy script name to `cf:deploy` across all deployable workspaces.** control-plane,
+  router, and docs used `deploy`, which collides with pnpm's built-in `deploy` command (`pnpm deploy` →
+  `ERR_PNPM_NOTHING_TO_DEPLOY`, needing `pnpm run deploy`). They now use `cf:deploy` — matching dashboard,
+  the demos, and the external-vertical example — so `pnpm cf:deploy` just works. Docs references updated.
+- Updated dependencies [2add91f]
+- Updated dependencies [b1af840]
+- Updated dependencies [fa0707c]
+- Updated dependencies [74c9d7b]
+  - @substrat-run/oidc-rp@0.2.0
+  - @substrat-run/adapter-cloudflare@0.13.0
+  - @substrat-run/kernel@0.13.0
+  - @substrat-run/contracts@0.13.0
+  - @substrat-run/control-plane-api@0.13.0
+
 ## 0.1.0
 
 ### Minor Changes
