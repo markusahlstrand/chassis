@@ -102,6 +102,53 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     expect(apps[0]!.status).toBe('active');
   });
 
+  it('manages an app’s env: stores values, masks secrets on read, leaves untouched secrets, removes one', async () => {
+    const acme = await bootstrap('acme');
+    const appScopeId = scopeId.parse(ulid());
+    await createApp(host, {
+      node: acme,
+      appScopeId,
+      verticalSlug: 'protocol',
+      name: 'Onboarding',
+      appEntitlements: ['protocol'],
+      appOwnerGrants: [PROTOCOL_PERM.create, PROTOCOL_PERM.read] as PermissionKey[],
+    });
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+
+    // Set a non-secret and a secret.
+    const saved = (await dash.invoke('dashboard/set-app-env', {
+      appScopeId,
+      entries: [
+        { key: 'PUBLIC_ORIGIN', value: 'https://hr.acme.com', secret: false },
+        { key: 'ADMIN_PASSWORD', value: 'super-secret-pw', secret: true },
+      ],
+    })) as { saved: number };
+    expect(saved.saved).toBe(2);
+
+    // The read masks the secret's value but reports it as set; the non-secret is returned.
+    type EnvVal = { key: string; isSecret: boolean; hasValue: boolean; value: string | null };
+    const values = (await dash.invoke('dashboard/list-app-env', { appScopeId })) as EnvVal[];
+    expect(values.find((v) => v.key === 'PUBLIC_ORIGIN')?.value).toBe('https://hr.acme.com');
+    const secret = values.find((v) => v.key === 'ADMIN_PASSWORD')!;
+    expect(secret.value).toBeNull(); // never echoed
+    expect(secret.isSecret).toBe(true);
+    expect(secret.hasValue).toBe(true);
+
+    // An empty value leaves the secret unchanged (the form submits blank to keep it).
+    await dash.invoke('dashboard/set-app-env', { appScopeId, entries: [{ key: 'ADMIN_PASSWORD', value: '', secret: true }] });
+    const still = (await dash.invoke('dashboard/list-app-env', { appScopeId })) as EnvVal[];
+    expect(still.find((v) => v.key === 'ADMIN_PASSWORD')?.hasValue).toBe(true);
+
+    // Delete removes just that key.
+    await dash.invoke('dashboard/delete-app-env', { appScopeId, key: 'ADMIN_PASSWORD' });
+    const after = (await dash.invoke('dashboard/list-app-env', { appScopeId })) as EnvVal[];
+    expect(after.map((v) => v.key)).toEqual(['PUBLIC_ORIGIN']);
+
+    // Setting env recorded an Activity entry (the keys that moved, never the values).
+    const events = (await dash.invoke('dashboard/app-events', { appScopeId })) as Array<{ kind: string; detail: string | null }>;
+    expect(events.some((e) => e.kind === 'updated' && /env: /.test(e.detail ?? ''))).toBe(true);
+  });
+
   it('a failed provision marks the app failed, not silently provisioning', async () => {
     const acme = await bootstrap('acme-fail');
     const failScopeId = scopeId.parse(ulid());

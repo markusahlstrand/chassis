@@ -54,6 +54,22 @@ which channel points where. A builder self-serves `dev`/`staging` promotion righ
 be one of the caller's own verticals — the dashboard's shared-plane credential can't be turned
 into a lever on another tenant's deployment.
 
+## App configuration (the Env tab)
+
+Each app has an **Env** tab for its environment/configuration. It is not a free-form key/value
+editor — it is a form **generated from the vertical's declared [`envSpec`](/concepts/modules#declared-environment-envspec)**:
+each field carries the manifest's label, description, placeholder, and `required`/`secret`
+flags. A vertical opts in by declaring `envSpec`; one that declares nothing shows no fields.
+The spec is read from the **registry** (where `registerVertical` stored it), so a pushed
+builder vertical gets a config form exactly like a builtin, without the dashboard bundling its
+code.
+
+Values are stored per app and authorized by the same grant that provisions apps
+(`dashboard:provision-app`). Secret values are **write-only**: masked, never returned by the
+API, and left blank to keep. Delivery to the running app follows the app's shape — a hosted
+vertical (one shared script across many tenants' scopes) reads its per-tenant config at runtime
+rather than through per-app worker secrets.
+
 ## Status
 
 Built and connected — self-service sign-up bootstraps a tenant, the catalog offers a real

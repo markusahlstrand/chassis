@@ -1,0 +1,43 @@
+{
+  "name": "@substrat-run/demo-auth-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Standalone Better Auth OIDC provider demo (auth-server) — see spec/concept.md",
+  "substrat": {
+    "slug": "auth-server",
+    "name": "Auth Server"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "gen:assets": "node scripts/gen-assets.mjs",
+    "pretypecheck": "node scripts/gen-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "test": "vitest run",
+    "server": "tsx src/server.ts",
+    "dev": "concurrently -n api,app -c blue,green \"tsx src/server.ts\" \"pnpm --dir app dev\"",
+    "cf:dev": "wrangler dev",
+    "cf:dry-run": "wrangler deploy --dry-run --outdir dist-worker"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@substrat-run/adapter-email": "workspace:^",
+    "@substrat-run/contracts": "workspace:^",
+    "better-auth": "^1.6.23",
+    "better-sqlite3": "^12.0.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "concurrently": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.110.0"
+  }
+}

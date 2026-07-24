@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "."
+  },
+  "include": ["src", "db", "test", "vitest.config.ts"],
+  "exclude": ["src/worker.ts", "src/auth-do.ts", "src/assets.ts", "src/assets.generated.ts"]
+}

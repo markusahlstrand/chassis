@@ -106,11 +106,14 @@ const HTTP_CLIENTS = new Set(['undici', 'node-fetch', 'axios', 'got', 'ky']);
 /**
  * Harness = edge/server wiring, not module code reachable from a
  * ModuleRegistration. auth*.ts wires an authentication adapter (Better Auth,
- * OIDC, …) at the server edge — legitimately node/DB-touching. worker.ts is the
- * Cloudflare deployment entry (the composition root that mounts the adapter +
- * engines onto a Worker) — the workerd analogue of server.ts. page.ts is a
- * served SPA (an HTML/JS string the worker returns) — its `fetch` is browser
- * code, not module code, the same edge-wiring class as worker.ts/routes.ts.
+ * OIDC, …) at the server edge — legitimately node/DB-touching. auth-do.ts is the
+ * same adapter wiring hosted in a Durable Object (Better Auth over the DO's own
+ * SQLite) — the workerd analogue of auth-node.ts; its `fetch` is the DO's request
+ * interface, not a network call. worker.ts is the Cloudflare deployment entry
+ * (the composition root that mounts the adapter + engines onto a Worker) — the
+ * workerd analogue of server.ts. page.ts is a served SPA (an HTML/JS string the
+ * worker returns) — its `fetch` is browser code, not module code, the same
+ * edge-wiring class as worker.ts/routes.ts.
  */
 export const DEFAULT_HARNESS = [
   'seed.ts',
@@ -118,6 +121,7 @@ export const DEFAULT_HARNESS = [
   'index.ts',
   'auth.ts',
   'auth-node.ts',
+  'auth-do.ts',
   'auth-adapters.ts',
   'oidc.ts',
   'worker.ts',

@@ -39,6 +39,9 @@ export const workorderManifest = moduleManifest.parse({
   attachmentTargets: [{ entityType: 'workorder', readPermission: 'workorder:read' }],
   entityRelations: [{ entityType: 'workorder', parentType: 'facility' }],
   entitlementKey: 'workorder',
+  envSpec: [                         // optional: config the deployment must provide
+    { key: 'WEBHOOK_SECRET', description: 'Signing secret for inbound webhooks', secret: true },
+  ],
   ui: { /* routes, nav, entityViews, widgets */ },
 });
 ```
@@ -54,8 +57,15 @@ Field by field:
 | `attachmentTargets` | entity types that accept attachments (documents, comments), and which permission gates reading them | kernel attachment services |
 | `entityRelations` | parent edges (`workorder → facility`) that permission flows along | the [permission evaluator](/concepts/permissions) |
 | `entitlementKey` | the SKU flag that gates loading this module for a tenant | entitlements / billing |
+| `envSpec` | declared environment variables (label, description, placeholder, `required`, `secret`) a deployment must provide | host/console config forms — carried on the registry (see below) |
+| `guards` | manifest-declared operation pre-conditions: a named predicate the kernel runs inside the operation's transaction, before the handler (a throw blocks it) | kernel |
+| `withdraws` | operation names whose default binding this module suppresses — the name stops resolving, so a vertical can re-offer the transition behind its own guarded operation | kernel operation resolver |
 | `searchables` | entity types and fields registered for tenant-scoped search | search service |
+| `api` | path to the emitted OpenAPI for the module's HTTP surface, if any | tooling / SDK generation |
 | `ui` | routes, nav items, entity views, widgets — permission-keyed, composed into the vertical's app at build time | app shell |
+
+Every field past `entitlementKey` is **optional and additive** (decision 28): a manifest that
+omits them still parses, and adding one never breaks an existing module.
 
 Two fields deserve special mention:
 
@@ -65,6 +75,38 @@ Two fields deserve special mention:
 - **`entitlementKey`** is how the module system turns commercial: enabling an engine for
   a tenant is flipping an entitlement, and the kernel refuses to load what isn't
   entitled.
+
+## Declared environment (`envSpec`)
+
+A vertical **opts in** to a configuration surface by declaring `envSpec` — the environment
+variables a deployment must provide, each self-describing:
+
+```ts
+envSpec: [
+  { key: 'PUBLIC_ORIGIN', label: 'Issuer origin', description: 'The public URL of this app.',
+    placeholder: 'https://app.example.com', required: true, secret: false, group: 'General' },
+  { key: 'ADMIN_PASSWORD', label: 'Admin password', description: 'Bootstrap admin password.',
+    placeholder: 'at least 8 characters', required: false, secret: true, group: 'Bootstrap' },
+]
+```
+
+It's optional and additive — a vertical that declares nothing has no config surface.
+`secret: true` marks a value that is **write-only** in any UI (masked, never echoed back) and
+delivered as a secret; `group` sections the form; `required` is validated before deploy.
+
+The spec **rides the registry**: when a vertical is registered (`registerVertical`), its
+`envSpec` is stored alongside its slug. So a host or console can render a config form for **any**
+registered vertical — a bundled builtin or a pushed builder vertical — without loading its
+code. That is what makes opt-in a single edit in the manifest: declare `envSpec`, and the
+[Dashboard](/platform/dashboard) shows a settings form for the app automatically. It evolves
+with the manifest — re-registering a vertical refreshes its spec.
+
+::: tip Delivery depends on the app's shape
+A **standalone** app (its own worker script) receives these as worker secrets/vars at deploy.
+A **hosted** vertical (one script serving many tenants' scopes) can't use per-app worker
+secrets — all its scopes share one script — so it takes per-tenant values through the
+per-scope config it reads at runtime.
+:::
 
 ## Migrations
 

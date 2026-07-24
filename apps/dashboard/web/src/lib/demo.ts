@@ -8,6 +8,7 @@
  * The generic "Acme" tenant from the design handoff.
  */
 import type { IconName } from './icons';
+import type { AppEnvView } from './api';
 
 /** Per-vertical display metadata — the "kind" label and its layer-accent colour. */
 export interface VerticalMeta {
@@ -117,6 +118,20 @@ export const ENV_VARS: EnvVar[] = [
   { key: 'SMTP_PASSWORD', value: '••••••••••••', environment: 'Production' },
   { key: 'POSTMARK_SERVER_TOKEN', value: '••••••••••••••••••', environment: 'Preview' },
 ];
+
+/** Dev-preview sample for the Env tab — an env-spec + values so the form isn't empty
+ *  without a backend (VITE_DEV_MOCK). Mirrors the real `GET /api/apps/:scope/env` shape. */
+export const MOCK_APP_ENV: AppEnvView = {
+  spec: [
+    { key: 'PUBLIC_ORIGIN', label: 'Public origin', description: 'The public URL this app is served at.', placeholder: 'https://app.acme.com', required: true, secret: false, group: 'General' },
+    { key: 'SMTP_PASSWORD', label: 'SMTP password', description: 'Credential for outbound email.', placeholder: 'at least 8 characters', required: false, secret: true, group: 'Email' },
+    { key: 'EMAIL_FROM', label: 'Sender address', description: 'The From address for transactional mail.', placeholder: 'no-reply@acme.com', required: false, secret: false, group: 'Email' },
+  ],
+  values: [
+    { key: 'PUBLIC_ORIGIN', isSecret: false, hasValue: true, value: 'https://hr.acme.com', updatedAt: '' },
+    { key: 'SMTP_PASSWORD', isSecret: true, hasValue: true, value: null, updatedAt: '' },
+  ],
+};
 
 // -- M2: integrations -------------------------------------------------------
 

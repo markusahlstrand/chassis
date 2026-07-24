@@ -1,0 +1,6 @@
+# Generated from app/dist by scripts/gen-assets.mjs (the inlined admin SPA the
+# pushed worker serves). Rebuilt on every app build; never committed.
+src/assets.generated.ts
+
+# Local dev database (Better Auth over better-sqlite3, Node dev server only).
+.data/

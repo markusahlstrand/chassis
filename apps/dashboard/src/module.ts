@@ -185,6 +185,32 @@ export const dashboardMigrations = [
       CREATE INDEX dashboard_app_events_by_app ON dashboard_app_events (app_scope_id, created_at);
     `,
   },
+  {
+    version: '0006-app-env',
+    sql: `
+      -- Per-app environment/config the tenant MANAGES from the dashboard: one row per
+      -- (app, key). This is the management surface — the account's own record of its
+      -- app's config, rendered as a form from the vertical's declared env-spec. DELIVERY
+      -- to the running app scope (a hosted vertical reads its per-scope config at runtime,
+      -- the connections.md model) is a separate step; this table is where the values are
+      -- authored and held meanwhile.
+      --
+      -- Secret values live here in the tenant's OWN dashboard scope for now; they are
+      -- never echoed back over the API (write-only). The production path seals a secret
+      -- value via the host SecretBox (connections.md §3.5), the same way an OAuth secret
+      -- is kept — not plaintext at rest. Flagged so the checkpoint sees it.
+      CREATE TABLE dashboard_app_env (
+        id           TEXT PRIMARY KEY,
+        app_scope_id TEXT NOT NULL,
+        key          TEXT NOT NULL,
+        value        TEXT NOT NULL,
+        is_secret    INTEGER NOT NULL DEFAULT 0,
+        updated_by   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX dashboard_app_env_key ON dashboard_app_env (app_scope_id, key);
+    `,
+  },
 ];
 
 export interface DashboardAppRow {
@@ -197,6 +223,28 @@ export interface DashboardAppRow {
   created_by: string;
   created_at: string;
   deleted_at: string | null;
+}
+
+/** One stored env var for an app (the raw row; secrets never leave the module unmasked). */
+export interface DashboardAppEnvRow {
+  id: string;
+  app_scope_id: string;
+  key: string;
+  value: string;
+  is_secret: number;
+  updated_by: string;
+  updated_at: string;
+}
+
+/** One env var as the dashboard exposes it — a secret's value is never echoed back. */
+export interface AppEnvValue {
+  key: string;
+  isSecret: boolean;
+  /** Whether a value is stored (a secret shows "set" without revealing it). */
+  hasValue: boolean;
+  /** The plaintext for a non-secret; null for a secret (write-only). */
+  value: string | null;
+  updatedAt: string;
 }
 
 /** One row of the app's audit trail — a lifecycle transition. */
@@ -371,6 +419,74 @@ const appEventsOp: OperationHandler<z.infer<typeof appEventsInput>, DashboardApp
     'SELECT * FROM dashboard_app_events WHERE app_scope_id = ? ORDER BY created_at DESC, id DESC',
     [input.appScopeId],
   );
+};
+
+// -- app environment / config ------------------------------------------------
+
+const envKey = z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'env keys are UPPER_SNAKE_CASE');
+
+const setAppEnvInput = z.object({
+  appScopeId: z.string().min(1),
+  entries: z
+    .array(z.object({ key: envKey, value: z.string(), secret: z.boolean().default(false) }))
+    .min(1),
+});
+
+/**
+ * Upsert an app's env/config. Same authority as managing the app (`provision-app`), so
+ * no new permission key. An empty `value` is "leave unchanged" — that is how the form
+ * submits without re-typing a secret it never received back (secret values are write-only,
+ * so the client can't echo them); explicit removal is `delete-app-env`. Records the change
+ * on the app's Activity trail (which keys moved, never the values).
+ */
+const setAppEnvOp: OperationHandler<z.infer<typeof setAppEnvInput>, { saved: number }> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.provisionApp));
+  const input = setAppEnvInput.parse(raw);
+  const now = new Date().toISOString();
+  const saved: string[] = [];
+  for (const e of input.entries) {
+    if (e.value === '') continue; // leave-unchanged (untouched secret)
+    ctx.sql.exec(
+      `INSERT INTO dashboard_app_env (id, app_scope_id, key, value, is_secret, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (app_scope_id, key) DO UPDATE SET
+         value = excluded.value, is_secret = excluded.is_secret,
+         updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+      [ulid(), input.appScopeId, e.key, e.value, e.secret ? 1 : 0, ctx.principal, now],
+    );
+    saved.push(e.key);
+  }
+  if (saved.length) recordAppEvent(ctx, input.appScopeId, 'updated', `env: ${saved.join(', ')}`);
+  return { saved: saved.length };
+};
+
+const listAppEnvInput = z.object({ appScopeId: z.string().min(1) });
+
+/** An app's stored env/config, secrets masked (value: null). Gated read. */
+const listAppEnvOp: OperationHandler<z.infer<typeof listAppEnvInput>, AppEnvValue[]> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.read));
+  const input = listAppEnvInput.parse(raw);
+  const rows = ctx.sql.query<DashboardAppEnvRow>(
+    'SELECT * FROM dashboard_app_env WHERE app_scope_id = ? ORDER BY key',
+    [input.appScopeId],
+  );
+  return rows.map((r) => ({
+    key: r.key,
+    isSecret: r.is_secret === 1,
+    hasValue: r.value !== '',
+    value: r.is_secret === 1 ? null : r.value, // never echo a secret
+    updatedAt: r.updated_at,
+  }));
+};
+
+const deleteAppEnvInput = z.object({ appScopeId: z.string().min(1), key: envKey });
+
+/** Remove one env var (same authority as setting it). Idempotent. */
+const deleteAppEnvOp: OperationHandler<z.infer<typeof deleteAppEnvInput>, { ok: true }> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.provisionApp));
+  const input = deleteAppEnvInput.parse(raw);
+  ctx.sql.exec('DELETE FROM dashboard_app_env WHERE app_scope_id = ? AND key = ?', [input.appScopeId, input.key]);
+  return { ok: true };
 };
 
 // -- team + members ----------------------------------------------------------
@@ -620,6 +736,9 @@ export const dashboardModule: ModuleRegistration = {
     'dashboard/app-events': appEventsOp as OperationHandler<never, unknown>,
     'dashboard/list-apps': listAppsOp as OperationHandler<never, unknown>,
     'dashboard/delete-app': deleteAppOp as OperationHandler<never, unknown>,
+    'dashboard/set-app-env': setAppEnvOp as OperationHandler<never, unknown>,
+    'dashboard/list-app-env': listAppEnvOp as OperationHandler<never, unknown>,
+    'dashboard/delete-app-env': deleteAppEnvOp as OperationHandler<never, unknown>,
     'dashboard/init-team': initTeamOp as OperationHandler<never, unknown>,
     'dashboard/invite-member': inviteMemberOp as OperationHandler<never, unknown>,
     'dashboard/accept-invite': acceptInviteOp as OperationHandler<never, unknown>,

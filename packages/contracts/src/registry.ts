@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { instant, tenantId, verticalSlug } from './ids.js';
+import { envVarSpec } from './manifest.js';
 
 /**
  * The vertical + version registry (#31 step 1; D-33's milestone one).
@@ -28,11 +29,19 @@ export const vertical = z.object({
    * gate for who may push new versions of it + manage its non-prod channels (Phase 2).
    */
   ownerTenant: tenantId.nullable(),
+  /**
+   * The vertical's declared environment (its `moduleManifest.envSpec`), carried on the
+   * registry so a host/console can render a config form for ANY registered vertical —
+   * a bundled builtin or a pushed builder vertical — without loading its code. Optional
+   * and additive (D-28): a vertical that declares no config omits it. This is what makes
+   * "opt into a settings form by declaring `envSpec` in your manifest" flow automatically.
+   */
+  envSpec: z.array(envVarSpec).optional(),
   createdAt: instant,
 });
 export type Vertical = z.infer<typeof vertical>;
 
-export const registerVerticalInput = vertical.pick({ slug: true, name: true, source: true }).extend({
+export const registerVerticalInput = vertical.pick({ slug: true, name: true, source: true, envSpec: true }).extend({
   // Optional on input — a staff/platform push omits it (⇒ platform-owned).
   ownerTenant: tenantId.nullable().default(null),
 });

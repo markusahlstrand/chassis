@@ -28,6 +28,50 @@ export const manifestGuard = z.object({
 });
 export type ManifestGuard = z.infer<typeof manifestGuard>;
 
+// A single declared environment variable — the config a deployment must provide,
+// self-describing so a host/console can render a settings form (placeholder +
+// description) and validate the required keys before deploy. `secret: true` marks a
+// value that is write-only in the UI and delivered as a secret, never echoed back.
+export const envVarSpec = z.object({
+  key: z.string().regex(/^[A-Z][A-Z0-9_]*$/), // ADMIN_PASSWORD
+  label: z.string().optional(), // "Admin password" — falls back to the key
+  description: z.string().min(1), // shown under the field
+  placeholder: z.string().optional(), // "at least 8 characters"
+  required: z.boolean().default(false),
+  secret: z.boolean().default(false), // masked + write-only + delivered as a secret
+  default: z.string().optional(), // non-secret default, prefilled
+  group: z.string().optional(), // "Bootstrap" · "Email" — form sectioning
+});
+export type EnvVarSpec = z.infer<typeof envVarSpec>;
+
+/** The runtime resolution of an `envSpec` against a raw environment. */
+export interface ResolvedEnv {
+  /** Each declared key → its value (from `raw`, else the spec's `default`). */
+  values: Record<string, string | undefined>;
+  /** Declared `required` keys that resolved to nothing — a deploy misconfiguration. */
+  missingRequired: string[];
+}
+
+/**
+ * Resolve a declared `envSpec` against a raw environment (a Worker `env`, `process.env`, …).
+ * Reads ONLY the declared keys, so the manifest is the single source of what an app consumes
+ * (a key it doesn't declare, it doesn't read); applies each spec `default`; and reports absent
+ * `required` keys. Never throws — the caller decides whether a missing required key is fatal
+ * (a hosted vertical may have a per-scope fallback), and the config form is where a bad deploy
+ * is blocked. Non-string raw values (e.g. a binding) are ignored — the spec covers string config.
+ */
+export function resolveEnvSpec(spec: EnvVarSpec[], raw: Record<string, unknown>): ResolvedEnv {
+  const values: Record<string, string | undefined> = {};
+  const missingRequired: string[] = [];
+  for (const s of spec) {
+    const rawVal = raw[s.key];
+    const v = typeof rawVal === 'string' && rawVal !== '' ? rawVal : s.default;
+    values[s.key] = v;
+    if (s.required && (v === undefined || v === '')) missingRequired.push(s.key);
+  }
+  return { values, missingRequired };
+}
+
 export const moduleManifest = z.object({
   id: moduleId, // '@substrat-run/engine-workorder'
   version: semverVersion,
@@ -89,6 +133,13 @@ export const moduleManifest = z.object({
   // Optional: additive-only surface (D-28).
   withdraws: z.array(z.string().min(1)).optional(),
   entitlementKey: z.string().regex(/^[a-z0-9-]+$/), // the SKU flag that gates loading (D-20)
+  // DECLARED ENVIRONMENT. Optional, additive-only (D-28): the config a deployment
+  // must provide, self-describing so a host/console can render a settings form and
+  // validate required keys. Coherent for a STANDALONE-deployed app (its own worker
+  // script owns its own secrets); a hosted dispatch vertical (one script serving many
+  // tenants' scopes) delivers per-tenant config through the connection store instead,
+  // never per-app worker secrets.
+  envSpec: z.array(envVarSpec).optional(),
   api: z.string().optional(), // path to emitted OAS for the HTTP surface, if any (D-22)
   searchables: z
     .array(

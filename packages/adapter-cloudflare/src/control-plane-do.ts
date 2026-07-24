@@ -107,6 +107,8 @@ export interface VerticalRow {
   name: string;
   source: string;
   owner_tenant: string | null;
+  /** The vertical's declared env-spec, as a JSON string (or null). */
+  env_spec: string | null;
   created_at: string;
 }
 
@@ -245,6 +247,9 @@ const DIRECTORY_DDL = `
     name         TEXT NOT NULL,
     source       TEXT NOT NULL,
     owner_tenant TEXT,
+    -- The vertical's declared env-spec (moduleManifest.envSpec) as JSON — a host/console
+    -- renders a config form from it for any registered vertical. NULL = declares none.
+    env_spec     TEXT,
     created_at   TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS vertical_versions (
@@ -514,6 +519,8 @@ export class ControlPlaneDO extends DurableObject {
     this.addColumn('_substrat_admin_log', 'caused_by TEXT');
     // builder-plane.md: which tenant owns a vertical (NULL = platform-owned).
     this.addColumn('verticals', 'owner_tenant TEXT');
+    // The vertical's declared env-spec (moduleManifest.envSpec) as JSON, for config forms.
+    this.addColumn('verticals', 'env_spec TEXT');
     this.sql.exec("UPDATE scopes SET slug = lower(scope_id) WHERE slug IS NULL");
     this.sql.exec("UPDATE scopes SET kind = 'scope' WHERE kind IS NULL");
     this.sql.exec('UPDATE scopes SET name = slug WHERE name IS NULL');
@@ -943,11 +950,16 @@ export class ControlPlaneDO extends DurableObject {
       .toArray()[0] as unknown as VerticalRow | undefined;
   }
 
-  insertVertical(slug: string, name: string, source: string, ownerTenant: string | null, createdAt: string): void {
+  insertVertical(slug: string, name: string, source: string, ownerTenant: string | null, envSpec: string | null, createdAt: string): void {
     this.sql.exec(
-      'INSERT INTO verticals (slug, name, source, owner_tenant, created_at) VALUES (?, ?, ?, ?, ?)',
-      slug, name, source, ownerTenant, createdAt,
+      'INSERT INTO verticals (slug, name, source, owner_tenant, env_spec, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      slug, name, source, ownerTenant, envSpec, createdAt,
     );
+  }
+
+  /** Refresh a vertical's declared env-spec (it evolves with the manifest). */
+  updateVerticalEnvSpec(slug: string, envSpec: string | null): void {
+    this.sql.exec('UPDATE verticals SET env_spec = ? WHERE slug = ?', envSpec, slug);
   }
 
   listVerticals(): VerticalRow[] {
