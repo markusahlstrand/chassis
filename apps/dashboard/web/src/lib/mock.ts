@@ -62,9 +62,11 @@ export const MOCK_DEPLOYMENTS: Deployment[] = [
       { id: '01J2Q8Z3V9K4W7X2M5N6P7V100', version: '0.1.0', admission: 'pending', admissionNote: null, deploymentRef: 'acme-helpdesk-01j2q8z3v9k4w7x2m5n6p7v100', createdAt: '2026-07-18T12:00:00Z' },
     ],
     channels: [
-      { channel: 'prod', versionId: '01J2Q8Z3V9K4W7X2M5N6P7V200' },
+      { channel: 'prod', versionId: '01J2Q8Z3V9K4W7X2M5N6P7V300' },
       { channel: 'staging', versionId: '01J2Q8Z3V9K4W7X2M5N6P7V300' },
     ],
+    // This scope still runs 0.2.0 while prod moved to 0.3.0 — the "update available" state.
+    boundVersionId: '01J2Q8Z3V9K4W7X2M5N6P7V200',
   },
   {
     slug: 'acme/reports',

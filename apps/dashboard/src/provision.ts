@@ -262,6 +262,79 @@ export async function retryApp(
   });
 }
 
+/** The outcome of an update: whether it moved, and the version labels either side. */
+export interface UpdateAppResult {
+  /** False when the app was already on the prod version (no rebind, no event). */
+  updated: boolean;
+  /** The version label the app runs after this call, e.g. "0.0.12" (null if unlabelled). */
+  version: string | null;
+  /** The version label it ran before, e.g. "0.0.9" (null if it had none/unknown). */
+  previousVersion: string | null;
+}
+
+/**
+ * Move an installed app to its vertical's current prod version — the missing half of
+ * promotion. Promoting a channel (`promoteVersion`) moves the *vertical's* pointer; it
+ * does NOT touch scopes already provisioned, which stay pinned to the version they got
+ * at install time (provision.ts pins `prod`-at-the-time). So an app installed when prod
+ * was 0.0.9 keeps serving 0.0.9 even after prod moves to 0.0.12 — this is what rebinds it.
+ *
+ * Mirrors createApp's shape: authorize + record in the caller's own dashboard scope
+ * (gated on their `provision-app` grant), then effect the rebind tenant-narrowed
+ * (connected: shared plane; embedded: this host). A no-op — and silent — when the app is
+ * already current.
+ */
+export async function updateApp(
+  host: ScopeHost,
+  input: {
+    node: DashboardNode;
+    appScopeId: ScopeId;
+    verticalSlug: string;
+    controlPlane?: TenantNarrowedControlPlane;
+  },
+): Promise<UpdateAppResult> {
+  const scope = await host.getScope(input.node.principal, input.node.tenantId, input.node.scopeId);
+
+  // Resolve the vertical's current prod version and the scope's currently-bound one,
+  // plus the version labels (id → "0.0.12") for a readable audit line.
+  let prodVersionId: string | undefined;
+  let boundVersionId: string | null;
+  let versions: Array<{ id: string; version: string }>;
+  if (input.controlPlane) {
+    const cp = input.controlPlane;
+    prodVersionId = (await cp.listChannels(input.verticalSlug)).find((ch) => ch.channel === 'prod')?.versionId;
+    boundVersionId = await cp.boundVersionId(input.appScopeId);
+    versions = await cp.listVersions(input.verticalSlug);
+  } else {
+    const staff = platformActorId.parse(ulid());
+    prodVersionId = (await host.admin.listChannels(staff, input.verticalSlug)).find((ch) => ch.channel === 'prod')?.versionId;
+    boundVersionId = (await host.admin.getScopeRecord(staff, input.node.tenantId, input.appScopeId))?.verticalVersionId ?? null;
+    versions = await host.admin.listVersions(staff, input.verticalSlug);
+  }
+  const label = (id: string | null | undefined): string | null =>
+    (id ? versions.find((v) => v.id === id)?.version ?? null : null);
+
+  if (!prodVersionId) throw new Error(`vertical '${input.verticalSlug}' has no prod version to update to`);
+  const toLabel = label(prodVersionId);
+  const fromLabel = label(boundVersionId);
+  // Already current — nothing to rebind, and nothing worth an Activity entry.
+  if (prodVersionId === boundVersionId) return { updated: false, version: toLabel, previousVersion: fromLabel };
+
+  // Authorize in-scope + record the move (the assert gates the effect below), then
+  // rebind the scope so the router dispatches on the new version's deploymentRef.
+  await scope.invoke('dashboard/update-app', {
+    appScopeId: input.appScopeId,
+    detail: `${fromLabel ?? '—'} → ${toLabel ?? prodVersionId}`,
+  });
+  if (input.controlPlane) {
+    await input.controlPlane.bindScopeVersion(input.appScopeId, prodVersionId);
+  } else {
+    const staff = platformActorId.parse(ulid());
+    await host.admin.bindScopeVersion(staff, input.node.tenantId, input.appScopeId, prodVersionId);
+  }
+  return { updated: true, version: toLabel, previousVersion: fromLabel };
+}
+
 /**
  * CONNECTED mode: provision through the shared control plane, tenant-narrowed —
  * the production path (dashboard.md §6). Mirrors the operator console's proven

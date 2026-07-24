@@ -9,6 +9,8 @@ export {
   createApp,
   deprovisionApp,
   retryApp,
+  updateApp,
+  type UpdateAppResult,
   reconcileRoles,
   MODULES,
   ROLES,

@@ -30,7 +30,7 @@ import { meridianModule } from '@substrat-run/demo-meridian/module';
 import { CATALOG, ensureCatalog, availableCatalog } from './catalog.js';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
-import { createApp, deprovisionApp, retryApp, provisionDashboard, reconcileRoles, type DashboardNode } from './provision.js';
+import { createApp, deprovisionApp, retryApp, updateApp, provisionDashboard, reconcileRoles, type DashboardNode } from './provision.js';
 import { listDeploymentsFromCp, listDeploymentsFromHost, verticalDeploymentFromCp, verticalDeploymentFromHost, assertOwned } from './deployments.js';
 import { TenantNarrowedControlPlane } from './authority.js';
 import { transportFor, senderFor, teamInviteEmail } from './email.js';
@@ -753,11 +753,40 @@ app.get('/api/apps/:scopeId/deployments', async (c) => {
   const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
   if (!appRow) throw new HTTPException(404, { message: 'app not found' });
   const cp = controlPlaneFor(c.env, node.tenantId);
-  return c.json(
-    cp
-      ? await verticalDeploymentFromCp(cp, appRow.vertical_slug)
-      : await verticalDeploymentFromHost(host, STAFF, appRow.vertical_slug),
-  );
+  const scope = scopeId.parse(appRow.app_scope_id);
+  // The vertical's version registry AND the version THIS scope is actually pinned to
+  // (the router dispatches on the latter). They differ when prod moved after install —
+  // which is exactly the "the tab says 0.0.12 but I run 0.0.9" confusion this answers.
+  const [deployment, boundVersionId] = cp
+    ? await Promise.all([verticalDeploymentFromCp(cp, appRow.vertical_slug), cp.boundVersionId(scope)])
+    : await Promise.all([
+        verticalDeploymentFromHost(host, STAFF, appRow.vertical_slug),
+        host.admin.getScopeRecord(STAFF, node.tenantId, scope).then((r) => r?.verticalVersionId ?? null),
+      ]);
+  return c.json({ ...deployment, boundVersionId });
+});
+
+/**
+ * Move an installed app to its vertical's current prod version — the rebind that
+ * promotion alone doesn't do (an app stays pinned to its install-time version). Idempotent:
+ * a no-op when already current. Authorized in the caller's own dashboard scope; the app
+ * must be theirs.
+ */
+app.post('/api/apps/:scopeId/update', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  const result = await updateApp(host, {
+    node,
+    appScopeId: scopeId.parse(appRow.app_scope_id),
+    verticalSlug: appRow.vertical_slug,
+    controlPlane: controlPlaneFor(c.env, node.tenantId) ?? undefined,
+  });
+  return c.json(result);
 });
 
 /** Create an app — provisioned into MY tenant (from the session), authorized in-scope. */

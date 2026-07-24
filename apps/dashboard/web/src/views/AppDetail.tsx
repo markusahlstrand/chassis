@@ -149,6 +149,8 @@ function toTimelineItem(e: AppEvent): { dot: TimelineDot; body: React.ReactNode;
       return { dot: 'danger', body: <>Provisioning failed{e.detail ? <> — {e.detail}</> : null}</>, time };
     case 'deleted':
       return { dot: 'neutral', body: <>Deleted</>, time };
+    case 'updated':
+      return { dot: 'success', body: <>Updated{e.detail ? <> · <span style={{ fontFamily: 'var(--font-mono)' }}>{e.detail}</span></> : null}</>, time };
     case 'created':
     default:
       return { dot: 'info', body: <>Provisioning started{e.detail ? <> · <span style={{ fontFamily: 'var(--font-mono)' }}>{e.detail}</span></> : null}</>, time };
@@ -187,6 +189,9 @@ function Timeline({ items }: { items: Array<{ dot: TimelineDot; body: React.Reac
 function Deployments({ app }: { app: AppRow }) {
   const [dep, setDep] = useState<Deployment | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const [updating, setUpdating] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   useEffect(() => {
     if (DEV_MOCK) {
       setDep(MOCK_DEPLOYMENTS[0] ?? null);
@@ -200,30 +205,61 @@ function Deployments({ app }: { app: AppRow }) {
     return () => {
       live = false;
     };
-  }, [app.app_scope_id]);
+  }, [app.app_scope_id, nonce]);
 
   if (err) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--status-danger-fg)' }}>Couldn’t load deployments — {err}</div>;
   if (!dep) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>Loading deployments…</div>;
 
   const channelsOf = (versionId: string) => dep.channels.filter((c) => c.versionId === versionId).map((c) => c.channel);
   const prod = dep.channels.find((c) => c.channel === 'prod');
-  const running = prod ? dep.versions.find((v) => v.id === prod.versionId) : undefined;
+  const prodVersion = prod ? dep.versions.find((v) => v.id === prod.versionId) : undefined;
+  // What the app ACTUALLY runs is the version its scope is pinned to (the router dispatches
+  // on it), NOT the vertical's prod channel — they diverge when prod moved after install.
+  // Fall back to the prod version only when the scope is unpinned (static binding).
+  const bound = dep.boundVersionId ? dep.versions.find((v) => v.id === dep.boundVersionId) : undefined;
+  const running = bound ?? (dep.boundVersionId == null ? prodVersion : undefined);
+  // An update is offered when prod points somewhere other than where this scope is pinned.
+  const updateAvailable = !!prod && prod.versionId !== dep.boundVersionId;
   const COLS = '1fr 1.2fr 1.6fr 1.4fr';
+
+  const doUpdate = async () => {
+    setUpdating(true);
+    setNote(null);
+    try {
+      const r = await api.updateApp(app.app_scope_id);
+      setNote(r.updated ? `Updated ${r.previousVersion ?? '—'} → ${r.version ?? ''}` : 'Already on the latest version.');
+      setNonce((n) => n + 1); // refetch so Running + the table reflect the rebind
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ ...card, padding: 20, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ ...card, padding: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <Eyebrow>Running</Eyebrow>
         {running ? (
           <>
             <MonoTag>{running.version}</MonoTag>
-            <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>on the <b>prod</b> channel of <MonoTag>{dep.displaySlug}</MonoTag></span>
+            <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+              {bound ? <>this app is pinned to it</> : <>via the <b>prod</b> channel</>} of <MonoTag>{dep.displaySlug}</MonoTag>
+            </span>
           </>
         ) : (
-          <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>No <b>prod</b> version promoted yet — a pushed version must be admitted and promoted to serve.</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>Not serving a registry version yet — a pushed version must be admitted and promoted.</span>
+        )}
+        <div style={{ flex: 1 }} />
+        {updateAvailable && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {prodVersion && <span style={{ fontSize: 12, color: 'var(--status-info-fg)' }}>Update available → <MonoTag>{prodVersion.version}</MonoTag></span>}
+            <Button onClick={doUpdate} disabled={updating}>{updating ? 'Updating…' : 'Update to latest'}</Button>
+          </div>
         )}
       </div>
-      <HonestyBanner>Read live from the registry. Versions for this vertical are managed by the Substrat team; promotion to prod is a staff action.</HonestyBanner>
+      {note && <div style={{ ...card, padding: '10px 16px', fontSize: 12.5, color: 'var(--text-secondary)' }}>{note}</div>}
+      <HonestyBanner>Read live from the registry. “Running” is the version this app’s scope is pinned to — what the router serves. Versions are managed by the Substrat team; promotion to prod is a staff action, and updating rebinds this app to the current prod version.</HonestyBanner>
       {dep.versions.length === 0 ? (
         <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>No versions pushed to the registry yet.</div>
       ) : (
@@ -234,8 +270,11 @@ function Deployments({ app }: { app: AppRow }) {
           {dep.versions.map((v, i) => {
             const chans = channelsOf(v.id);
             return (
-              <div key={v.id} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', minHeight: 40, padding: '8px 16px', fontSize: 13, borderBottom: i === dep.versions.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>{v.version}</span>
+              <div key={v.id} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', minHeight: 40, padding: '8px 16px', fontSize: 13, borderBottom: i === dep.versions.length - 1 ? 'none' : '1px solid var(--border-subtle)', background: v.id === dep.boundVersionId ? 'var(--surface-brand-subtle)' : 'transparent' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>{v.version}</span>
+                  {v.id === dep.boundVersionId && <Pill kind="success">running</Pill>}
+                </span>
                 <span><Pill kind={v.admission === 'admitted' ? 'success' : v.admission === 'rejected' ? 'danger' : 'warning'}>{v.admission}</Pill></span>
                 <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {chans.length === 0 ? <span style={{ color: 'var(--text-tertiary)' }}>—</span> : chans.map((ch) => <Pill key={ch} kind={ch === 'prod' ? 'success' : ch === 'staging' ? 'info' : 'neutral'}>{ch}</Pill>)}
