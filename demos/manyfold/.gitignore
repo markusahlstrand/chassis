@@ -1,0 +1,5 @@
+# Generated from app/dist by scripts/gen-assets.mjs (the inlined SPA the pushed
+# worker serves). Rebuilt on every app build; never committed.
+src/assets.generated.ts
+dist-worker
+.data

@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "rootDir": ".",
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": [
+    "src/worker.ts",
+    "src/routes.ts",
+    "src/provision.ts",
+    "src/module.ts",
+    "src/content-types.ts",
+    "src/assets.ts",
+    "src/assets.generated.ts"
+  ]
+}

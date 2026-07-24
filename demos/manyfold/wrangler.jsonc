@@ -1,0 +1,35 @@
+{
+	"name": "substrat-manyfold",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+	// Better Auth (end-user sign-in, in the per-tenant AUTH DO) needs Node built-ins on workerd.
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	// Inline the built SPA into the worker before bundling (no ASSETS binding — sandbox-clean).
+	// Until the app exists this is gen-assets alone (empty map); once app/ is built, prefix with
+	// `pnpm --dir app build && `.
+	"build": {
+		"command": "pnpm --dir app build && node scripts/gen-assets.mjs"
+	},
+	// SANDBOX-CLEAN (scope-local-permissions.md Phase 3; "every vertical is sandbox-clean").
+	// Two OWN DO classes and nothing else: SCOPE (business data — one per SITE, so multi-scope
+	// is native) and AUTH (identity — Better Auth over its own DO SQLite, one per tenant). No
+	// shared AUTH_DB, no CONTROL_PLANE binding, no service binding, no ASSETS binding — all
+	// refused by assertSandboxContract.
+	"durable_objects": {
+		"bindings": [
+			{ "name": "SCOPE", "class_name": "ScopeDO" },
+			{ "name": "AUTH", "class_name": "IdentityDO" }
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ScopeDO", "IdentityDO"]
+		}
+	]
+	// Secrets on deploy (injected by the platform on push):
+	//   ROUTER_SECRET    — the router's, gates the routed request path (K-26)
+	//   PLATFORM_SECRET  — the control plane's, gates /internal/provision + /internal/tables (K-31)
+	// ALLOW_DEV_HEADER is set by `pnpm cf:dev` for local use only; a real deploy stays fail-closed.
+}

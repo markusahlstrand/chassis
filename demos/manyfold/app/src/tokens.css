@@ -1,0 +1,109 @@
+/* Manyfold design tokens — from the design handover (High-fidelity). Geist for UI,
+   Geist Mono for code/ids/DSL types/slugs. Light default; dark via prefers-color-scheme
+   and an explicit [data-theme] override that wins in both directions. */
+
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --wash: #f2f2f5;
+  --border: #e8e8ec;
+  --border2: #d9d9e0;
+  --ink: #17171a;
+  --muted: #6e6e78;
+  --faint: #a0a0ab;
+  --accent: #5a5bdd;
+  --accent-soft: #ededfc;
+  --on-accent: #ffffff;
+  --code-bg: #17171a;
+  --code-ink: #e6e6eb;
+
+  --st-draft-fg: #6e6e78; --st-draft-bg: #f1f1f4;
+  --st-review-fg: #9a6700; --st-review-bg: #faf0d2;
+  --st-approved-fg: #0f766e; --st-approved-bg: #d8f0ec;
+  --st-published-fg: #15803d; --st-published-bg: #dcf2e2;
+  --st-archived-fg: #8a8a94; --st-archived-bg: #efeff2;
+  --st-danger-fg: #b42318; --st-danger-bg: #fde5e1;
+
+  --diff-add-fg: #2f7d3b; --diff-add-bg: #e3f4e5;
+  --diff-del-fg: #b42318; --diff-del-bg: #fbe4e0;
+
+  --link: #5a5bdd; --link-hover: #4646c7;
+
+  --r-card: 12px; --r-input: 8px; --r-btn: 7px; --r-pill: 999px;
+
+  --font: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #101012;
+    --surface: #17171a;
+    --wash: #1f1f24;
+    --border: #26262c;
+    --border2: #38383f;
+    --ink: #ededf0;
+    --muted: #9a9aa5;
+    --faint: #5d5d68;
+    --accent: #7b7bf5;
+    --accent-soft: #26264a;
+    --code-bg: #0c0c0e;
+    --code-ink: #d6d6dd;
+
+    --st-draft-fg: #9a9aa5; --st-draft-bg: #232328;
+    --st-review-fg: #e3b341; --st-review-bg: #332a12;
+    --st-approved-fg: #5cc8b8; --st-approved-bg: #14322e;
+    --st-published-fg: #6fcf8b; --st-published-bg: #122b1a;
+    --st-archived-fg: #8a8a94; --st-archived-bg: #222226;
+    --st-danger-fg: #f08c79; --st-danger-bg: #391c17;
+    --diff-add-fg: #8fd69b; --diff-add-bg: #16301c;
+    --diff-del-fg: #f08c79; --diff-del-bg: #391c17;
+    --link: #7b7bf5; --link-hover: #9a9af8;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #101012;
+  --surface: #17171a;
+  --wash: #1f1f24;
+  --border: #26262c;
+  --border2: #38383f;
+  --ink: #ededf0;
+  --muted: #9a9aa5;
+  --faint: #5d5d68;
+  --accent: #7b7bf5;
+  --accent-soft: #26264a;
+  --code-bg: #0c0c0e;
+  --code-ink: #d6d6dd;
+  --st-draft-fg: #9a9aa5; --st-draft-bg: #232328;
+  --st-review-fg: #e3b341; --st-review-bg: #332a12;
+  --st-approved-fg: #5cc8b8; --st-approved-bg: #14322e;
+  --st-published-fg: #6fcf8b; --st-published-bg: #122b1a;
+  --st-archived-fg: #8a8a94; --st-archived-bg: #222226;
+  --st-danger-fg: #f08c79; --st-danger-bg: #391c17;
+  --diff-add-fg: #8fd69b; --diff-add-bg: #16301c;
+  --diff-del-fg: #f08c79; --diff-del-bg: #391c17;
+  --link: #7b7bf5; --link-hover: #9a9af8;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--link-hover); }
+
+code, .mono { font-family: var(--mono); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 999px; }

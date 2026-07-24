@@ -5,6 +5,7 @@ import { PERM as WO } from '@substrat-run/engine-workorder';
 import { INVOICING_PERM as INV } from '@substrat-run/engine-invoicing';
 import { SC_PERM } from '@substrat-run/demo-callout/module';
 import { HR_PERM } from '@substrat-run/demo-meridian/module';
+import { MF_PERM } from '@substrat-run/demo-manyfold/module';
 
 /**
  * The catalog — the verticals a customer can instantiate, and the provisioning
@@ -66,6 +67,21 @@ export const CATALOG: Record<string, CatalogEntry> = {
       // provider (a connection holds it), never a human role (provision.ts).
       PROTO.create, PROTO.fill, PROTO.bind, PROTO.requestSignature, PROTO.sign, PROTO.read, PROTO.void,
     ] as PermissionKey[],
+  },
+  // Manyfold is a multi-scope headless CMS: one install, many SITES (each a scope). Its SKU
+  // is one flag (`manyfold`); the installing owner receives the full content permission set as
+  // a flat grant, so a fresh instance's owner can model, author, review, and publish from day
+  // one. (The per-SITE role model — Meridian's `assignScopeRole` replicated per site — is the
+  // productization the flat grant stands in for; cms-content.md §8.4.) Bundled in the worker
+  // but not yet deployed to the shared control plane, so it is hidden in connected mode until
+  // it ships (flip to `connected: true` once deployed + promoted).
+  manyfold: {
+    name: 'Manyfold',
+    // Deployed to the shared control plane's dispatch namespace and promoted to prod, so the
+    // hosted catalog now offers it. (Was `connected: false` while it wasn't yet deployable.)
+    connected: true,
+    entitlements: ['manyfold'],
+    ownerGrants: [MF_PERM.read, MF_PERM.author, MF_PERM.review, MF_PERM.publish, MF_PERM.admin] as PermissionKey[],
   },
 };
 
