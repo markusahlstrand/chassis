@@ -82,10 +82,14 @@ workspace, then the CLI just works.
 ## Ship it — `substrat push`
 
 ```bash
-substrat push <verticalDir> --slug <slug> --version <v> [--name <name>]
+cd my-vertical && substrat push
 ```
 
-From the vertical's directory (the one with `wrangler.jsonc`), this:
+Run it from the vertical's directory (the one with `wrangler.jsonc` + `package.json`) and it
+needs no flags: the **slug** and **name** come from a `"substrat": { "slug", "name" }` block in
+`package.json` (or are derived from the package name), and the **version** defaults to the
+registry's latest, patch-bumped — so you never hand-track it. Override any with `--slug`,
+`--name`, or `--version`. This:
 
 1. **Builds the bundle** with `wrangler deploy --dry-run --outdir` — running your vertical's own
    `build.command` first. workerd cannot bundle in the isolate, so the build always happens on

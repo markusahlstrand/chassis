@@ -107,7 +107,7 @@ export async function push(opts: PushOptions): Promise<{ id: string; admission: 
   }
 
   const url = `${opts.controlPlaneUrl}/verticals/${opts.slug}/deploy`;
-  console.log(`pushing ${entry} (+${modules.length - 1} modules) → ${url}`);
+  console.log(`uploading ${entry} (+${modules.length - 1} modules) → ${url}`);
   const res = await fetch(url, {
     method: 'POST',
     headers: opts.authHeader,
@@ -118,4 +118,67 @@ export async function push(opts: PushOptions): Promise<{ id: string; admission: 
     throw new Error(`push failed (${res.status}): ${body}`);
   }
   return JSON.parse(body) as { id: string; admission: string; deploymentRef: string };
+}
+
+/** Push defaults read from a vertical's package.json, so `substrat push` needs no flags. */
+export interface VerticalMeta {
+  /** Registry slug: an explicit `substrat.slug`, else the package name with scope + a leading `demo-` stripped. */
+  slug: string;
+  /** Display name: an explicit `substrat.name`, else the slug title-cased. */
+  name: string;
+  /** package.json `version` — only a seed for the FIRST push of a brand-new slug. */
+  versionSeed: string | undefined;
+}
+
+/**
+ * Derive push defaults from the vertical directory's package.json (the "it's already in
+ * package.json" the CLI shouldn't make you retype). An explicit `"substrat": { slug, name }`
+ * block wins; otherwise the slug is the package name's last segment with a `demo-` prefix
+ * stripped (`@substrat-run/demo-meridian` → `meridian`) and the name is that title-cased.
+ * Returns empty strings when there is no package.json — the caller then requires flags.
+ */
+export function readVerticalMeta(dir: string): VerticalMeta {
+  let pkg: { name?: string; version?: string; substrat?: { slug?: string; name?: string } } = {};
+  try {
+    pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as typeof pkg;
+  } catch {
+    // No package.json (or unreadable) — slug/name stay empty and the CLI asks for --slug.
+  }
+  const bare = (pkg.name ?? '').split('/').pop()?.replace(/^demo-/, '') ?? '';
+  const slug = pkg.substrat?.slug ?? bare;
+  const title = slug.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return { slug, name: pkg.substrat?.name ?? title, versionSeed: pkg.version };
+}
+
+function parseSemver(v: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+function isNewer(a: [number, number, number], b: [number, number, number]): boolean {
+  return a[0] > b[0] || (a[0] === b[0] && (a[1] > b[1] || (a[1] === b[1] && a[2] > b[2])));
+}
+
+/**
+ * The next version to push for a slug: the registry's highest semver, patch-bumped — so a
+ * builder never hand-tracks the number. Falls back to the package.json seed (or `0.0.1`) for
+ * the first push of a slug the registry has never seen. A non-semver latest is bumped as-is
+ * would be wrong, so those are skipped when finding the max.
+ */
+export async function nextVersion(
+  controlPlaneUrl: string,
+  header: Record<string, string>,
+  slug: string,
+  seed: string | undefined,
+): Promise<string> {
+  const base = controlPlaneUrl.replace(/\/$/, '');
+  const versions = await fetch(`${base}/verticals/${encodeURIComponent(slug)}/versions`, { headers: header })
+    .then((r) => (r.ok ? (r.json() as Promise<{ version: string }[]>) : []))
+    .catch(() => [] as { version: string }[]);
+  let best: [number, number, number] | null = null;
+  for (const v of versions) {
+    const t = parseSemver(v.version);
+    if (t && (!best || isNewer(t, best))) best = t;
+  }
+  if (best) return `${best[0]}.${best[1]}.${best[2] + 1}`;
+  return seed && parseSemver(seed) ? seed : '0.0.1';
 }

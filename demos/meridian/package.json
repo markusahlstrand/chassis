@@ -4,6 +4,7 @@
   "private": true,
   "license": "Apache-2.0",
   "description": "HR demo vertical (Meridian) — see spec/concept.md",
+  "substrat": { "slug": "meridian", "name": "Meridian" },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
