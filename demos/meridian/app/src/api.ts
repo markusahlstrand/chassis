@@ -165,8 +165,17 @@ export interface OnboardingSummary {
   pendingSignatures: number;
 }
 
+/** A freshly-provisioned instance with no admin yet — the SPA shows first-run setup. */
+export interface NeedsSetup {
+  status: 'needs-setup';
+}
+/** Narrow `/api/me` to the first-run setup state (no admin has claimed the workspace yet). */
+export function isNeedsSetup(m: Me | NeedsSetup): m is NeedsSetup {
+  return (m as NeedsSetup).status === 'needs-setup';
+}
+
 export const api = {
-  me: () => get<Me>('/api/me'),
+  me: () => get<Me | NeedsSetup>('/api/me'),
   cast: () => get<CastMember[]>('/api/cast'),
 
   leaveTypes: (employeeId?: string) => invoke<LeaveType[]>('hr/list-leave-types', employeeId ? { employeeId } : undefined),

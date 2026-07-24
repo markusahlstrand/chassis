@@ -45,7 +45,7 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>((localStorage.getItem('meridian.theme') as Theme) ?? 'system');
   const [toast, setToast] = useState<string | null>(null);
 
-  const { data: empData, loading, error, unauthorized, reload: reloadEmp } = useAppData(personaKey);
+  const { data: empData, loading, error, unauthorized, needsSetup, reload: reloadEmp } = useAppData(personaKey);
   const me = empData?.me ?? null;
   const hasMyWork = !!me?.employeeId;
   const canManage = me?.role === 'manager' || me?.role === 'hr-admin';
@@ -176,6 +176,9 @@ export default function App() {
     : flow === 'onboarding' && empData?.onboarding ? <Onboarding d={empData} onClose={() => setFlow(null)} onDone={done} />
     : null;
 
+  // Freshly-provisioned instance with no admin yet → first-run setup (create the admin
+  // account, which claims the owner seat → hr-admin). Distinct from a plain sign-in.
+  if (needsSetup) return <SignIn firstRun onDone={() => window.location.reload()} />;
   // No session (hosted instance, not signed in) → the sign-in/sign-up screen. On success
   // it reloads and /api/me resolves (the first sign-in claims the owner seat → hr-admin).
   if (unauthorized) return <SignIn onDone={() => window.location.reload()} />;
