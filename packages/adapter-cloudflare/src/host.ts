@@ -1979,4 +1979,15 @@ export class CloudflareScopeHost implements ScopeHost {
       null,
     );
   }
+
+  /**
+   * Grant a principal a role at SCOPE level in a CP-less vertical — the MEMBER half of
+   * `provisionScopeLocal`'s owner grant. An invite-accept flow calls this so a newly-invited
+   * teammate's principal resolves the invited role's permissions from the scope's own
+   * storage. Idempotent (writeTuple is INSERT OR REPLACE). `roleKey` must be one the scope
+   * already projected (via `provisionScopeLocal`), or the local checker expands it to nothing.
+   */
+  async assignScopeRole(scopeId: ScopeId, principal: PrincipalId, roleKey: string): Promise<void> {
+    await this.scopeStub(scopeId).writeTuple(`principal:${principal}`, `role:${roleKey}`, `scope:${scopeId}`, null);
+  }
 }

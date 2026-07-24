@@ -297,6 +297,23 @@ describe('scope-local permissions — a CP-less host (Phase 3)', () => {
     expect(await probe(stranger, ADMIN)).toBe(false);
   });
 
+  it('assignScopeRole grants an invited member the role’s permissions — scope-local, no CP', async () => {
+    // The member half of the invite flow: a newly-invited principal, granted the role at
+    // scope level, resolves that role's permissions from the scope's own storage.
+    const member = principalId.parse(ulid());
+    expect(await probe(member, ADMIN)).toBe(false); // no grant yet
+    await host.assignScopeRole(s, member, 'office-admin');
+    expect(await probe(member, ADMIN)).toBe(true); // now holds the role's perms
+    expect(await probe(member, READ)).toBe(true);
+    expect(await probe(stranger, READ)).toBe(false); // an un-granted principal is still denied
+  });
+
+  it('assignScopeRole to a role the scope never projected grants nothing (fail closed)', async () => {
+    const member = principalId.parse(ulid());
+    await host.assignScopeRole(s, member, 'not-a-projected-role');
+    expect(await probe(member, READ)).toBe(false);
+  });
+
   it('the admin directory surface throws — it genuinely has no control plane', async () => {
     await expect(
       host.admin.createTenant(platformActorId.parse(ulid()), { id: t, slug: `x-${t.toLowerCase()}`, name: 'X' }),

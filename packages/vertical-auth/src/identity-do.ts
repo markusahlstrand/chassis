@@ -53,6 +53,14 @@ const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS identity (scope_id TEXT NOT NULL, sub TEXT NOT NULL, principal TEXT NOT NULL, PRIMARY KEY (scope_id, sub))`,
   // The owner seat waiting to be claimed: set at provision, consumed by the first login.
   `CREATE TABLE IF NOT EXISTS pending_owner (scope_id TEXT PRIMARY KEY, principal TEXT NOT NULL)`,
+  // Outstanding member invites (the post-setup join path). Each is a pre-minted principal +
+  // role the admin already granted at scope level, waiting for a login to claim it by token.
+  // Only the token's HASH is stored — the token itself lives in the accept link, never here.
+  `CREATE TABLE IF NOT EXISTS invite (
+    token_hash TEXT PRIMARY KEY, scope_id TEXT NOT NULL, principal TEXT NOT NULL,
+    role_key TEXT NOT NULL, email TEXT, claimed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)))`,
+  `CREATE INDEX IF NOT EXISTS invite_by_scope ON invite (scope_id)`,
   // This DO's own config — notably its session-signing secret, generated here per tenant.
   `CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 ];
@@ -120,6 +128,53 @@ export class IdentityDO extends DurableObject<IdentityDoEnv> {
     return pending.principal;
   }
 
+  /**
+   * Record a member invite: a pre-minted `principal` + `roleKey` the caller has already
+   * granted at scope level, claimable by whoever presents the token whose hash is `tokenHash`.
+   * The plaintext token never reaches the DO — only its hash, so a DB read can't mint access.
+   */
+  async createInvite(scopeId: string, principal: string, roleKey: string, email: string | null, tokenHash: string): Promise<void> {
+    this.ctx.storage.sql.exec(
+      'INSERT INTO invite (token_hash, scope_id, principal, role_key, email) VALUES (?, ?, ?, ?, ?)',
+      tokenHash, scopeId, principal, roleKey, email,
+    );
+  }
+
+  /** The scope's outstanding (unclaimed) invites — for the admin's pending-invites list. No token. */
+  async listInvites(scopeId: string): Promise<Array<{ principal: string; roleKey: string; email: string | null; createdAt: number }>> {
+    return [...this.ctx.storage.sql.exec(
+      'SELECT principal, role_key, email, created_at FROM invite WHERE scope_id = ? AND claimed = 0 ORDER BY created_at DESC',
+      scopeId,
+    )].map((r) => ({ principal: r.principal as string, roleKey: r.role_key as string, email: (r.email as string | null) ?? null, createdAt: r.created_at as number }));
+  }
+
+  /** Is there an unclaimed invite for this token hash? (the sign-up gate consults this post-setup). */
+  async inviteExists(scopeId: string, tokenHash: string): Promise<boolean> {
+    const r = [...this.ctx.storage.sql.exec('SELECT 1 FROM invite WHERE scope_id = ? AND token_hash = ? AND claimed = 0', scopeId, tokenHash)][0];
+    return r !== undefined;
+  }
+
+  /** Withdraw an unclaimed invite by its (pre-minted) principal — the id the admin sees. */
+  async revokeInvite(scopeId: string, principal: string): Promise<void> {
+    this.ctx.storage.sql.exec('DELETE FROM invite WHERE scope_id = ? AND principal = ? AND claimed = 0', scopeId, principal);
+  }
+
+  /**
+   * Claim an invite: bind this verified subject to the invite's pre-minted principal and
+   * consume the invite. Returns the principal, or null if no unclaimed invite matches the
+   * token hash. The role was granted at scope level when the invite was created, so the
+   * bound principal resolves its permissions immediately.
+   */
+  async claimInvite(scopeId: string, sub: string, tokenHash: string): Promise<string | null> {
+    const inv = [...this.ctx.storage.sql.exec('SELECT principal FROM invite WHERE scope_id = ? AND token_hash = ? AND claimed = 0', scopeId, tokenHash)][0] as
+      | { principal: string }
+      | undefined;
+    if (!inv) return null;
+    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO identity (scope_id, sub, principal) VALUES (?, ?, ?)', scopeId, sub, inv.principal);
+    this.ctx.storage.sql.exec('UPDATE invite SET claimed = 1 WHERE scope_id = ? AND token_hash = ?', scopeId, tokenHash);
+    return inv.principal;
+  }
+
   /** A Better Auth instance over THIS DO's SQLite, trusting the caller's origin. */
   private auth(origin: string) {
     const db = drizzle(this.ctx.storage, { schema });
@@ -158,6 +213,11 @@ export type IdentityStub = {
   setPendingOwner(scopeId: string, principal: string): Promise<void>;
   needsSetup(scopeId: string): Promise<boolean>;
   resolvePrincipal(scopeId: string, sub: string): Promise<string | null>;
+  createInvite(scopeId: string, principal: string, roleKey: string, email: string | null, tokenHash: string): Promise<void>;
+  listInvites(scopeId: string): Promise<Array<{ principal: string; roleKey: string; email: string | null; createdAt: number }>>;
+  inviteExists(scopeId: string, tokenHash: string): Promise<boolean>;
+  revokeInvite(scopeId: string, principal: string): Promise<void>;
+  claimInvite(scopeId: string, sub: string, tokenHash: string): Promise<string | null>;
 };
 
 /**
