@@ -1,5 +1,20 @@
 # @substrat-run/oidc-rp
 
+## 0.2.0
+
+### Minor Changes
+
+- 2add91f: Fix the invite → sign-in → accept flow so an invited person lands in the team, not on "create a team".
+
+  - **Carry the invite through auth.** An unauthenticated invite click now round-trips through OIDC using the RP's existing `returnTo` (the callback returns to `/invite/<token>`), instead of stashing the token in `localStorage`. The accept always runs with a session in hand, so a first-time invitee joins the team rather than falling through to onboarding.
+  - **Prefill + sign-up hint.** `@substrat-run/oidc-rp` `beginLogin` / `/api/auth/login` now forward `login_hint` (prefill the invited email) and an allowlisted `screen_hint` (default `signup` for invite links). Both are IdP-standard and backward-compatible for the console.
+  - **Preview endpoint.** New unauthenticated `GET /api/invites/preview?token=` (backed by a no-permission `dashboard/preview-invite` op — the signed token is the authority, like accept) returns the team name + invited email for the prefill and the accept screen. It reveals only that invite's own address; access still requires the verified-email hash at accept.
+  - **Graceful mismatch.** Following an invite while signed in as a different verified email now shows a clear "this invite is for X" screen with sign-out, instead of the confusing onboarding dead-end.
+
+### Patch Changes
+
+- b1af840: Verify an invite is for the signed-in email before accepting it. An existing member — typically the team owner — who opened an invite meant for someone else was silently switched into the team by the server's "already a member" shortcut, never learning the invite wasn't theirs. The accept flow now fetches the invite preview and compares the invited email to the signed-in email first; on a mismatch it shows the "this invite is for X" screen instead of accepting or switching. That screen's "sign out" carries a `returnTo` back to the invite link (`@substrat-run/oidc-rp` `/api/auth/logout` gains same-origin `returnTo`), so after signing out the user re-enters the invite unauthenticated and gets the sign-up screen prefilled with the invited email.
+
 ## 0.1.0
 
 ### Minor Changes

@@ -1,5 +1,176 @@
 # @substrat-run/dashboard
 
+## 0.2.0
+
+### Minor Changes
+
+- f9561dd: **Real per-app audit trail on the app overview.** The Activity panel showed demo data; it now
+  renders real lifecycle events — `created` / `active` / `failed` / `deleted` — recorded per app.
+  Crucially, a failed provision now records its **reason** (e.g. "no deployment is bound for vertical
+  'meridian'") to the trail instead of only flashing a toast, so you can see _why_ an install failed
+  on the app's own page.
+
+  - New `dashboard_app_events` table (migration `0004`) + a `dashboard/app-events` read op (gated by
+    the existing `dashboard:read`). The lifecycle ops append events; `mark-app-failed` takes the
+    reason, threaded through from `createApp`'s failure path.
+  - Worker `GET /api/apps/:scopeId/events`; web `api.appEvents`; `AppDetail`'s Activity panel wired to
+    it (with a `danger` timeline dot for failures, loading + empty states).
+
+  Contains a **migration** (`dashboard` `0004-app-events`) for the checkpoint review.
+
+- 7941c4c: **Real per-app Deployments tab.** The app overview's Deployments tab showed demo data; it now reads
+  the app's vertical version registry live — every pushed version, its admission state, which channels
+  point at it, and (prominently) **which version the app runs** (the `prod` channel). So "am I on
+  0.0.9?" is answerable: if you pushed 0.0.10 but only 0.0.9 is promoted to prod, the tab shows prod =
+  0.0.9 and 0.0.10 sitting admitted-but-unpromoted.
+
+  - `verticalDeploymentFromCp` / `verticalDeploymentFromHost` (by slug, so it works for a PLATFORM
+    vertical the tenant doesn't "own" — unlike the tenant-level Deployments list).
+  - Worker `GET /api/apps/:scopeId/deployments`; web `api.appDeployments`; `AppDetail`'s Deployments
+    tab wired to it (running-version banner + a real version/admission/channels table).
+  - Read-only: promotion for a platform vertical stays a staff action; this just surfaces the truth.
+
+  No new permission (reuses `dashboard:read`) and no migration.
+
+- e8325e6: **Update an installed app to a newer version — and show the version it _actually_ runs.**
+
+  Promoting a vertical's `prod` channel moves the channel pointer; it does **not** rebind
+  scopes already installed — the router dispatches on each scope's _pinned_ version, set at
+  install time. So an app installed when prod was 0.0.9 keeps serving 0.0.9 after prod moves
+  to 0.0.12, with no way to move it. This closes that gap:
+
+  - **Truthful "Running"** — the Deployments tab now reads the scope's actual bound version
+    (`Scope.verticalVersionId`) and marks it, instead of assuming the prod channel is what
+    runs. "Am I on 0.0.9?" is now answered by what the router serves, not what prod points at.
+  - **"Update to latest"** — a per-app action (`POST /api/apps/:scopeId/update` → `updateApp`)
+    that rebinds the scope to the vertical's current prod version and records an `updated`
+    event on the Activity trail. Idempotent (a no-op when already current); authorized
+    in-scope on the caller's `dashboard:provision-app` grant.
+
+  Adds migration `0005-app-updated-event` (widens the app-events `kind` CHECK to include
+  `updated`; table rebuild, 0004 untouched). No new permission key (reuses `provision-app`).
+
+- 2add91f: Fix the invite → sign-in → accept flow so an invited person lands in the team, not on "create a team".
+
+  - **Carry the invite through auth.** An unauthenticated invite click now round-trips through OIDC using the RP's existing `returnTo` (the callback returns to `/invite/<token>`), instead of stashing the token in `localStorage`. The accept always runs with a session in hand, so a first-time invitee joins the team rather than falling through to onboarding.
+  - **Prefill + sign-up hint.** `@substrat-run/oidc-rp` `beginLogin` / `/api/auth/login` now forward `login_hint` (prefill the invited email) and an allowlisted `screen_hint` (default `signup` for invite links). Both are IdP-standard and backward-compatible for the console.
+  - **Preview endpoint.** New unauthenticated `GET /api/invites/preview?token=` (backed by a no-permission `dashboard/preview-invite` op — the signed token is the authority, like accept) returns the team name + invited email for the prefill and the accept screen. It reveals only that invite's own address; access still requires the verified-email hash at accept.
+  - **Graceful mismatch.** Following an invite while signed in as a different verified email now shows a clear "this invite is for X" screen with sign-out, instead of the confusing onboarding dead-end.
+
+- b346b6c: Send team-invitation emails from the Dashboard via a new notification-transport adapter.
+
+  - **`@substrat-run/adapter-email`** — a new host-plane adapter (D-18: a notification transport is infra the host consumes, not a tenant connector). One `EmailTransport` port with swappable implementations: `CloudflareEmailTransport` (the `send_email` Workers binding — default) and `MockEmailTransport` (dev/CI). The port owns the deliverability invariants (both html + text, a subject, a valid recipient) so no implementation can drop them.
+  - **Dashboard** — `POST /api/members/invite` now emails the invitee their accept link. The send happens in the request path, where the raw address is in hand: the invites engine hashes the identifier and `invites.sent` carries only the hash, so no outbox executor could recover an address to send to. Delivery is best-effort — a committed invite is never rolled back on a send failure (`emailDelivered: false` is reported and the `acceptUrl` is still returned for a manual resend). Adds the `send_email` binding + `EMAIL_FROM` config.
+
+- 421348f: Add a **Resend** action for pending team invites.
+
+  - **Module** — new `dashboard/resend-invite` in-scope operation. It re-mails an outstanding invitation using the address kept in the readable roster (the invites engine stores only a hash), re-checks `manage-members` **and** the §5.1 role bound, and re-composes the engine's `sendInvite` — idempotent for a still-open invitation (same id) and a fresh one if it lapsed — re-pointing the projection at the live invitation. Returns `null` when there is no such pending invite.
+  - **Worker** — new `POST /api/members/resend-invite`. The initial invite and the resend now share one `mailInvite` helper that mints a fresh accept link and sends the message best-effort. That helper counts a recipient as delivered when Cloudflare Email Service returns it in either `delivered` **or** `queued` (the service is asynchronous, so a successful send is `queued`, not `delivered`).
+  - **Dashboard UI** — a Resend button beside Revoke on invited rows, with success/failure toasts (a failed send points the admin to the shareable link).
+
+### Patch Changes
+
+- 90e94c3: **The marketplace only offers verticals the running mode can actually provision — so it stops advertising an install that always fails.**
+
+  Adding Meridian to the catalog made it appear installable everywhere, but the hosted
+  dashboard runs in **connected mode**, where the shared control plane provisions via a
+  static `VERTICAL_<slug>` binding or a promoted dispatch-namespace version — and Meridian
+  has neither yet, so every install 501s ("no deployment is bound for vertical 'meridian'").
+  The user was offered something that couldn't be installed.
+
+  - Catalog entries now carry a `connected` flag; `GET /api/catalog` hides `connected: false`
+    entries when a shared control plane is bound, and lists everything in embedded/standalone
+    (which bundles each module in-process). Meridian is flagged `connected: false` until it is
+    deployed + promoted to prod.
+  - The create-app marketplace tiles are filtered to slugs the live catalog actually offers, so
+    a hidden vertical can't be picked — previously `resolveSlug` would have silently substituted
+    a different vertical for a tile whose slug wasn't advertised.
+  - The catalog map + availability rule move to a Cloudflare-free `catalog.ts` so the gating is
+    unit-tested (embedded lists Meridian; connected hides it; unknown slugs never appear).
+
+- b1af840: Verify an invite is for the signed-in email before accepting it. An existing member — typically the team owner — who opened an invite meant for someone else was silently switched into the team by the server's "already a member" shortcut, never learning the invite wasn't theirs. The accept flow now fetches the invite preview and compares the invited email to the signed-in email first; on a mismatch it shows the "this invite is for X" screen instead of accepting or switching. That screen's "sign out" carries a `returnTo` back to the invite link (`@substrat-run/oidc-rp` `/api/auth/logout` gains same-origin `returnTo`), so after signing out the user re-enters the invite unauthenticated and gets the sign-up screen prefilled with the invited email.
+- 2ccfc74: **Offer Meridian in the hosted marketplace.** Meridian is deployed to the `substrat-verticals`
+  dispatch namespace and promoted to prod, so its catalog `connected` flag flips to `true` — the
+  `/apps/new` marketplace now lists it and installs provision a real instance. (It was `connected:
+false` while it wasn't yet deployable, which is why the tile was hidden even though the CLI showed
+  the version admitted.) Requires redeploying the dashboard.
+- 90e94c3: **Wire the "Retry" action on a failed app — it re-provisions for real instead of a placeholder toast.**
+
+  The Retry link on a `failed` app card was a stub (`setToast({ title: 'Retry not wired yet' })`).
+  It now calls a new `POST /api/apps/:scopeId/retry`, which best-effort tears down the failed
+  attempt and re-provisions fresh under a new scope with the same vertical + name, via the proven
+  `createApp` path. A retry that still can't come up re-marks the row `failed` and surfaces the
+  **real** provisioning error, so the button re-tries for real and stops hiding why an install
+  failed. The re-provision logic is a testable `retryApp` in `provision.ts` (composing
+  `deprovisionApp` + `createApp`); a regression test drives failed-install → retry → a fresh live
+  scope. Only a `failed` app is retryable, and only the caller's own (list-apps is tenant-scoped).
+
+  Note: this fixes the _recovery_ path, not the reason a Meridian install fails in connected mode —
+  the shared control plane provisions via the `substrat-verticals` Workers-for-Platforms dispatch
+  namespace, and Meridian has not been deployed there / promoted to a prod version yet. Until it is,
+  Retry will surface that provisioning error rather than succeed.
+
+- 9087052: Move the Dashboard toast from top-right to bottom-right so it no longer overlays the "new app" button.
+- e78c86e: **Fix "scope slug 'x' already taken" when installing an app in connected mode.** The shared-plane
+  provisioning used `slugify(name)` as the scope slug, which must be unique within a tenant — so a
+  second app with the same name, or a fresh attempt after a failed one left an orphaned scope (a
+  failed provision marks the row failed but doesn't release its shared-plane scope), collided. The
+  scope slug now includes the scope-id tail (`meridian-abc123`); the bound hostname still prefers the
+  clean name (`meridian.global.substrat.run`), falling back to the unique slug only on a global collision.
+- b1af840: **Meridian is installable from the dashboard marketplace, and usable from an empty install.**
+
+  Meridian (the HR vertical) can now be provisioned as an app from the tenant dashboard,
+  the same embedded-catalog seam Callout uses, and a freshly-installed (empty) instance
+  is set up from zero through a new in-app Admin surface.
+
+  - **Marketplace wiring.** `@substrat-run/demo-meridian` gains a worker-safe `./module`
+    export (its domain module + perms only, never the node/better-auth seed), mirroring
+    Callout. The dashboard worker bundles `meridianModule` into its `ScopeDO` and adds a
+    `meridian` catalog entry — SKU `['meridian', 'protocol']`, owner granted the `hr-admin`
+    permission set so the installer can run the app from day one. Meridian is added to the
+    frontend marketplace list, vertical metadata, and dev-mock catalog. A new dashboard
+    scenario test provisions a real Meridian app and drives `hr/define-leave-type` +
+    `hr/create-employee` on the empty scope — the first-run path, proven end to end.
+
+  - **First-run onboarding (the Admin section).** An installed instance starts empty (no
+    leave types, people or projects). The app gains an hr-admin-only **Admin** section — a
+    first-run setup checklist plus screens to define leave types (with SE/ES statutory
+    presets, spec §6), add employees, create projects, and generate the per-period
+    **payroll export** (the §7 boundary). Every screen carries proper empty/loading/error
+    states and accessible form labels; permission is still checked in the kernel on every
+    op, so a non-admin reaching these calls is refused (verified: a manager defining a
+    leave type gets `403 permission denied: absence:configure`).
+
+  GDPR employee erasure (spec §8) remains a deliberate follow-up: crypto-shredding is keyed
+  off event `piiClass`/`subjectId` at the kernel/lake level, and there is no vertical-callable
+  erase primitive yet — a table-only version would look structural without being so, so it is
+  left unbuilt rather than faked.
+
+- Updated dependencies [6721e1b]
+- Updated dependencies [32abe73]
+- Updated dependencies [2add91f]
+- Updated dependencies [b1af840]
+- Updated dependencies [b346b6c]
+- Updated dependencies [12acc59]
+- Updated dependencies [57b1cfe]
+- Updated dependencies [b1af840]
+- Updated dependencies [fa0707c]
+- Updated dependencies [e774c01]
+- Updated dependencies [cfbcc6c]
+- Updated dependencies [74c9d7b]
+- Updated dependencies [6a0e253]
+  - @substrat-run/adapter-email@0.1.0
+  - @substrat-run/demo-meridian@0.1.0
+  - @substrat-run/demo-callout@0.1.1
+  - @substrat-run/oidc-rp@0.2.0
+  - @substrat-run/adapter-cloudflare@0.13.0
+  - @substrat-run/kernel@0.13.0
+  - @substrat-run/contracts@0.13.0
+  - @substrat-run/engine-invites@0.0.9
+  - @substrat-run/engine-invoicing@0.3.10
+  - @substrat-run/engine-protocol@0.4.4
+  - @substrat-run/engine-workorder@0.3.10
+
 ## 0.1.0
 
 ### Minor Changes

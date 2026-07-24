@@ -1,5 +1,14 @@
 # @substrat-run/docs
 
+## 0.1.1
+
+### Patch Changes
+
+- 6abbce9: **Standardize the deploy script name to `cf:deploy` across all deployable workspaces.** control-plane,
+  router, and docs used `deploy`, which collides with pnpm's built-in `deploy` command (`pnpm deploy` →
+  `ERR_PNPM_NOTHING_TO_DEPLOY`, needing `pnpm run deploy`). They now use `cf:deploy` — matching dashboard,
+  the demos, and the external-vertical example — so `pnpm cf:deploy` just works. Docs references updated.
+
 ## 0.1.0
 
 ### Minor Changes

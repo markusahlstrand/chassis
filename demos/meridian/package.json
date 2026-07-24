@@ -1,10 +1,13 @@
 {
   "name": "@substrat-run/demo-meridian",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
   "description": "HR demo vertical (Meridian) — see spec/concept.md",
-  "substrat": { "slug": "meridian", "name": "Meridian" },
+  "substrat": {
+    "slug": "meridian",
+    "name": "Meridian"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

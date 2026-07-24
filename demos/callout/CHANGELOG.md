@@ -1,5 +1,33 @@
 # @substrat-run/demo-fsm
 
+## 0.1.1
+
+### Patch Changes
+
+- 32abe73: **`substrat push` needs no flags.** Run it from inside the vertical and it defaults everything:
+
+  - **dir** → `.` (the current directory).
+  - **`--slug` / `--name`** → from a `"substrat": { "slug", "name" }` block in the vertical's
+    `package.json`, or derived from the package name (`@substrat-run/demo-meridian` → `meridian`
+    / `Meridian`).
+  - **`--version`** → the registry's latest for that slug, **patch-bumped** — no more hand-tracking
+    the number (falls back to the package.json version for a slug's first-ever push).
+
+  So `cd demos/meridian && substrat push` replaces
+  `substrat push demos/meridian --slug meridian --version 0.0.13 --name Meridian`. Every flag still
+  works as an override. Adds `substrat` blocks to the Meridian + Callout demo package.json.
+
+- Updated dependencies [fa0707c]
+- Updated dependencies [74c9d7b]
+  - @substrat-run/adapter-cloudflare@0.13.0
+  - @substrat-run/kernel@0.13.0
+  - @substrat-run/adapter-sqlite@0.13.0
+  - @substrat-run/contracts@0.13.0
+  - @substrat-run/engine-invoicing@0.3.10
+  - @substrat-run/engine-protocol@0.4.4
+  - @substrat-run/engine-workorder@0.3.10
+  - @substrat-run/control-plane-api@0.13.0
+
 ## 0.1.0
 
 ### Minor Changes

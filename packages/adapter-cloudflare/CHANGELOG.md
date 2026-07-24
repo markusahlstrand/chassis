@@ -1,5 +1,40 @@
 # @substrat-run/adapter-cloudflare
 
+## 0.13.0
+
+### Minor Changes
+
+- fa0707c: **Member invites (Phase 2) — the post-setup join path.** Once a workspace is set up it's
+  invite-only; this adds the flow that lets teammates in:
+
+  - **IdentityDO** gains an `invite` directory (token _hash_ only) + `createInvite` /
+    `listInvites` / `inviteExists` / `revokeInvite` / `claimInvite`. Claiming binds the
+    invitee's subject to a pre-minted member principal.
+  - **`CloudflareScopeHost.assignScopeRole(scopeId, principal, roleKey)`** — the member half
+    of `provisionScopeLocal`'s owner grant: grant a principal a role at scope level so its
+    permissions resolve from the scope's own storage (covered by two new workerd tests).
+  - **Meridian**: admin-only `POST/GET /api/invites` (+ `…/revoke`) mint/list invites (role
+    granted at creation, one-time accept link returned, plaintext token never stored);
+    `POST /api/accept-invite` claims one while signed in; the sign-up gate also opens for a
+    valid `?invite=` token. SPA: an admin **Access** tab (invite at a role, copy the link,
+    revoke) and an **AcceptInvite** screen driven by `?invite=<token>`.
+
+  Roles a teammate can be invited at are this vertical's roles (hr-admin | manager | payroll);
+  employees (HR records) remain separate.
+
+- 74c9d7b: Add `unassignRole` and `unlinkIdentity` to the `HostAdmin` surface — the inverses of `assignRole` and `linkIdentity`, so authority granted through the kernel can also be taken back.
+
+  - `unassignRole(actor, assignment)` revokes a role assignment by tombstoning the role tuple (K-21): the checker stops resolving it, the tuple stays as audit evidence, and a later `assignRole` of the same `(principal, role, node)` reactivates it. Idempotent.
+  - `unlinkIdentity(actor, tenantId, principal)` severs a principal's login from a tenant — keyed by principal (so the caller needs no external subject) and a DELETE rather than a tombstone, so `listIdentityTenants`/`resolveIdentity` stop returning it and a re-invite can re-link a fresh principal.
+
+  Both are implemented in the SQLite and Cloudflare adapters (with a generic tenant/scope tuple revoke on the Cloudflare DOs) and add matching `adminAction` log entries. Together they unblock self-serve member removal: cut a member's access and drop the team from their surface.
+
+### Patch Changes
+
+- Updated dependencies [74c9d7b]
+  - @substrat-run/kernel@0.13.0
+  - @substrat-run/contracts@0.13.0
+
 ## 0.12.0
 
 ### Minor Changes
@@ -615,7 +650,7 @@ surface)` a router asserted in `x-substrat-*` headers and decides whether to tru
   CLAUDE.md mandates ("operation inputs go through Zod schemas at the boundary")
   composing a contracts schema into their own —
 
-                        z.object({ facility: entityRef, unitPrice: money })
+                          z.object({ facility: entityRef, unitPrice: money })
 
   — it failed at RUNTIME with `Invalid element at key "facility": expected a Zod
 schema`, an error pointing nowhere near the cause. Not an exotic pattern: it is
