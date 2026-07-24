@@ -209,4 +209,23 @@ export class TenantNarrowedControlPlane {
   bindScopeVersion(scopeId: ScopeId, versionId: string): Promise<void> {
     return this.post(`/tenants/${this.tenantId}/scopes/${scopeId}/version`, { versionId });
   }
+
+  /**
+   * The version a scope is ACTUALLY pinned to — what the router dispatches on
+   * (`scope.verticalVersionId`), which is NOT the same as the vertical's prod channel:
+   * an app installed when prod was 0.0.9 stays on 0.0.9 until it is rebound, even after
+   * prod moves to 0.0.12. This read is what lets the dashboard show the true running
+   * version and offer an update. `null` when the scope has no pinned version (static
+   * binding) or can't be read (treated as "unknown, nothing to update").
+   */
+  async boundVersionId(scopeId: ScopeId): Promise<string | null> {
+    try {
+      const record = await this.call<{ verticalVersionId: string | null } | undefined>(
+        `/tenants/${this.tenantId}/scopes/${scopeId}`,
+      );
+      return record?.verticalVersionId ?? null;
+    } catch {
+      return null;
+    }
+  }
 }

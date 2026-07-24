@@ -88,8 +88,8 @@ export interface AppRow {
 export interface AppEvent {
   id: string;
   app_scope_id: string;
-  kind: 'created' | 'active' | 'failed' | 'deleted';
-  /** Failure reason / bound hostname / the vertical slug — depending on `kind`. */
+  kind: 'created' | 'active' | 'failed' | 'deleted' | 'updated';
+  /** Failure reason / bound hostname / the version move / the vertical slug — depending on `kind`. */
   detail: string | null;
   actor: string;
   created_at: string;
@@ -113,6 +113,19 @@ export interface Deployment {
   source: string;
   versions: DeploymentVersion[];
   channels: Array<{ channel: string; versionId: string }>;
+  /**
+   * The version THIS scope is actually pinned to (the router dispatches on it) — set on
+   * the per-app deployments read. It can lag the `prod` channel: an app installed when
+   * prod was 0.0.9 stays on 0.0.9 until updated. `null` ⇒ unpinned (static binding).
+   */
+  boundVersionId?: string | null;
+}
+
+/** The result of updating an app to its vertical's prod version. */
+export interface UpdateResult {
+  updated: boolean;
+  version: string | null;
+  previousVersion: string | null;
 }
 
 /** One importable repo the tenant's GitHub connection can see (worker's github.ts shape). */
@@ -214,8 +227,11 @@ export const api = {
   deleteApp: (id: string) => call<void>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   retryApp: (scopeId: string) => call<AppRow>(`/apps/${encodeURIComponent(scopeId)}/retry`, { method: 'POST' }),
   appEvents: (scopeId: string) => call<AppEvent[]>(`/apps/${encodeURIComponent(scopeId)}/events`),
-  /** The app's vertical version registry + channels — which version it runs (the `prod` one). */
+  /** The app's vertical version registry + channels + the version THIS scope actually runs (`boundVersionId`). */
   appDeployments: (scopeId: string) => call<Deployment>(`/apps/${encodeURIComponent(scopeId)}/deployments`),
+  /** Move the app to its vertical's current prod version (rebind the scope). No-op if already current. */
+  updateApp: (scopeId: string) =>
+    call<UpdateResult>(`/apps/${encodeURIComponent(scopeId)}/update`, { method: 'POST' }),
   listDeployments: () => call<Deployment[]>('/deployments'),
   /** The tenant's GitHub-import state — connection status + the repos it can see. */
   gitRepos: () => call<GitReposResult>('/github/repos'),

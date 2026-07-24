@@ -16,6 +16,7 @@ import {
   createApp,
   deprovisionApp,
   retryApp,
+  updateApp,
   CATALOG,
   availableCatalog,
   type DashboardAppRow,
@@ -305,6 +306,47 @@ describe('Dashboard M0 — tenant-narrowed self-service provisioning', () => {
     expect(failEvents).toHaveLength(2);
     expect(failEvents.map((e) => e.kind).sort()).toEqual(['created', 'failed']);
     expect(failEvents.find((e) => e.kind === 'failed')?.detail).toContain('no deployment is bound');
+  });
+
+  it('updates an installed app to the vertical’s new prod version — rebinds the scope + records it', async () => {
+    const acme = await bootstrap('acme-update');
+    const dash = await host.getScope(acme.principal, acme.tenantId, acme.scopeId);
+    type Ev = { kind: string; detail: string | null };
+
+    // The vertical has two admitted versions; prod is promoted to the NEWER one (0.0.10).
+    const v9 = ulid();
+    const v10 = ulid();
+    await host.admin.registerVertical(staff, { slug: 'meridian', name: 'Meridian', source: 'builtin' });
+    for (const [id, version] of [[v9, '0.0.9'], [v10, '0.0.10']] as const) {
+      await host.admin.publishVersion(staff, {
+        id, verticalSlug: 'meridian', version, manifestDigest: 'm', permissionDigest: 'p', migrationDigest: 'g',
+        deploymentRef: `meridian-${id.toLowerCase()}`,
+      });
+      await host.admin.admitVersion(staff, id);
+    }
+    await host.admin.promoteVersion(staff, 'meridian', 'prod', v10);
+
+    // Install the app, then pin it to the OLD version (0.0.9) — the "installed before prod
+    // moved" state (embedded provisioning doesn't pin, so set it explicitly, as an install would).
+    const appScopeId = scopeId.parse(ulid());
+    await createApp(host, {
+      node: acme, appScopeId, verticalSlug: 'meridian', name: 'People',
+      appEntitlements: ['meridian', 'protocol'], appOwnerGrants: [HR_PERM.absenceRead] as PermissionKey[],
+    });
+    await host.admin.bindScopeVersion(staff, acme.tenantId, appScopeId, v9);
+    expect((await host.admin.getScopeRecord(staff, acme.tenantId, appScopeId))?.verticalVersionId).toBe(v9);
+
+    // Update → rebinds the scope to prod (0.0.10) and records an 'updated' event with the move.
+    const r1 = await updateApp(host, { node: acme, appScopeId, verticalSlug: 'meridian' });
+    expect(r1).toEqual({ updated: true, version: '0.0.10', previousVersion: '0.0.9' });
+    expect((await host.admin.getScopeRecord(staff, acme.tenantId, appScopeId))?.verticalVersionId).toBe(v10);
+    const updated = (await dash.invoke<Ev[]>('dashboard/app-events', { appScopeId })).find((e) => e.kind === 'updated');
+    expect(updated?.detail).toBe('0.0.9 → 0.0.10');
+
+    // Idempotent: running it again is a no-op (already current) — no rebind, no new event.
+    const r2 = await updateApp(host, { node: acme, appScopeId, verticalSlug: 'meridian' });
+    expect(r2.updated).toBe(false);
+    expect((await dash.invoke<Ev[]>('dashboard/app-events', { appScopeId })).filter((e) => e.kind === 'updated')).toHaveLength(1);
   });
 
   it('a principal without dashboard:provision-app is refused — before anything is provisioned', async () => {

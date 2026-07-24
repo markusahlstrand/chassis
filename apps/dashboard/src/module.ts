@@ -163,6 +163,28 @@ export const dashboardMigrations = [
       CREATE INDEX dashboard_app_events_by_app ON dashboard_app_events (app_scope_id, created_at);
     `,
   },
+  {
+    version: '0005-app-updated-event',
+    sql: `
+      -- Widen the event kinds to include 'updated' — an app moved to a newer version
+      -- (its scope rebound to a new deploymentRef). SQLite can't ALTER a CHECK, so
+      -- rebuild the table with the wider constraint and copy the rows. 0004 is untouched
+      -- (append-only): this is a new, ordered migration.
+      CREATE TABLE dashboard_app_events_new (
+        id           TEXT PRIMARY KEY,
+        app_scope_id TEXT NOT NULL,
+        kind         TEXT NOT NULL CHECK (kind IN ('created','active','failed','deleted','updated')),
+        detail       TEXT,
+        actor        TEXT NOT NULL,
+        created_at   TEXT NOT NULL
+      );
+      INSERT INTO dashboard_app_events_new (id, app_scope_id, kind, detail, actor, created_at)
+        SELECT id, app_scope_id, kind, detail, actor, created_at FROM dashboard_app_events;
+      DROP TABLE dashboard_app_events;
+      ALTER TABLE dashboard_app_events_new RENAME TO dashboard_app_events;
+      CREATE INDEX dashboard_app_events_by_app ON dashboard_app_events (app_scope_id, created_at);
+    `,
+  },
 ];
 
 export interface DashboardAppRow {
@@ -181,7 +203,7 @@ export interface DashboardAppRow {
 export interface DashboardAppEventRow {
   id: string;
   app_scope_id: string;
-  kind: 'created' | 'active' | 'failed' | 'deleted';
+  kind: 'created' | 'active' | 'failed' | 'deleted' | 'updated';
   detail: string | null;
   actor: string;
   created_at: string;
@@ -255,6 +277,25 @@ const markAppActiveOp: OperationHandler<z.infer<typeof markAppActiveInput>, Dash
   ])[0];
   if (!row) throw new Error(`no app for scope ${input.appScopeId}`);
   return row;
+};
+
+const updateAppInput = z.object({
+  appScopeId: z.string().min(1),
+  /** Human label of the move, e.g. "0.0.10 → 0.0.12" — shown on the Activity trail. */
+  detail: z.string().min(1).optional(),
+});
+
+/**
+ * Record that an app was moved to a newer version. The scope rebind is a platform
+ * effect (the app layer calls `bindScopeVersion`); this is the in-scope authorize +
+ * audit half — same authority as provisioning the app. Recording it here is what makes
+ * a version bump show up on the Activity trail (the "nothing in the log" gap).
+ */
+const updateAppOp: OperationHandler<z.infer<typeof updateAppInput>, { ok: true }> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(DASHBOARD_PERM.provisionApp));
+  const input = updateAppInput.parse(raw);
+  recordAppEvent(ctx, input.appScopeId, 'updated', input.detail ?? null);
+  return { ok: true };
 };
 
 const markAppFailedInput = z.object({
@@ -574,6 +615,7 @@ export const dashboardModule: ModuleRegistration = {
   operations: {
     'dashboard/provision-app': provisionAppOp as OperationHandler<never, unknown>,
     'dashboard/mark-app-active': markAppActiveOp as OperationHandler<never, unknown>,
+    'dashboard/update-app': updateAppOp as OperationHandler<never, unknown>,
     'dashboard/mark-app-failed': markAppFailedOp as OperationHandler<never, unknown>,
     'dashboard/app-events': appEventsOp as OperationHandler<never, unknown>,
     'dashboard/list-apps': listAppsOp as OperationHandler<never, unknown>,
