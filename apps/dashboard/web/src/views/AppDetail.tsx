@@ -77,9 +77,13 @@ function Overview({ app, meta, statusKind, statusLabel }: { app: AppRow; meta: {
   // The app's REAL audit trail (created / active / failed+reason / deleted). Dev-preview
   // shows a representative sample; a live deploy reads it from the worker.
   const [events, setEvents] = useState<AppEvent[] | null>(null);
+  // The app's REAL running version (the version its scope is bound to — what the router
+  // serves), not a hardcoded label. Same source as the Deployments tab.
+  const [dep, setDep] = useState<Deployment | null>(null);
   useEffect(() => {
     if (DEV_MOCK) {
       setEvents(mockEventsFor(app));
+      setDep(MOCK_DEPLOYMENTS[0] ?? null);
       return;
     }
     let live = true;
@@ -87,17 +91,32 @@ function Overview({ app, meta, statusKind, statusLabel }: { app: AppRow; meta: {
       .appEvents(app.app_scope_id)
       .then((e) => live && setEvents(e))
       .catch(() => live && setEvents([]));
+    api
+      .appDeployments(app.app_scope_id)
+      .then((d) => live && setDep(d))
+      .catch(() => {});
     return () => {
       live = false;
     };
   }, [app.app_scope_id]);
+  // The version the app actually runs: its scope's bound version (fall back to the prod
+  // channel only when unpinned). '…' while loading; '—' when nothing is deployed.
+  const prodVersionId = dep?.channels.find((c) => c.channel === 'prod')?.versionId;
+  const runningVersion = dep
+    ? dep.versions.find((v) => v.id === (dep.boundVersionId ?? prodVersionId))
+    : undefined;
+  const versionLabel = runningVersion ? `v${runningVersion.version}` : dep ? '—' : '…';
+  const updateAvailable = !!dep && !!prodVersionId && prodVersionId !== dep.boundVersionId;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ ...card, padding: 20 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', fontSize: 13 }}>
             <KV label="Vertical"><span>{meta.label}</span><MonoTag color="var(--layer-vertical)">vertical</MonoTag></KV>
-            <KV label="Version"><span style={mono}>v0.0.1</span></KV>
+            <KV label="Version">
+              <span style={mono}>{versionLabel}</span>
+              {updateAvailable && <Pill kind="info">update available</Pill>}
+            </KV>
             <KV label="Status"><Pill kind={statusKind}>{statusLabel}</Pill></KV>
             <KV label="Created"><span>{shortDate(app.created_at)}</span></KV>
             <KV label="Created by"><span style={mono}>{app.created_by}</span></KV>
@@ -116,7 +135,10 @@ function Overview({ app, meta, statusKind, statusLabel }: { app: AppRow; meta: {
                 <IconBox label="Copy hostname"><CopyButton text={app.hostname} size={14} /></IconBox>
                 <Button variant="secondary" onClick={() => window.open(`https://${app.hostname}`, '_blank')}>Visit ↗</Button>
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Last deploy just now · <span style={{ fontFamily: 'var(--font-mono)' }}>v0.0.1</span></div>
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                Running <span style={{ fontFamily: 'var(--font-mono)' }}>{versionLabel}</span>
+                {updateAvailable && <> · <a href={`#/apps/${app.app_scope_id}/deployments`} style={{ color: 'var(--text-brand)' }}>update available →</a></>}
+              </div>
             </>
           ) : (
             <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>A hostname is assigned once provisioning completes.</div>
