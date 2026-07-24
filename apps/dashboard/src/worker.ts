@@ -27,6 +27,7 @@ import { calloutModule } from '@substrat-run/demo-callout/module';
 // The worker-safe subpath of the Meridian (HR) vertical: its domain module only, never
 // the demo's node/better-auth seed. M0 bundles it here, same seam as Callout.
 import { meridianModule } from '@substrat-run/demo-meridian/module';
+import { manyfoldModule } from '@substrat-run/demo-manyfold/module';
 import { CATALOG, ensureCatalog, availableCatalog } from './catalog.js';
 import { mountOidcRoutes, verifySession, SESSION_COOKIE, type OidcEnv } from '@substrat-run/oidc-rp';
 import { dashboardModule, type DashboardAppRow } from './module.js';
@@ -65,7 +66,7 @@ const teamCookieOpts = (origin: string) => ({
 // field-service vertical composing workorder + invoicing + protocol — and Meridian,
 // the HR vertical (its core domain is vertical code on the kernel; it composes
 // protocol for onboarding only).
-const MODULES = [dashboardModule, invitesModule, protocolModule, workorderModule, invoicingModule, calloutModule, meridianModule];
+const MODULES = [dashboardModule, invitesModule, protocolModule, workorderModule, invoicingModule, calloutModule, meridianModule, manyfoldModule];
 export const ScopeDO = defineScopeDO(MODULES, {});
 export { ControlPlaneDO };
 

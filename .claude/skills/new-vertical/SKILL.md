@@ -99,6 +99,12 @@ Copy-and-own from `demos/callout/app`: Vite + React, hash routing, principal pic
 the top bar, views renamed to the vertical's vocabulary. Change brand, labels, and
 which columns matter; keep the api.ts pattern (typed wrappers over the server routes).
 
+- **Keep view state in the URL.** The active screen (and its key/id) belongs in the
+  `#/…` hash, not just React state — otherwise a refresh drops the user back to the root
+  view. A tiny `parseHash()/viewToHash()/useHashRoute()` trio (see `demos/manyfold/app/src/App.tsx`)
+  is enough; `navigate(v)` sets `location.hash`, a `hashchange` listener re-derives the
+  view. Site/persona can stay in `localStorage` (they persist across refresh anyway).
+
 ### 7. Drive it over HTTP — the step the scenario test cannot do for you
 
 **A vertical's scenario test can be 100% green while the demo is 100% broken.** The test
@@ -144,6 +150,23 @@ and prints each persona's status code is more reliable than a chain of `curl | j
   :8873/:5273), read both from `PORT`/`WEB_PORT` in `server.ts` *and* `vite.config.ts`
   so one env var moves both ends of the proxy, and use a vertical-specific
   localStorage key for the principal picker, so demos coexist.
+- **User-authored config is DATA, not code.** If the app lets a user shape the schema or
+  settings (content types, field definitions, pricing rules a user edits), store it in a
+  table and seed defaults lazily (an idempotent `ensureX(ctx)` guarded on emptiness), and
+  gate edits behind an admin permission. Never turn user input into runtime DDL — the
+  "compile to a migration" stays a *reviewable artifact* the UI can show, not a live
+  `CREATE TABLE`. Manyfold's content types are the reference: `manyfold_content_type` +
+  `save-type`/`list-types`, bodies persisted as JSON so adding a field is free.
+- **Sandbox-clean is the default worker shape** (policy: every vertical is sandbox-clean,
+  only the dashboard is privileged). Copy Meridian's `worker.ts`/`wrangler.jsonc`: own
+  `ScopeDO` + `IdentityDO`, `/internal/provision` platform-gated, SPA inlined via
+  `gen-assets` (no ASSETS binding). **Multi-scope is native**: one `SCOPE` DO namespace,
+  `idFromName(tenant, site)` = one DO per site; the router asserts the tenant, the app
+  selects the site (`x-scope`), permissions evaluate from that site's own storage.
+- **Kill stale dev servers before driving over HTTP.** A `tsx src/server.ts` left running
+  from an earlier iteration serves the OLD route table — you'll chase phantom
+  `unknown operation` 404s against code you already fixed. `pkill -f 'tsx src/server.ts'`
+  (and check `lsof -ti :<port>`) before each smoke run, and boot fresh.
 - **Declare every link edge you traverse**: engines link the refs you hand them
   verbatim (workorder → your facility-shaped entity), and the adapter rejects links
   undeclared in any registered manifest — so your `entityRelations` must cover both

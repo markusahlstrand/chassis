@@ -1,0 +1,690 @@
+import { z } from 'zod';
+import { moduleManifest, permissionKey, type EntityRef } from '@substrat-run/contracts';
+import {
+  assertAllowed,
+  ulid,
+  type ModuleRegistration,
+  type OperationContext,
+  type OperationHandler,
+} from '@substrat-run/kernel';
+import {
+  buildBodySchema,
+  CONTENT_TYPES,
+  FIELD_TYPES,
+  compileTypeToSql,
+  referenceFields,
+  type ContentTypeDef,
+} from './content-types.js';
+
+// ============================================================================
+// Manyfold — a multi-scope headless CMS. The vertical owns the content types
+// (content-types.ts) and, for Milestone A (decision 27; the engine extraction
+// waits for a second content vertical), the editorial lifecycle itself:
+// a draft→review→publish state machine that can't skip, append-only revisions,
+// freeze-on-publish with a content hash, and references resolved at delivery.
+// ============================================================================
+
+export const MF_PERM = {
+  read: permissionKey.parse('content:read'),
+  author: permissionKey.parse('content:author'),
+  review: permissionKey.parse('content:review'),
+  publish: permissionKey.parse('content:publish'),
+  admin: permissionKey.parse('content:admin'),
+};
+
+export const manyfoldManifest = moduleManifest.parse({
+  id: '@substrat-run/demo-manyfold',
+  version: '0.0.1',
+  kernelContract: '^0.0.1',
+  permissions: [
+    { key: 'content:read', description: 'Read entries, revisions, and content models' },
+    { key: 'content:author', description: 'Create and edit drafts, submit for review, restore revisions' },
+    { key: 'content:review', description: 'Approve or reject entries in review' },
+    { key: 'content:publish', description: 'Publish, unpublish, and archive entries' },
+    { key: 'content:admin', description: 'Manage members, roles, and content models' },
+  ],
+  events: {
+    emits: [
+      { type: 'content.submitted', schemaVersion: 1 },
+      { type: 'content.approved', schemaVersion: 1 },
+      { type: 'content.rejected', schemaVersion: 1 },
+      { type: 'content.published', schemaVersion: 1 },
+      { type: 'content.unpublished', schemaVersion: 1 },
+      { type: 'content.archived', schemaVersion: 1 },
+    ],
+    // The public-delivery projection is maintained transactionally in the publish
+    // ops (a read model must be consistent with the freeze). `content.published` is
+    // the fat event a webhook CONNECTOR would consume to purge a CDN / rebuild a
+    // site (cms-content.md §6.1) — that consumer is host code, the documented next step.
+    consumes: [],
+  },
+  migrations: { journalDir: './migrations', compatibleFrom: '0.0.1' },
+  attachmentTargets: [],
+  entitlementKey: 'manyfold',
+});
+
+export const manyfoldMigrations = [
+  {
+    version: '0001-init',
+    sql: `
+      -- The lifecycle spine: one row per logical entry, its status, and which
+      -- revision is the working draft vs the frozen published one.
+      CREATE TABLE manyfold_entry (
+        id            TEXT PRIMARY KEY,
+        type_key      TEXT NOT NULL,
+        status        TEXT NOT NULL,
+        slug          TEXT,
+        draft_rev     INTEGER NOT NULL,
+        published_rev INTEGER,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX manyfold_entry_slug ON manyfold_entry(type_key, slug) WHERE slug IS NOT NULL;
+      CREATE INDEX manyfold_entry_type_status ON manyfold_entry(type_key, status);
+
+      -- Append-only revisions. An edit is a NEW row; freezing sets the hash and
+      -- flips frozen=1, after which the row is immutable.
+      CREATE TABLE manyfold_revision (
+        id         TEXT PRIMARY KEY,
+        entry_id   TEXT NOT NULL REFERENCES manyfold_entry(id),
+        rev_no     INTEGER NOT NULL,
+        body_json  TEXT NOT NULL,
+        hash       TEXT,
+        frozen     INTEGER NOT NULL DEFAULT 0,
+        author     TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (entry_id, rev_no)
+      );
+
+      -- Append-only transition audit.
+      CREATE TABLE manyfold_status_log (
+        id          TEXT PRIMARY KEY,
+        entry_id    TEXT NOT NULL,
+        from_status TEXT,
+        to_status   TEXT NOT NULL,
+        actor       TEXT NOT NULL,
+        note        TEXT,
+        at          TEXT NOT NULL
+      );
+
+      -- The public read model the delivery surface serves: only published, frozen
+      -- content, resolved by (type, slug). Maintained transactionally by publish/
+      -- unpublish/archive.
+      CREATE TABLE manyfold_delivery (
+        entry_id     TEXT PRIMARY KEY,
+        type_key     TEXT NOT NULL,
+        slug         TEXT,
+        rev_no       INTEGER NOT NULL,
+        hash         TEXT NOT NULL,
+        body_json    TEXT NOT NULL,
+        title        TEXT NOT NULL,
+        published_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX manyfold_delivery_slug ON manyfold_delivery(type_key, slug) WHERE slug IS NOT NULL;
+    `,
+  },
+  {
+    // Content types are DATA, not code — the model builder creates and edits them at
+    // runtime. Seeded with the four defaults on first use (ensureTypes). The typed-table
+    // migration each type compiles to (compileTypeToSql) stays reviewable/demonstrative;
+    // Milestone A persists bodies as JSON, so adding a field is free (no data move).
+    version: '0002-content-types',
+    sql: `
+      CREATE TABLE manyfold_content_type (
+        key         TEXT PRIMARY KEY,
+        version     INTEGER NOT NULL,
+        title       TEXT NOT NULL,
+        title_field TEXT NOT NULL,
+        slug_field  TEXT,
+        fields_json TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+    `,
+  },
+];
+
+// ── Rows ────────────────────────────────────────────────────────────────────
+
+export type EntryStatus = 'draft' | 'in_review' | 'approved' | 'published' | 'unpublished' | 'archived';
+
+export interface EntryRow {
+  id: string;
+  type_key: string;
+  status: EntryStatus;
+  slug: string | null;
+  draft_rev: number;
+  published_rev: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RevisionRow {
+  id: string;
+  entry_id: string;
+  rev_no: number;
+  body_json: string;
+  hash: string | null;
+  frozen: number;
+  author: string;
+  created_at: string;
+}
+
+export interface DeliveryRow {
+  entry_id: string;
+  type_key: string;
+  slug: string | null;
+  rev_no: number;
+  hash: string;
+  body_json: string;
+  title: string;
+  published_at: string;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const entryRef = (id: string): EntityRef => ({ entityType: 'manyfold-entry', entityId: id });
+
+interface ContentTypeRow {
+  key: string;
+  version: number;
+  title: string;
+  title_field: string;
+  slug_field: string | null;
+  fields_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToDef(r: ContentTypeRow): ContentTypeDef {
+  return {
+    key: r.key,
+    version: r.version,
+    title: r.title,
+    titleField: r.title_field,
+    ...(r.slug_field ? { slugField: r.slug_field } : {}),
+    fields: JSON.parse(r.fields_json) as ContentTypeDef['fields'],
+  };
+}
+
+/** Seed the four default types once, on first use. Guarded on emptiness, so a user who
+ *  deletes a default is not re-seeded. */
+function ensureTypes(ctx: OperationContext): void {
+  const n = ctx.sql.query<{ n: number }>('SELECT COUNT(*) AS n FROM manyfold_content_type')[0]!.n;
+  if (n > 0) return;
+  const now = new Date().toISOString();
+  for (const def of CONTENT_TYPES) {
+    ctx.sql.exec(
+      'INSERT OR IGNORE INTO manyfold_content_type (key, version, title, title_field, slug_field, fields_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [def.key, def.version, def.title, def.titleField, def.slugField ?? null, JSON.stringify(def.fields), now, now],
+    );
+  }
+}
+
+/** A content type's live definition, from the store (types are data, not code). */
+function loadType(ctx: OperationContext, typeKey: string): ContentTypeDef {
+  ensureTypes(ctx);
+  const r = ctx.sql.query<ContentTypeRow>('SELECT * FROM manyfold_content_type WHERE key = ?', [typeKey])[0];
+  if (!r) throw new Error(`unknown content type: ${typeKey}`);
+  return rowToDef(r);
+}
+
+function loadTypes(ctx: OperationContext): ContentTypeDef[] {
+  ensureTypes(ctx);
+  return ctx.sql.query<ContentTypeRow>('SELECT * FROM manyfold_content_type ORDER BY created_at').map(rowToDef);
+}
+
+function getEntry(ctx: OperationContext, id: string): EntryRow {
+  const row = ctx.sql.query<EntryRow>('SELECT * FROM manyfold_entry WHERE id = ?', [id])[0];
+  if (!row) throw new Error(`entry not found: ${id}`);
+  return row;
+}
+
+function currentDraft(ctx: OperationContext, entry: EntryRow): RevisionRow {
+  return ctx.sql.query<RevisionRow>('SELECT * FROM manyfold_revision WHERE entry_id = ? AND rev_no = ?', [
+    entry.id,
+    entry.draft_rev,
+  ])[0]!;
+}
+
+/** Title for delivery/listing: the type's titleField out of the body, else the slug/id. */
+function titleOf(def: ContentTypeDef, body: Record<string, unknown>, entry: EntryRow): string {
+  const t = body[def.titleField];
+  return typeof t === 'string' && t.length > 0 ? t : (entry.slug ?? entry.id);
+}
+
+// Web Crypto (globalThis.crypto: same API in Node, Workers, browsers). Declared
+// locally so it types under the worker lib set too — the engines' pattern.
+declare const crypto: {
+  subtle: { digest(algorithm: 'SHA-256', data: Uint8Array): Promise<ArrayBuffer> };
+};
+
+/** SHA-256 over (type, rev, canonical body) — Web Crypto, never node:crypto. */
+async function contentHash(typeKey: string, revNo: number, bodyJson: string): Promise<string> {
+  const data = new TextEncoder().encode(`${typeKey}:${revNo}:${bodyJson}`);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const ALLOWED: Record<EntryStatus, EntryStatus[]> = {
+  draft: ['in_review', 'archived'],
+  in_review: ['approved', 'draft', 'archived'],
+  approved: ['published', 'in_review', 'archived'],
+  published: ['unpublished', 'archived'],
+  unpublished: ['in_review', 'archived'],
+  archived: [],
+};
+
+function transition(ctx: OperationContext, entry: EntryRow, to: EntryStatus, note?: string): void {
+  if (!ALLOWED[entry.status].includes(to)) {
+    throw new Error(`invalid transition: ${entry.type_key} entry is '${entry.status}', cannot go to '${to}'`);
+  }
+  const now = new Date().toISOString();
+  ctx.sql.exec('UPDATE manyfold_entry SET status = ?, updated_at = ? WHERE id = ?', [to, now, entry.id]);
+  ctx.sql.exec(
+    'INSERT INTO manyfold_status_log (id, entry_id, from_status, to_status, actor, note, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [ulid(), entry.id, entry.status, to, ctx.principal, note ?? null, now],
+  );
+  entry.status = to;
+}
+
+/** Validate a body against its type; return the slug the slug-field carries (or null). */
+function validateBody(def: ContentTypeDef, raw: unknown): { body: Record<string, unknown>; slug: string | null } {
+  const body = buildBodySchema(def).parse(raw);
+  const slug = def.slugField ? (body[def.slugField] as string | undefined) ?? null : null;
+  return { body, slug };
+}
+
+function upsertDelivery(ctx: OperationContext, entry: EntryRow, rev: RevisionRow): void {
+  const def = loadType(ctx, entry.type_key);
+  const body = JSON.parse(rev.body_json) as Record<string, unknown>;
+  ctx.sql.exec(
+    `INSERT OR REPLACE INTO manyfold_delivery
+       (entry_id, type_key, slug, rev_no, hash, body_json, title, published_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [entry.id, entry.type_key, entry.slug, rev.rev_no, rev.hash!, rev.body_json, titleOf(def, body, entry), new Date().toISOString()],
+  );
+}
+
+function removeDelivery(ctx: OperationContext, entryId: string): void {
+  ctx.sql.exec('DELETE FROM manyfold_delivery WHERE entry_id = ?', [entryId]);
+}
+
+// ── Authoring operations ────────────────────────────────────────────────────
+
+const createEntryOp: OperationHandler<{ typeKey: string; body: unknown }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.author));
+  const def = loadType(ctx, input.typeKey);
+  const { body, slug } = validateBody(def, input.body);
+  const id = ulid();
+  const now = new Date().toISOString();
+  try {
+    ctx.sql.exec(
+      'INSERT INTO manyfold_entry (id, type_key, status, slug, draft_rev, published_rev, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, def.key, 'draft', slug, 1, null, now, now],
+    );
+  } catch (e) {
+    if (String(e).includes('UNIQUE')) throw new Error(`slug already in use for ${def.key}: ${slug}`);
+    throw e;
+  }
+  ctx.sql.exec(
+    'INSERT INTO manyfold_revision (id, entry_id, rev_no, body_json, hash, frozen, author, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
+    [ulid(), id, 1, JSON.stringify(body), null, ctx.principal, now],
+  );
+  ctx.sql.exec(
+    'INSERT INTO manyfold_status_log (id, entry_id, from_status, to_status, actor, note, at) VALUES (?, ?, NULL, ?, ?, NULL, ?)',
+    [ulid(), id, 'draft', ctx.principal, now],
+  );
+  return getEntry(ctx, id);
+};
+
+const saveDraftOp: OperationHandler<{ entryId: string; body: unknown }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.author));
+  const entry = getEntry(ctx, input.entryId);
+  if (entry.status !== 'draft' && entry.status !== 'unpublished') {
+    throw new Error(`cannot edit: entry is '${entry.status}' — only draft or unpublished entries take new revisions`);
+  }
+  const def = loadType(ctx, entry.type_key);
+  const { body, slug } = validateBody(def, input.body);
+  const revNo = entry.draft_rev + 1;
+  const now = new Date().toISOString();
+  ctx.sql.exec(
+    'INSERT INTO manyfold_revision (id, entry_id, rev_no, body_json, hash, frozen, author, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
+    [ulid(), entry.id, revNo, JSON.stringify(body), null, ctx.principal, now],
+  );
+  ctx.sql.exec('UPDATE manyfold_entry SET draft_rev = ?, slug = ?, updated_at = ? WHERE id = ?', [
+    revNo,
+    slug,
+    now,
+    entry.id,
+  ]);
+  return getEntry(ctx, input.entryId);
+};
+
+const restoreRevisionOp: OperationHandler<{ entryId: string; revNo: number }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.author));
+  const entry = getEntry(ctx, input.entryId);
+  if (entry.status !== 'draft' && entry.status !== 'unpublished') {
+    throw new Error(`cannot restore: entry is '${entry.status}'`);
+  }
+  const src = ctx.sql.query<RevisionRow>('SELECT * FROM manyfold_revision WHERE entry_id = ? AND rev_no = ?', [
+    entry.id,
+    input.revNo,
+  ])[0];
+  if (!src) throw new Error(`revision not found: ${input.entryId}@${input.revNo}`);
+  // A restore is a NEW revision copying the old body — never a mutation of history.
+  const revNo = entry.draft_rev + 1;
+  const now = new Date().toISOString();
+  ctx.sql.exec(
+    'INSERT INTO manyfold_revision (id, entry_id, rev_no, body_json, hash, frozen, author, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
+    [ulid(), entry.id, revNo, src.body_json, null, ctx.principal, now],
+  );
+  ctx.sql.exec('UPDATE manyfold_entry SET draft_rev = ?, updated_at = ? WHERE id = ?', [revNo, now, entry.id]);
+  return getEntry(ctx, input.entryId);
+};
+
+const submitForReviewOp: OperationHandler<{ entryId: string }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.author));
+  const entry = getEntry(ctx, input.entryId);
+  transition(ctx, entry, 'in_review');
+  ctx.emit({ type: 'content.submitted', schemaVersion: 1, entity: entryRef(entry.id), piiClass: 'none', payload: { entryId: entry.id, typeKey: entry.type_key } });
+  return getEntry(ctx, input.entryId);
+};
+
+const approveOp: OperationHandler<{ entryId: string }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.review));
+  const entry = getEntry(ctx, input.entryId);
+  transition(ctx, entry, 'approved');
+  ctx.emit({ type: 'content.approved', schemaVersion: 1, entity: entryRef(entry.id), piiClass: 'none', payload: { entryId: entry.id, typeKey: entry.type_key } });
+  return getEntry(ctx, input.entryId);
+};
+
+const rejectOp: OperationHandler<{ entryId: string; note: string }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.review));
+  const note = z.string().min(1, 'a rejection needs a note').parse(input.note);
+  const entry = getEntry(ctx, input.entryId);
+  transition(ctx, entry, 'draft', note);
+  ctx.emit({ type: 'content.rejected', schemaVersion: 1, entity: entryRef(entry.id), piiClass: 'none', payload: { entryId: entry.id, typeKey: entry.type_key, note } });
+  return getEntry(ctx, input.entryId);
+};
+
+const publishOp: OperationHandler<{ entryId: string }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.publish));
+  const entry = getEntry(ctx, input.entryId);
+  if (entry.status !== 'approved') {
+    throw new Error(`invalid transition: publish requires an approved entry — '${entry.type_key}' is '${entry.status}'`);
+  }
+  const rev = currentDraft(ctx, entry);
+  const hash = await contentHash(entry.type_key, rev.rev_no, rev.body_json);
+  // Freeze the revision: immutable-after-export. Any later edit targets a new revision.
+  ctx.sql.exec('UPDATE manyfold_revision SET frozen = 1, hash = ? WHERE id = ?', [hash, rev.id]);
+  ctx.sql.exec('UPDATE manyfold_entry SET published_rev = ? WHERE id = ?', [rev.rev_no, entry.id]);
+  transition(ctx, entry, 'published');
+  const frozen: RevisionRow = { ...rev, frozen: 1, hash };
+  upsertDelivery(ctx, { ...entry, published_rev: rev.rev_no }, frozen);
+  const body = JSON.parse(rev.body_json) as Record<string, unknown>;
+  ctx.emit({
+    type: 'content.published',
+    schemaVersion: 1,
+    entity: entryRef(entry.id),
+    piiClass: 'none',
+    payload: {
+      entryId: entry.id,
+      typeKey: entry.type_key,
+      slug: entry.slug,
+      revNo: rev.rev_no,
+      hash,
+      title: titleOf(loadType(ctx, entry.type_key), body, entry),
+    },
+  });
+  return getEntry(ctx, input.entryId);
+};
+
+const unpublishOp: OperationHandler<{ entryId: string }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.publish));
+  const entry = getEntry(ctx, input.entryId);
+  transition(ctx, entry, 'unpublished');
+  removeDelivery(ctx, entry.id);
+  ctx.emit({ type: 'content.unpublished', schemaVersion: 1, entity: entryRef(entry.id), piiClass: 'none', payload: { entryId: entry.id, typeKey: entry.type_key } });
+  return getEntry(ctx, input.entryId);
+};
+
+const archiveOp: OperationHandler<{ entryId: string }, EntryRow> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.publish));
+  const entry = getEntry(ctx, input.entryId);
+  transition(ctx, entry, 'archived');
+  removeDelivery(ctx, entry.id);
+  ctx.emit({ type: 'content.archived', schemaVersion: 1, entity: entryRef(entry.id), piiClass: 'none', payload: { entryId: entry.id, typeKey: entry.type_key } });
+  return getEntry(ctx, input.entryId);
+};
+
+// ── Read operations ─────────────────────────────────────────────────────────
+
+interface EntryListItem {
+  id: string;
+  type_key: string;
+  status: EntryStatus;
+  slug: string | null;
+  title: string;
+  updated_at: string;
+}
+
+const listEntriesOp: OperationHandler<{ typeKey?: string; status?: EntryStatus }, EntryListItem[]> = async (
+  ctx,
+  input,
+) => {
+  assertAllowed(await ctx.check(MF_PERM.read));
+  const where: string[] = [];
+  const params: string[] = [];
+  if (input?.typeKey) {
+    where.push('type_key = ?');
+    params.push(input.typeKey);
+  }
+  if (input?.status) {
+    where.push('status = ?');
+    params.push(input.status);
+  }
+  const rows = ctx.sql.query<EntryRow>(
+    `SELECT * FROM manyfold_entry ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC`,
+    params,
+  );
+  return rows.map((e) => {
+    const def = loadType(ctx, e.type_key);
+    const rev = currentDraft(ctx, e);
+    const body = JSON.parse(rev.body_json) as Record<string, unknown>;
+    return { id: e.id, type_key: e.type_key, status: e.status, slug: e.slug, title: titleOf(def, body, e), updated_at: e.updated_at };
+  });
+};
+
+const reviewQueueOp: OperationHandler<undefined, EntryListItem[]> = async (ctx) => {
+  assertAllowed(await ctx.check(MF_PERM.review));
+  return listEntriesOp(ctx, { status: 'in_review' } as never) as never;
+};
+
+interface EntryDetail {
+  entry: EntryRow;
+  body: Record<string, unknown>;
+  revisions: { rev_no: number; frozen: number; hash: string | null; author: string; created_at: string }[];
+}
+
+const getEntryOp: OperationHandler<{ entryId: string }, EntryDetail> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.read));
+  const entry = getEntry(ctx, input.entryId);
+  const rev = currentDraft(ctx, entry);
+  const revisions = ctx.sql.query<RevisionRow>(
+    'SELECT rev_no, frozen, hash, author, created_at FROM manyfold_revision WHERE entry_id = ? ORDER BY rev_no',
+    [entry.id],
+  );
+  return {
+    entry,
+    body: JSON.parse(rev.body_json) as Record<string, unknown>,
+    revisions: revisions.map((r) => ({ rev_no: r.rev_no, frozen: r.frozen, hash: r.hash, author: r.author, created_at: r.created_at })),
+  };
+};
+
+const listTypesOp: OperationHandler<undefined, { def: ContentTypeDef; sql: string }[]> = async (ctx) => {
+  assertAllowed(await ctx.check(MF_PERM.read));
+  return loadTypes(ctx).map((def) => ({ def, sql: compileTypeToSql(def) }));
+};
+
+// ── Modelling: content types are data, authored by an admin ──────────────────
+
+const fieldDefInput = z.object({
+  type: z.enum(FIELD_TYPES),
+  required: z.boolean().optional(),
+  index: z.boolean().optional(),
+  options: z.array(z.string()).optional(),
+  target: z.string().optional(),
+  source: z.string().optional(),
+  maxLen: z.number().int().positive().optional(),
+});
+
+const saveTypeInput = z.object({
+  key: z.string().regex(/^[a-z][a-z0-9_]*$/, 'key must be lower_snake, starting with a letter'),
+  title: z.string().min(1),
+  titleField: z.string().min(1),
+  slugField: z.string().optional(),
+  fields: z.record(z.string().regex(/^[a-z][a-zA-Z0-9]*$/, 'field names are lowerCamel'), fieldDefInput),
+});
+
+/**
+ * Create or update a content type. Modelling is an ADMIN act. Every save bumps the type's
+ * version (schema evolution = a new version; cms-content.md §5). The change is safe and
+ * free here because Milestone A persists bodies as JSON — the compiled typed-table
+ * migration (compileTypeToSql) is the reviewable artifact, not a live ALTER.
+ */
+const saveTypeOp: OperationHandler<z.infer<typeof saveTypeInput>, ContentTypeDef> = async (ctx, raw) => {
+  assertAllowed(await ctx.check(MF_PERM.admin));
+  ensureTypes(ctx);
+  const input = saveTypeInput.parse(raw);
+  if (!input.fields[input.titleField]) throw new Error(`titleField '${input.titleField}' is not a field of ${input.key}`);
+  if (input.slugField && !input.fields[input.slugField]) throw new Error(`slugField '${input.slugField}' is not a field of ${input.key}`);
+  for (const [name, f] of Object.entries(input.fields)) {
+    if ((f.type === 'ref' || f.type === 'refMany') && !f.target) throw new Error(`field '${name}' is a ${f.type} but names no target type`);
+  }
+  const now = new Date().toISOString();
+  const existing = ctx.sql.query<{ version: number }>('SELECT version FROM manyfold_content_type WHERE key = ?', [input.key])[0];
+  const version = existing ? existing.version + 1 : 1;
+  ctx.sql.exec(
+    `INSERT INTO manyfold_content_type (key, version, title, title_field, slug_field, fields_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       version = excluded.version, title = excluded.title, title_field = excluded.title_field,
+       slug_field = excluded.slug_field, fields_json = excluded.fields_json, updated_at = excluded.updated_at`,
+    [input.key, version, input.title, input.titleField, input.slugField ?? null, JSON.stringify(input.fields), now, now],
+  );
+  return loadType(ctx, input.key);
+};
+
+const deleteTypeOp: OperationHandler<{ key: string }, { deleted: string }> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.admin));
+  const key = z.string().min(1).parse(input.key);
+  const n = ctx.sql.query<{ n: number }>('SELECT COUNT(*) AS n FROM manyfold_entry WHERE type_key = ?', [key])[0]!.n;
+  if (n > 0) throw new Error(`cannot delete type '${key}': ${n} entr${n === 1 ? 'y' : 'ies'} already use it`);
+  ctx.sql.exec('DELETE FROM manyfold_content_type WHERE key = ?', [key]);
+  return { deleted: key };
+};
+
+// ── Delivery surface (published, frozen content; references resolved) ────────
+
+type Resolved = { $ref: string; type: string; slug: string | null; title: string } | { $unresolved: true; reason: string; id: string };
+
+function resolveRef(ctx: OperationContext, target: string, id: string): Resolved {
+  const row = ctx.sql.query<DeliveryRow>('SELECT * FROM manyfold_delivery WHERE entry_id = ?', [id])[0];
+  if (!row) return { $unresolved: true, reason: 'not_published', id };
+  return { $ref: id, type: target, slug: row.slug, title: row.title };
+}
+
+interface DeliveryPayload {
+  type: string;
+  slug: string | null;
+  hash: string;
+  publishedAt: string;
+  body: Record<string, unknown>;
+}
+
+const deliverOp: OperationHandler<{ typeKey: string; slug: string }, DeliveryPayload> = async (ctx, input) => {
+  assertAllowed(await ctx.check(MF_PERM.read));
+  const def = loadType(ctx, input.typeKey);
+  const row = ctx.sql.query<DeliveryRow>('SELECT * FROM manyfold_delivery WHERE type_key = ? AND slug = ?', [
+    input.typeKey,
+    input.slug,
+  ])[0];
+  if (!row) throw new Error(`not published: ${input.typeKey}/${input.slug}`);
+  const body = JSON.parse(row.body_json) as Record<string, unknown>;
+  // Resolve reference fields against the published projection — a draft/archived
+  // target comes back as an explicit unresolved marker, a broken link shown honestly.
+  for (const ref of referenceFields(def)) {
+    const val = body[ref.name];
+    if (ref.many && Array.isArray(val)) {
+      body[ref.name] = val.map((id) => resolveRef(ctx, ref.target, String(id)));
+    } else if (!ref.many && typeof val === 'string') {
+      body[ref.name] = resolveRef(ctx, ref.target, val);
+    }
+  }
+  return { type: row.type_key, slug: row.slug, hash: row.hash, publishedAt: row.published_at, body };
+};
+
+const listDeliveryOp: OperationHandler<{ typeKey?: string }, { type_key: string; slug: string | null; title: string; hash: string }[]> = async (
+  ctx,
+  input,
+) => {
+  assertAllowed(await ctx.check(MF_PERM.read));
+  const rows = input?.typeKey
+    ? ctx.sql.query<DeliveryRow>('SELECT * FROM manyfold_delivery WHERE type_key = ? ORDER BY published_at DESC', [input.typeKey])
+    : ctx.sql.query<DeliveryRow>('SELECT * FROM manyfold_delivery ORDER BY published_at DESC');
+  return rows.map((r) => ({ type_key: r.type_key, slug: r.slug, title: r.title, hash: r.hash }));
+};
+
+/** Self-introspection: who am I in THIS site, and what may I do — the app gates its chrome on this. */
+const whoamiOp: OperationHandler<undefined, { principal: string; can: Record<string, boolean> }> = async (ctx) => {
+  assertAllowed(await ctx.check(MF_PERM.read));
+  return {
+    principal: ctx.principal,
+    can: {
+      read: true,
+      author: (await ctx.check(MF_PERM.author)).allowed,
+      review: (await ctx.check(MF_PERM.review)).allowed,
+      publish: (await ctx.check(MF_PERM.publish)).allowed,
+      admin: (await ctx.check(MF_PERM.admin)).allowed,
+    },
+  };
+};
+
+const timelineOp: OperationHandler<{ entityType: string; entityId: string }, { type: string; occurred_at: string; actor: string }[]> = async (
+  ctx,
+  input,
+) => {
+  const entity = z.object({ entityType: z.string().min(1), entityId: z.string().min(1) }).parse(input);
+  assertAllowed(await ctx.check(MF_PERM.read));
+  return ctx.sql.query(
+    'SELECT type, occurred_at, actor FROM _substrat_outbox WHERE entity_type = ? AND entity_id = ? ORDER BY rowid',
+    [entity.entityType, entity.entityId],
+  );
+};
+
+export const manyfoldModule: ModuleRegistration = {
+  manifest: manyfoldManifest,
+  migrations: manyfoldMigrations,
+  operations: {
+    'manyfold/create-entry': createEntryOp as never,
+    'manyfold/save-draft': saveDraftOp as never,
+    'manyfold/restore-revision': restoreRevisionOp as never,
+    'manyfold/submit-for-review': submitForReviewOp as never,
+    'manyfold/approve': approveOp as never,
+    'manyfold/reject': rejectOp as never,
+    'manyfold/publish': publishOp as never,
+    'manyfold/unpublish': unpublishOp as never,
+    'manyfold/archive': archiveOp as never,
+    'manyfold/list-entries': listEntriesOp as never,
+    'manyfold/review-queue': reviewQueueOp as never,
+    'manyfold/get-entry': getEntryOp as never,
+    'manyfold/list-types': listTypesOp as never,
+    'manyfold/save-type': saveTypeOp as never,
+    'manyfold/delete-type': deleteTypeOp as never,
+    'manyfold/deliver': deliverOp as never,
+    'manyfold/list-delivery': listDeliveryOp as never,
+    'manyfold/whoami': whoamiOp as never,
+    'manyfold/timeline': timelineOp as never,
+  },
+};
