@@ -56,9 +56,34 @@ async function authPost(path: string, body: unknown): Promise<void> {
 
 export const auth = {
   signUp: (email: string, password: string, name: string) => authPost('sign-up/email', { email, password, name }),
+  /** Sign up WITH an invite token — allowed even after the workspace is closed to open sign-up. */
+  signUpWithInvite: (email: string, password: string, name: string, token: string) =>
+    authPost(`sign-up/email?invite=${encodeURIComponent(token)}`, { email, password, name }),
   signIn: (email: string, password: string) => authPost('sign-in/email', { email, password }),
   signOut: () => authPost('sign-out', {}),
 };
+
+/** A POST to one of the worker's own JSON routes (not the /api/invoke op transport). */
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+  const text = await res.text();
+  const parsed = (text ? JSON.parse(text) : undefined) as (T & { error?: string }) | undefined;
+  if (!res.ok) throw new ApiError(parsed?.error ?? `${res.status}`, res.status);
+  return parsed as T;
+}
+
+/** One outstanding member invite (the admin's pending list). No token — that lives in the link. */
+export interface Invite {
+  principal: string;
+  roleKey: string;
+  email: string | null;
+  createdAt: number;
+}
+export interface InvitesResult {
+  /** The roles a teammate can be invited at (this vertical's ROLES). */
+  roles: string[];
+  invites: Invite[];
+}
 
 // -- shapes (subset the app renders) ----------------------------------------
 
@@ -177,6 +202,14 @@ export function isNeedsSetup(m: Me | NeedsSetup): m is NeedsSetup {
 export const api = {
   me: () => get<Me | NeedsSetup>('/api/me'),
   cast: () => get<CastMember[]>('/api/cast'),
+
+  // Invites (admin-only server-side): the post-setup join path.
+  invites: () => get<InvitesResult>('/api/invites'),
+  createInvite: (roleKey: string, email?: string) =>
+    postJson<{ principal: string; roleKey: string; email: string | null; acceptUrl: string }>('/api/invites', email ? { roleKey, email } : { roleKey }),
+  revokeInvite: (principal: string) => postJson<void>(`/api/invites/${encodeURIComponent(principal)}/revoke`, {}),
+  /** Claim an invite while signed in — binds this login to the invited member principal. */
+  acceptInvite: (token: string) => postJson<{ ok: true }>('/api/accept-invite', { token }),
 
   leaveTypes: (employeeId?: string) => invoke<LeaveType[]>('hr/list-leave-types', employeeId ? { employeeId } : undefined),
   balance: (employeeId: string) => invoke<Balance>('hr/balance', { employeeId }),

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { auth, ApiError } from './api';
+import { api, auth, ApiError } from './api';
 import { Button } from './ui';
 
 const inputStyle: React.CSSProperties = {
@@ -19,6 +19,64 @@ const inputStyle: React.CSSProperties = {
  * (→ hr-admin), so the installer lands on the Admin/setup surface. On success we reload
  * so `/api/me` resolves the new session cookie.
  */
+/**
+ * Accept a member invite: the invitee arrived via `?invite=<token>`, creates their account
+ * (sign-up is allowed because the token is valid), and immediately claims the invite so
+ * their login binds to the pre-granted member principal. On success the app reloads (with a
+ * cleaned URL) and `/api/me` resolves them as that member.
+ */
+export function AcceptInvite({ token, onDone }: { token: string; onDone: () => void }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (busy || !email.trim() || password.length < 8) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await auth.signUpWithInvite(email.trim(), password, name.trim() || email.trim(), token);
+      await api.acceptInvite(token);
+      onDone();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="phone">
+      <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 24 }}>
+        <div style={{ width: '100%', maxWidth: 360, display: 'grid', gap: 14 }}>
+          <div style={{ textAlign: 'center', marginBottom: 4 }}>
+            <div className="brand-mark" style={{ margin: '0 auto 12px' }} />
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--ink)' }}>Join the workspace</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>Create your account to accept the invite</div>
+          </div>
+          {err && <div className="err-banner">{err}</div>}
+          <input style={inputStyle} placeholder="Full name" aria-label="Full name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input style={inputStyle} type="email" placeholder="Email" aria-label="Email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input
+            style={inputStyle}
+            type="password"
+            placeholder="Password (8+ characters)"
+            aria-label="Password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+          />
+          <Button disabled={busy || !email.trim() || password.length < 8} onClick={() => void submit()}>
+            {busy ? 'Please wait…' : 'Accept invite'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SignIn({ onDone, firstRun = false }: { onDone: () => void; firstRun?: boolean }) {
   // First run: this instance has no admin yet, so the only path is to CREATE the admin
   // account (which claims the owner seat). Force sign-up and drop the "sign in instead"

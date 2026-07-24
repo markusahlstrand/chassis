@@ -5,8 +5,11 @@ import { icons } from './ui';
 import { Expenses, Home, Me, TimeOff, TimesheetScreen, type FlowKind } from './screens';
 import { LogTime, Onboarding, RequestLeave, SubmitExpense } from './flows';
 import { Inbox, OnboardingView, Team, TeamCalendar, Timesheets } from './manage';
-import { ADMIN_TABS, AdminLeaveTypes, AdminPayroll, AdminPeople, AdminProjects, AdminSetup, type AdminTab } from './admin';
-import { SignIn } from './auth';
+import { ADMIN_TABS, AdminAccess, AdminLeaveTypes, AdminPayroll, AdminPeople, AdminProjects, AdminSetup, type AdminTab } from './admin';
+import { AcceptInvite, SignIn } from './auth';
+
+/** A pending invite token in the URL (`?invite=<token>`), if the user arrived via an invite link. */
+const INVITE_TOKEN = new URLSearchParams(window.location.search).get('invite');
 
 type WorkTab = 'home' | 'timeoff' | 'timesheet' | 'expenses' | 'me';
 type ManageTab = 'inbox' | 'calendar' | 'timesheets' | 'onboarding' | 'team';
@@ -165,6 +168,7 @@ export default function App() {
       case 'people': return <AdminPeople {...props} />;
       case 'projects': return <AdminProjects {...props} />;
       case 'payroll': return <AdminPayroll {...props} />;
+      case 'access': return <AdminAccess toast={setToast} />;
     }
   }
   const view = section === 'work' ? workView() : section === 'manage' ? manageView() : adminView();
@@ -176,6 +180,16 @@ export default function App() {
     : flow === 'onboarding' && empData?.onboarding ? <Onboarding d={empData} onClose={() => setFlow(null)} onDone={done} />
     : null;
 
+  // Arrived via an invite link → accept it (create an account, claim the member seat).
+  // Takes priority: it works whether or not there's already a session. On success we drop
+  // the token from the URL and reload so /api/me resolves the new member.
+  if (INVITE_TOKEN)
+    return (
+      <AcceptInvite
+        token={INVITE_TOKEN}
+        onDone={() => { window.history.replaceState({}, '', window.location.pathname); window.location.reload(); }}
+      />
+    );
   // Freshly-provisioned instance with no admin yet → first-run setup (create the admin
   // account, which claims the owner seat → hr-admin). Distinct from a plain sign-in.
   if (needsSetup) return <SignIn firstRun onDone={() => window.location.reload()} />;

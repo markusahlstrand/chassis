@@ -23,6 +23,7 @@ import {
   PlatformCallError,
   readRoutedNode,
   RouterAssertionError,
+  ulid,
 } from '@substrat-run/kernel';
 import type { PrincipalId } from '@substrat-run/contracts';
 import { MODULES, ROLES } from './provision.js';
@@ -103,6 +104,13 @@ function hostFor(env: Env): CloudflareScopeHost {
 
 const originOf = (req: Request): string => new URL(req.url).origin;
 
+/** SHA-256 hex of a string (Web Crypto — same in workerd, Node, browsers). Invite tokens are
+ *  stored + compared only as hashes, so a DB read never yields a usable token. */
+async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** The tenant's identity DO stub — the sub→principal directory (and Better Auth, if chosen). */
 function identityDo(env: Env, node: CompanyNode) {
   return env.AUTH.get(env.AUTH.idFromName(node.tenantId));
@@ -159,7 +167,14 @@ const app = new Hono<{ Bindings: Env }>();
  */
 app.post('/api/auth/sign-up/email', async (c) => {
   const node = nodeFor(c.req.raw, c.env);
-  if (!(await identityDo(c.env, node).needsSetup(node.scopeId))) {
+  const id = identityDo(c.env, node);
+  // Allowed during first-run setup (creates the admin), OR when the request carries a valid
+  // unclaimed invite token (`?invite=<token>`) — that's how an invited teammate registers
+  // after the workspace is closed. Anything else is refused.
+  const token = new URL(c.req.raw.url).searchParams.get('invite');
+  const allowed =
+    (await id.needsSetup(node.scopeId)) || (token ? await id.inviteExists(node.scopeId, await sha256Hex(token)) : false);
+  if (!allowed) {
     return c.json({ error: 'Sign-up is closed for this workspace — ask an admin to invite you.' }, 403);
   }
   return authProviderFor(c.env, c.req.raw).handle(c.req.raw);
@@ -212,6 +227,25 @@ async function stub(c: { env: Env; req: { raw: Request } }) {
 }
 
 /**
+ * Gate an admin-only action: resolve the caller's scope, then require they hold `hr-admin`
+ * (managing who can access the workspace is the owner/admin's authority). `hr/whoami` reads
+ * the role from the scope's own grants, so this is the scope-local permission model, not a
+ * second source of truth. Throws 401 (no session) / 403 (not an admin).
+ */
+async function requireAdmin(c: { env: Env; req: { raw: Request } }) {
+  const scope = await stub(c);
+  const who = (await scope.invoke('hr/whoami', undefined)) as { role: string };
+  if (who.role !== 'hr-admin') throw new HTTPException(403, { message: 'only an admin can manage invites' });
+  return scope;
+}
+
+const inviteBody = z.object({
+  email: z.string().email().optional(),
+  /** One of the vertical's roles (hr-admin | manager | payroll) — validated against ROLES. */
+  roleKey: z.string().min(1),
+});
+
+/**
  * Who am I, in the shape the SPA centres on: `{ key, display, role, country, employeeId }`.
  * The principal comes from the auth seam; the role hint + linked employee come from the
  * scope itself (`hr/whoami`), so a real hosted owner (holding `hr-admin`) lands on the
@@ -253,6 +287,54 @@ app.get('/api/me', async (c) => {
  * catch-all would swallow) so the client gets clean JSON.
  */
 app.get('/api/cast', (c) => c.json([]));
+
+/**
+ * Invites (the post-setup join path — invite-only, decision with the team). Admin-only.
+ * Creating one pre-mints a member principal, grants it the chosen role at scope level, and
+ * records the invite in the tenant's identity DO keyed by the token's hash; the plaintext
+ * token rides only in the returned accept link. The roles a teammate can be invited at are
+ * this vertical's ROLES (hr-admin | manager | payroll) — employees are added separately.
+ */
+app.get('/api/invites', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  await requireAdmin(c);
+  return c.json({ roles: ROLES.map((r) => r.key), invites: await identityDo(c.env, node).listInvites(node.scopeId) });
+});
+
+app.post('/api/invites', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  await requireAdmin(c);
+  const { email, roleKey } = inviteBody.parse(await c.req.json());
+  if (!ROLES.some((r) => r.key === roleKey)) throw new HTTPException(400, { message: `unknown role '${roleKey}'` });
+  const principal = principalId.parse(ulid());
+  // A long, URL-safe token; only its hash is stored. Two UUIDs = 256 bits of entropy.
+  const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '');
+  await hostFor(c.env).assignScopeRole(node.scopeId, principal, roleKey);
+  await identityDo(c.env, node).createInvite(node.scopeId, principal, roleKey, email ?? null, await sha256Hex(token));
+  return c.json({ principal, roleKey, email: email ?? null, acceptUrl: `${originOf(c.req.raw)}/?invite=${token}` }, 201);
+});
+
+app.post('/api/invites/:principal/revoke', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  await requireAdmin(c);
+  await identityDo(c.env, node).revokeInvite(node.scopeId, c.req.param('principal'));
+  return c.body(null, 204);
+});
+
+/**
+ * Accept an invite: the invitee has just signed up (with the token, so sign-up was allowed),
+ * and now claims it while authenticated. Binds their subject → the invite's pre-minted
+ * principal in the identity directory; `/api/me` then resolves them as that member.
+ */
+app.post('/api/accept-invite', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  const subject = await authProviderFor(c.env, c.req.raw).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'sign in before accepting an invite' });
+  const { token } = z.object({ token: z.string().min(1) }).parse(await c.req.json());
+  const principal = await identityDo(c.env, node).claimInvite(node.scopeId, subject.sub, await sha256Hex(token));
+  if (!principal) throw new HTTPException(400, { message: 'this invite is invalid or already used' });
+  return c.json({ ok: true, principal });
+});
 
 // Generic invoke: the kernel checks the permission inside every operation, so a generic
 // route is exactly as safe as an explicit table — and far less code.

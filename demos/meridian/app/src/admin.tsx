@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api, ApiError, fmtMoney, type PayrollExport } from './api';
+import { useEffect, useState } from 'react';
+import { api, ApiError, fmtMoney, type Invite, type PayrollExport } from './api';
 import { todayISO, type AdminData } from './data';
 import { Button } from './ui';
 
@@ -12,7 +12,7 @@ import { Button } from './ui';
  * every op, so a non-admin who reached these calls would be refused regardless.
  */
 
-export type AdminTab = 'setup' | 'leavetypes' | 'people' | 'projects' | 'payroll';
+export type AdminTab = 'setup' | 'leavetypes' | 'people' | 'projects' | 'payroll' | 'access';
 
 export const ADMIN_TABS: { key: AdminTab; label: string; icon: string }[] = [
   { key: 'setup', label: 'Setup', icon: 'home' },
@@ -20,6 +20,7 @@ export const ADMIN_TABS: { key: AdminTab; label: string; icon: string }[] = [
   { key: 'people', label: 'People', icon: 'people' },
   { key: 'projects', label: 'Projects', icon: 'timesheet' },
   { key: 'payroll', label: 'Payroll', icon: 'expenses' },
+  { key: 'access', label: 'Access', icon: 'people' },
 ];
 
 export interface AdminProps {
@@ -257,6 +258,86 @@ export function AdminPeople({ d, reload, toast }: AdminProps) {
         <input style={inputStyle} aria-label="Email" placeholder="Email (optional)" value={email} onChange={(e) => setEmail(e.target.value)} />
         <Button disabled={busy || !name.trim()} onClick={submit}>Add employee</Button>
         <div className="muted" style={{ fontSize: 12 }}>National id / salary and country scope are set on the employee record; erasure crypto-shreds the PII while absence facts survive (§8).</div>
+      </div>
+    </>
+  );
+}
+
+// -- Access (member invites) ------------------------------------------------
+
+/**
+ * Invite teammates to this workspace (the post-setup join path — the instance is
+ * invite-only once the admin has set it up). Each invite grants a role and produces a
+ * one-time accept link to share; a teammate who opens it creates their login and lands
+ * with that role. Employees (HR records) are separate — this is about who can sign in.
+ * Self-contained: it reads its own invite list rather than the shared admin bundle.
+ */
+export function AdminAccess({ toast }: { toast: (m: string) => void }) {
+  const [roles, setRoles] = useState<string[]>([]);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [role, setRole] = useState('');
+  const [email, setEmail] = useState('');
+  const [link, setLink] = useState<string | null>(null);
+  const { busy, err, run } = useRun(() => load(), toast);
+
+  const load = () => {
+    api
+      .invites()
+      .then((r) => {
+        setRoles(r.roles);
+        setInvites(r.invites);
+        setRole((cur) => cur || r.roles[0] || '');
+      })
+      .catch(() => {});
+  };
+  useEffect(load, []);
+
+  const create = () =>
+    run(async () => {
+      const r = await api.createInvite(role || roles[0] || 'manager', email.trim() || undefined);
+      setLink(r.acceptUrl);
+      setEmail('');
+    }, 'Invite created');
+
+  const revoke = (principal: string) => run(async () => { await api.revokeInvite(principal); }, 'Invite revoked');
+
+  return (
+    <>
+      <h1 className="page-title">Access</h1>
+      <div className="page-sub">Who can sign in to this workspace. Invite a teammate at a role; they get a one-time link to create their login.</div>
+
+      <div className="section-label">Invite a teammate</div>
+      <div className="card" style={{ display: 'grid', gap: 10 }}>
+        {err && <div className="err-banner">{err}</div>}
+        <input style={inputStyle} type="email" aria-label="Email" placeholder="Email (optional — for your own reference)" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <select style={inputStyle} aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)}>
+          {roles.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <Button disabled={busy || !role} onClick={create}>Create invite link</Button>
+        {link && (
+          <div style={{ display: 'grid', gap: 6 }}>
+            <div className="muted" style={{ fontSize: 12 }}>Share this one-time link — it expires when used:</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input style={{ ...inputStyle, fontFamily: 'var(--mono, monospace)', fontSize: 12.5 }} readOnly value={link} onFocus={(e) => e.currentTarget.select()} />
+              <Button onClick={() => { void navigator.clipboard?.writeText(link); toast('Link copied'); }}>Copy</Button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="section-label">Pending invites</div>
+      <div className="card tight">
+        {invites.length === 0 && <div className="muted" style={{ fontSize: 14, padding: 6 }}>No pending invites.</div>}
+        {invites.map((iv) => (
+          <div className="row" key={iv.principal}>
+            <span className="avatar">{(iv.email ?? iv.roleKey).slice(0, 2).toUpperCase()}</span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{iv.email ?? 'Invite'}</div>
+              <div className="muted" style={{ fontSize: 12.5 }}>{iv.roleKey} · awaiting sign-up</div>
+            </div>
+            <button type="button" className="link-btn" onClick={() => revoke(iv.principal)} style={{ background: 'none', border: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 13 }}>Revoke</button>
+          </div>
+        ))}
       </div>
     </>
   );
