@@ -20,22 +20,42 @@ export const getSite = (): string => localStorage.getItem(SITE_KEY) ?? 'cafe';
 export const setSite = (slug: string): void => localStorage.setItem(SITE_KEY, slug);
 
 function headers(): Record<string, string> {
-  return { 'content-type': 'application/json', 'x-principal': getPrincipal(), 'x-site': getSite() };
+  const h: Record<string, string> = { 'content-type': 'application/json' };
+  const p = getPrincipal();
+  if (p) h['x-principal'] = p; // dev-header auth only; the deployed worker ignores it (uses the session)
+  h['x-site'] = getSite(); // dev site selector; the worker uses the routed scope
+  return h;
 }
 
 export async function op<T>(name: string, input: unknown = {}): Promise<T> {
-  const res = await fetch(`/api/op/${name}`, { method: 'POST', headers: headers(), body: JSON.stringify(input) });
+  const res = await fetch(`/api/op/${name}`, { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(input) });
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new ApiError((body as { error?: string }).error ?? `${res.status}`, res.status);
   return body;
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: headers() });
+  const res = await fetch(path, { headers: headers(), credentials: 'same-origin' });
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new ApiError((body as { error?: string }).error ?? `${res.status}`, res.status);
   return body;
 }
+
+// Better Auth via the worker → the tenant's IdentityDO. A successful call sets the
+// same-origin session cookie; the app reloads and /api/me resolves. The FIRST sign-in on a
+// fresh instance claims the owner seat (→ admin).
+async function authPost(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`/api/auth/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body) });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new ApiError(b.message ?? b.error ?? `Auth failed (${res.status})`, res.status);
+  }
+}
+export const auth = {
+  signUp: (email: string, password: string, name: string) => authPost('sign-up/email', { email, password, name }),
+  signIn: (email: string, password: string) => authPost('sign-in/email', { email, password }),
+  signOut: () => authPost('sign-out', {}),
+};
 
 // ── Types mirrored from the vertical (kept minimal, only what the app renders) ──
 
@@ -43,7 +63,23 @@ export type EntryStatus = 'draft' | 'in_review' | 'approved' | 'published' | 'un
 
 export interface Persona { id: string; name: string; roles: Record<string, string> }
 export interface Site { slug: string; name: string }
-export interface Me { principal: string; name: string; site: string; role: string | null }
+export interface Caps { read: boolean; author: boolean; review: boolean; publish: boolean; admin: boolean }
+export type Me =
+  | { mode: 'authed'; principal: string; display: string; site: string | null; can: Caps; role: string }
+  | { mode: 'needs-setup' }
+  | { mode: 'anon' };
+
+export function capsFromRole(role: string | null): Caps {
+  const r = role ?? '';
+  return {
+    read: true,
+    author: ['author', 'editor', 'publisher', 'admin'].includes(r),
+    review: ['editor', 'publisher', 'admin'].includes(r),
+    publish: ['publisher', 'admin'].includes(r),
+    admin: r === 'admin',
+  };
+}
+export const roleLabel = (c: Caps): string => (c.admin ? 'admin' : c.publish ? 'publisher' : c.review ? 'editor' : c.author ? 'author' : 'viewer');
 export interface EntryListItem { id: string; type_key: string; status: EntryStatus; slug: string | null; title: string; updated_at: string }
 export interface FieldDef { type: string; required?: boolean; index?: boolean; options?: string[]; target?: string; source?: string; maxLen?: number }
 export interface ContentTypeDef { key: string; version: number; title: string; titleField: string; slugField?: string; fields: Record<string, FieldDef> }
@@ -54,7 +90,19 @@ export interface DeliveryItem { type_key: string; slug: string | null; title: st
 export const api = {
   personas: () => get<Persona[]>('/api/personas'),
   sites: () => get<Site[]>('/api/sites'),
-  me: () => get<Me>('/api/me'),
+  // Normalizes both the dev server ({principal,name,site,role}) and the worker
+  // ({status:'needs-setup'} | {key,display,site,can} | 401) into one shape.
+  me: async (): Promise<Me> => {
+    const res = await fetch('/api/me', { headers: headers(), credentials: 'same-origin' });
+    if (res.status === 401) return { mode: 'anon' };
+    const b = (await res.json().catch(() => ({}))) as {
+      status?: string; can?: Caps; key?: string; display?: string; site?: string; principal?: string; name?: string; role?: string;
+    };
+    if (b.status === 'needs-setup') return { mode: 'needs-setup' };
+    if (b.can) return { mode: 'authed', principal: b.key ?? '', display: b.display ?? 'You', site: b.site ?? null, can: b.can, role: roleLabel(b.can) };
+    if (b.principal) { const can = capsFromRole(b.role ?? null); return { mode: 'authed', principal: b.principal, display: b.name ?? 'You', site: b.site ?? null, can, role: b.role ?? roleLabel(can) }; }
+    return { mode: 'anon' };
+  },
   listTypes: () => op<{ def: ContentTypeDef; sql: string }[]>('list-types'),
   saveType: (def: { key: string; title: string; titleField: string; slugField?: string; fields: Record<string, FieldDef> }) => op<ContentTypeDef>('save-type', def),
   deleteType: (key: string) => op<{ deleted: string }>('delete-type', { key }),

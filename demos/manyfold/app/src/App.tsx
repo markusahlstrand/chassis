@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   api,
   ApiError,
+  capsFromRole,
   getPrincipal,
   setPrincipal,
   getSite,
@@ -15,22 +16,13 @@ import {
   type Site,
 } from './api';
 import { Button, Card, ColHead, Empty, Mono, Pill, StatusBadge } from './ui';
+import { SignIn } from './Auth';
 import { EntryForm } from './EntryForm';
 import { DeliveryPreview } from './Delivery';
 import { ModelsView, ModelEditorView, RelationshipMap, MigrationsView } from './ModelBuilder';
 import { MembersView, AssetLibrary } from './Workspace';
 
 const TYPE_ORDER = ['post', 'page', 'snippet', 'author'];
-
-function capsOf(role: string | null): { author: boolean; review: boolean; publish: boolean; admin: boolean } {
-  const r = role ?? '';
-  return {
-    author: ['author', 'editor', 'publisher', 'admin'].includes(r),
-    review: ['editor', 'publisher', 'admin'].includes(r),
-    publish: ['publisher', 'admin'].includes(r),
-    admin: r === 'admin',
-  };
-}
 
 type View =
   | { kind: 'home' }
@@ -90,21 +82,24 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [view, navigate] = useHashRoute();
   const [tick, setTick] = useState(0); // bump to refetch after a mutation
+  const [booted, setBooted] = useState(false);
 
-  // Bootstrap: personas + sites once; pick a default persona if none stored, then load.
+  // Bootstrap: personas + sites once (both 404 on the deployed worker → []). Pick a default
+  // persona if none stored (dev only), then load.
   useEffect(() => {
     (async () => {
-      const [ps, ss] = await Promise.all([api.personas(), api.sites()]);
+      const [ps, ss] = await Promise.all([api.personas().catch(() => []), api.sites().catch(() => [])]);
       setPersonas(ps);
       setSites(ss);
       if (!getPrincipal() && ps.length) setPrincipal(ps.find((p) => p.name.startsWith('Emil'))?.id ?? ps[0].id);
+      setBooted(true);
       setTick((t) => t + 1);
-    })().catch(() => undefined);
+    })().catch(() => setBooted(true));
   }, []);
 
   // Resolve "me" + the content model whenever the persona/site changes (each site is a scope).
   useEffect(() => {
-    api.me().then(setMe).catch(() => setMe(null));
+    api.me().then(setMe).catch(() => setMe({ mode: 'anon' }));
     api.listTypes().then((t) => setTypes(t.map((x) => x.def))).catch(() => undefined);
   }, [tick]);
 
@@ -113,14 +108,25 @@ export default function App() {
   }, [theme]);
 
   const refresh = () => setTick((t) => t + 1);
-  const caps = capsOf(me?.role ?? null);
+  const caps = me?.mode === 'authed' ? me.can : capsFromRole(null);
+
+  // Auth gate. Deployed worker: needs-setup → create the admin; anon → sign in. Dev server:
+  // /api/me always resolves a persona, so this only shows the brief loading splash.
+  const splash = <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'var(--bg)' }}>Loading…</div>;
+  if (!booted || !me) return splash;
+  if (me.mode !== 'authed') {
+    if (personas.length > 0) return splash; // dev: persona still resolving, don't flash sign-in
+    return <SignIn firstRun={me.mode === 'needs-setup'} />;
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <TopBar
         sites={sites}
         personas={personas}
-        me={me}
+        role={me.role}
+        showPersona={personas.length > 0}
+        showSites={sites.length > 0}
         theme={theme}
         onSite={(slug) => { setSite(slug); navigate({ kind: 'home' }); refresh(); }}
         onPersona={(id) => { setPrincipal(id); refresh(); }}
@@ -178,13 +184,14 @@ export default function App() {
 function TopBar(props: {
   sites: Site[];
   personas: Persona[];
-  me: Me | null;
+  role: string | null;
+  showPersona: boolean;
+  showSites: boolean;
   theme: 'light' | 'dark';
   onSite: (slug: string) => void;
   onPersona: (id: string) => void;
   onTheme: () => void;
 }) {
-  const { me } = props;
   const activeSite = getSite();
   const activePrincipal = getPrincipal();
   return (
@@ -205,18 +212,24 @@ function TopBar(props: {
         Manyfold
       </div>
 
-      {/* Site switcher — the load-bearing multi-scope control. */}
-      <Select value={activeSite} onChange={props.onSite} options={props.sites.map((s) => ({ value: s.slug, label: s.name }))} accent />
+      {/* Site switcher — the load-bearing multi-scope control (dev has many; a hosted install is one site). */}
+      {props.showSites && (
+        <Select value={activeSite} onChange={props.onSite} options={props.sites.map((s) => ({ value: s.slug, label: s.name }))} accent />
+      )}
 
-      {me?.role && (
+      {props.role && (
         <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--muted)' }}>
-          {me.role} · in this site
+          {props.role} · in this site
         </span>
       )}
 
       <div style={{ flex: 1 }} />
-      <Mono style={{ fontSize: 11 }}>dev persona</Mono>
-      <Select value={activePrincipal} onChange={props.onPersona} options={props.personas.map((p) => ({ value: p.id, label: p.name }))} />
+      {props.showPersona && (
+        <>
+          <Mono style={{ fontSize: 11 }}>dev persona</Mono>
+          <Select value={activePrincipal} onChange={props.onPersona} options={props.personas.map((p) => ({ value: p.id, label: p.name }))} />
+        </>
+      )}
       <Button size="sm" onClick={props.onTheme}>{props.theme === 'light' ? '☾' : '☀'}</Button>
     </header>
   );
