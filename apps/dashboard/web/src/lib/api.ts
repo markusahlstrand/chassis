@@ -165,6 +165,33 @@ export interface ScopeTablePage {
   offset: number;
 }
 
+/** A declared env var for a vertical — drives the Env form (placeholder + description). */
+export interface EnvVarSpec {
+  key: string;
+  label?: string;
+  description: string;
+  placeholder?: string;
+  required: boolean;
+  secret: boolean;
+  default?: string;
+  group?: string;
+}
+
+/** One stored env var — a secret's value is never sent back (write-only). */
+export interface AppEnvValue {
+  key: string;
+  isSecret: boolean;
+  hasValue: boolean;
+  value: string | null;
+  updatedAt: string;
+}
+
+/** `GET /api/apps/:scope/env` — the vertical's declared spec + this app's current values. */
+export interface AppEnvView {
+  spec: EnvVarSpec[];
+  values: AppEnvValue[];
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -262,6 +289,17 @@ export const api = {
   /** Move the app to its vertical's current prod version (rebind the scope). No-op if already current. */
   updateApp: (scopeId: string) =>
     call<UpdateResult>(`/apps/${encodeURIComponent(scopeId)}/update`, { method: 'POST' }),
+  /** The app's env-spec + current values (secrets masked). */
+  appEnv: (scopeId: string) => call<AppEnvView>(`/apps/${encodeURIComponent(scopeId)}/env`),
+  /** Upsert env values; an empty value leaves a key unchanged (untouched secret). */
+  setAppEnv: (scopeId: string, entries: Array<{ key: string; value: string; secret: boolean }>) =>
+    call<{ saved: number }>(`/apps/${encodeURIComponent(scopeId)}/env`, {
+      method: 'PUT',
+      body: JSON.stringify({ entries }),
+    }),
+  /** Remove one env var. */
+  deleteAppEnv: (scopeId: string, key: string) =>
+    call<void>(`/apps/${encodeURIComponent(scopeId)}/env/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   listDeployments: () => call<Deployment[]>('/deployments'),
   /** The tenant's GitHub-import state — connection status + the repos it can see. */
   gitRepos: () => call<GitReposResult>('/github/repos'),

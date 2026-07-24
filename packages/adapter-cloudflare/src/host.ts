@@ -229,7 +229,8 @@ interface ControlPlaneStub {
   setHostnameStatus(hostname: string, status: string, note: string | null): Promise<void>;
   listHostnames(filter: { tenantId?: string; scopeId?: string }): Promise<HostnameRow[]>;
   readVertical(slug: string): Promise<VerticalRow | undefined>;
-  insertVertical(slug: string, name: string, source: string, ownerTenant: string | null, createdAt: string): Promise<void>;
+  insertVertical(slug: string, name: string, source: string, ownerTenant: string | null, envSpec: string | null, createdAt: string): Promise<void>;
+  updateVerticalEnvSpec(slug: string, envSpec: string | null): Promise<void>;
   listVerticals(): Promise<VerticalRow[]>;
   readVersion(id: string): Promise<VersionRow | undefined>;
   insertVersion(v: {
@@ -950,7 +951,14 @@ export class CloudflareScopeHost implements ScopeHost {
       });
 
     const mapVertical = (r: VerticalRow): Vertical =>
-      verticalSchema.parse({ slug: r.slug, name: r.name, source: r.source, ownerTenant: r.owner_tenant, createdAt: r.created_at });
+      verticalSchema.parse({
+        slug: r.slug,
+        name: r.name,
+        source: r.source,
+        ownerTenant: r.owner_tenant,
+        ...(r.env_spec ? { envSpec: JSON.parse(r.env_spec) } : {}),
+        createdAt: r.created_at,
+      });
     const mapVersion = (r: VersionRow): VerticalVersion =>
       verticalVersion.parse({
         id: r.id,
@@ -1295,6 +1303,7 @@ export class CloudflareScopeHost implements ScopeHost {
         toRouteTarget(await this.cp.readHostname(normalizeHostname(raw))),
       registerVertical: async (actor, input: RegisterVerticalInput) => {
         const parsed = registerVerticalInput.parse(input);
+        const envSpecJson = parsed.envSpec ? JSON.stringify(parsed.envSpec) : null;
         const existing = await this.cp.readVertical(parsed.slug);
         if (existing) {
           // Idempotent on an identical registration; a changed source OR owner conflicts —
@@ -1303,8 +1312,12 @@ export class CloudflareScopeHost implements ScopeHost {
             existing.source === parsed.source &&
             existing.name === parsed.name &&
             existing.owner_tenant === parsed.ownerTenant
-          )
+          ) {
+            // The env-spec evolves with the manifest — refresh it on an otherwise-identical
+            // re-registration so a declared config change propagates without a conflict.
+            await this.cp.updateVerticalEnvSpec(parsed.slug, envSpecJson);
             return;
+          }
           if (existing.owner_tenant !== parsed.ownerTenant) {
             throw new Error(
               `vertical '${parsed.slug}' is owned by ${existing.owner_tenant ?? 'the platform'}, not ${parsed.ownerTenant ?? 'the platform'}`,
@@ -1312,7 +1325,7 @@ export class CloudflareScopeHost implements ScopeHost {
           }
           throw new Error(`vertical '${parsed.slug}' is already registered as ${existing.source}`);
         }
-        await this.cp.insertVertical(parsed.slug, parsed.name, parsed.source, parsed.ownerTenant, new Date().toISOString());
+        await this.cp.insertVertical(parsed.slug, parsed.name, parsed.source, parsed.ownerTenant, envSpecJson, new Date().toISOString());
         await this.recordAdmin(actor, 'registerVertical', { tenantId: null }, null, parsed);
       },
       listVerticals: async (actor) => {

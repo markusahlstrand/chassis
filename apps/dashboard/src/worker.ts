@@ -841,6 +841,58 @@ app.post('/api/apps/:scopeId/update', async (c) => {
   return c.json(result);
 });
 
+/**
+ * One app's environment/config (the Env tab). GET returns the vertical's declared
+ * env-spec (placeholder + description per key, from the catalog/manifest) alongside the
+ * app's current values — secret values are never echoed (write-only). PUT upserts values;
+ * DELETE removes one key. The app must be the caller's own, and managing config is the
+ * same authority as managing the app. Delivery to the running app scope is a later step
+ * (a hosted vertical reads its per-scope config at runtime); this is the authoring surface.
+ */
+app.get('/api/apps/:scopeId/env', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  // The env-spec comes from the REGISTRY (a vertical declares it in its manifest; the
+  // registry carries it), so a pushed builder vertical works the same as a builtin — the
+  // catalog is only a fallback for a not-yet-seeded registry.
+  await ensureCatalog(host, STAFF);
+  const registered = (await host.admin.listVerticals(STAFF)).find((v) => v.slug === appRow.vertical_slug);
+  const spec = registered?.envSpec ?? CATALOG[appRow.vertical_slug]?.envSpec ?? [];
+  const values = await dash.invoke('dashboard/list-app-env', { appScopeId: appRow.app_scope_id });
+  return c.json({ spec, values });
+});
+
+app.put('/api/apps/:scopeId/env', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  const body = await c.req.json<{ entries?: Array<{ key: string; value: string; secret?: boolean }> }>();
+  const entries = (body.entries ?? []).filter((e) => e && typeof e.key === 'string');
+  if (entries.length === 0) return c.json({ saved: 0 });
+  return c.json(await dash.invoke('dashboard/set-app-env', { appScopeId: appRow.app_scope_id, entries }));
+});
+
+app.delete('/api/apps/:scopeId/env/:key', async (c) => {
+  const host = hostFor(c.env);
+  const node = await resolveAccount(host, c.env, getCookie(c, SESSION_COOKIE), getCookie(c, TEAM_COOKIE));
+  if (!node) throw new HTTPException(401, { message: 'unauthorized' });
+  const dash = await host.getScope(node.principal, node.tenantId, node.scopeId);
+  const apps = (await dash.invoke('dashboard/list-apps', {})) as DashboardAppRow[];
+  const appRow = apps.find((a) => a.app_scope_id === c.req.param('scopeId'));
+  if (!appRow) throw new HTTPException(404, { message: 'app not found' });
+  await dash.invoke('dashboard/delete-app-env', { appScopeId: appRow.app_scope_id, key: c.req.param('key') });
+  return c.body(null, 204);
+});
+
 /** Create an app — provisioned into MY tenant (from the session), authorized in-scope. */
 app.post('/api/apps', async (c) => {
   const host = hostFor(c.env);

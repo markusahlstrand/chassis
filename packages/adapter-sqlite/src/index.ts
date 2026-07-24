@@ -352,6 +352,8 @@ interface VerticalRow {
   name: string;
   source: string;
   owner_tenant: string | null;
+  /** The vertical's declared env-spec, as a JSON string (or null). */
+  env_spec: string | null;
   created_at: string;
 }
 
@@ -531,6 +533,9 @@ export class SqliteScopeHost implements ScopeHost {
         -- The tenant that OWNS this vertical (builder-plane.md). NULL = platform-owned.
         -- Denormalized nullable column so ownership is queryable without parsing slugs.
         owner_tenant TEXT,
+        -- The vertical's declared env-spec (moduleManifest.envSpec) as JSON, so a host or
+        -- console can render a config form for any registered vertical. NULL = declares none.
+        env_spec     TEXT,
         created_at   TEXT NOT NULL
       );
       -- admission: 'pending' until the gates pass. A push is not a deploy, and
@@ -1538,6 +1543,7 @@ export class SqliteScopeHost implements ScopeHost {
         name: r.name,
         source: r.source,
         ownerTenant: r.owner_tenant,
+        ...(r.env_spec ? { envSpec: JSON.parse(r.env_spec) } : {}),
         createdAt: r.created_at,
       });
     const readVertical = (slugValue: string): Vertical | undefined => {
@@ -2041,6 +2047,7 @@ export class SqliteScopeHost implements ScopeHost {
       },
       registerVertical: async (actor: PlatformActorId, input: RegisterVerticalInput) => {
         const parsed = registerVerticalInput.parse(input);
+        const envSpecJson = parsed.envSpec ? JSON.stringify(parsed.envSpec) : null;
         const existing = readVertical(parsed.slug);
         if (existing) {
           // Idempotent on an identical registration. A conflicting one throws:
@@ -2051,8 +2058,13 @@ export class SqliteScopeHost implements ScopeHost {
             existing.source === parsed.source &&
             existing.name === parsed.name &&
             existing.ownerTenant === parsed.ownerTenant
-          )
+          ) {
+            // The env-spec is not identity — it evolves with the manifest, so refresh it
+            // on an otherwise-identical re-registration (ensureCatalog runs each boot) so
+            // a declared config change propagates without a conflict.
+            this.directory.prepare('UPDATE verticals SET env_spec = ? WHERE slug = ?').run(envSpecJson, parsed.slug);
             return;
+          }
           if (existing.ownerTenant !== parsed.ownerTenant) {
             throw new Error(
               `vertical '${parsed.slug}' is owned by ${existing.ownerTenant ?? 'the platform'}, not ${parsed.ownerTenant ?? 'the platform'}`,
@@ -2064,9 +2076,9 @@ export class SqliteScopeHost implements ScopeHost {
         }
         this.directory
           .prepare(
-            'INSERT INTO verticals (slug, name, source, owner_tenant, created_at) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO verticals (slug, name, source, owner_tenant, env_spec, created_at) VALUES (?, ?, ?, ?, ?, ?)',
           )
-          .run(parsed.slug, parsed.name, parsed.source, parsed.ownerTenant, new Date().toISOString());
+          .run(parsed.slug, parsed.name, parsed.source, parsed.ownerTenant, envSpecJson, new Date().toISOString());
         this.recordAdmin(actor, 'registerVertical', { tenantId: null }, null, parsed);
       },
       listVerticals: async (actor) => {
@@ -3077,6 +3089,7 @@ export class SqliteScopeHost implements ScopeHost {
     this.ensureColumn(this.directory, '_substrat_tenant_tuples', 'revoked_at', 'revoked_at TEXT');
     // builder-plane.md Phase 1b: who owns a vertical (NULL = platform-owned).
     this.ensureColumn(this.directory, 'verticals', 'owner_tenant', 'owner_tenant TEXT');
+    this.ensureColumn(this.directory, 'verticals', 'env_spec', 'env_spec TEXT');
     const existing = new Set(
       (this.directory.prepare('PRAGMA table_info(scopes)').all() as { name: string }[]).map(
         (c) => c.name,

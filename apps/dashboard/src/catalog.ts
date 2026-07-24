@@ -1,4 +1,4 @@
-import type { PermissionKey, PlatformActorId } from '@substrat-run/contracts';
+import type { EnvVarSpec, PermissionKey, PlatformActorId } from '@substrat-run/contracts';
 import type { ScopeHost } from '@substrat-run/kernel';
 import { PROTOCOL_PERM as PROTO } from '@substrat-run/engine-protocol';
 import { PERM as WO } from '@substrat-run/engine-workorder';
@@ -26,6 +26,14 @@ export interface CatalogEntry {
    * true (or drop the flag) once the vertical is deployed + promoted to prod.
    */
   connected?: boolean;
+  /**
+   * Declared environment for this vertical — placeholder + description per key, so the
+   * dashboard can render a real settings form. Populated for STANDALONE apps whose own
+   * worker script owns its secrets (e.g. an auth server); a hosted dispatch vertical takes
+   * per-tenant config through the connection store instead of per-app worker secrets, so it
+   * leaves this empty. Mirrors a vertical's own `moduleManifest.envSpec` / app manifest.
+   */
+  envSpec?: EnvVarSpec[];
 }
 
 export const CATALOG: Record<string, CatalogEntry> = {
@@ -69,10 +77,17 @@ export const CATALOG: Record<string, CatalogEntry> = {
   },
 };
 
-/** Seed the registry from the catalog (idempotent) — what `GET /api/catalog` lists. */
+/** Seed the registry from the catalog (idempotent) — what `GET /api/catalog` lists. The
+ *  vertical's declared `envSpec` rides along, so the dashboard renders its config form from
+ *  the registry (uniformly for builtin + pushed verticals), not from this hardcoded map. */
 export async function ensureCatalog(host: ScopeHost, staff: PlatformActorId): Promise<void> {
   for (const [slug, e] of Object.entries(CATALOG)) {
-    await host.admin.registerVertical(staff, { slug, name: e.name, source: 'builtin' });
+    await host.admin.registerVertical(staff, {
+      slug,
+      name: e.name,
+      source: 'builtin',
+      ...(e.envSpec ? { envSpec: e.envSpec } : {}),
+    });
   }
 }
 

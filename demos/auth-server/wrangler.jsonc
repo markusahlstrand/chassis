@@ -1,0 +1,42 @@
+{
+	"name": "substrat-auth-server",
+	"main": "src/worker.ts",
+	"compatibility_date": "2025-01-01",
+	// Better Auth needs Node built-ins on workerd.
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	// Build the admin SPA and inline it into the worker BEFORE bundling. Wrangler runs this
+	// on every `wrangler dev` / `--dry-run`, so a deploy always ships the current UI with no
+	// extra step. The SPA rides along as ordinary worker modules (src/assets.generated.ts) —
+	// there is no ASSETS binding.
+	"build": {
+		"command": "pnpm --dir app build && node scripts/gen-assets.mjs"
+	},
+	// This is a STANDALONE identity provider, not a Substrat vertical: it composes no kernel
+	// engines and has no ScopeDO. Its entire durable state — users, sessions, OAuth clients,
+	// access tokens, consent, and the JWKS signing keys — lives in ONE Durable Object
+	// (a single global issuer, addressed by a fixed name), running Better Auth over its own
+	// SQLite. A per-instance signing secret is generated and persisted inside that DO, so
+	// there is no shared `wrangler secret` to manage.
+	"durable_objects": {
+		"bindings": [{ "name": "AUTH", "class_name": "AuthServerDO" }]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["AuthServerDO"]
+		}
+	]
+	// Config on deploy (secrets / vars). A Durable Object reads these off `this.env` exactly
+	// like the worker does, so the AuthServerDO seeds the first admin from ADMIN_* on init:
+	//   PUBLIC_ORIGIN  — the canonical issuer origin (e.g. https://auth.substrat.run). Used as
+	//                    the Better Auth baseURL so discovery/JWKS/token URLs are absolute and
+	//                    stable regardless of which edge origin served the request.
+	//   ADMIN_EMAIL    — bootstrap admin address. With ADMIN_PASSWORD, the first admin is seeded
+	//                    deterministically on first init (no setup-screen race). Unset ⇒ the
+	//                    setup screen is the fallback bootstrap.
+	//   ADMIN_PASSWORD — bootstrap admin password (`wrangler secret put ADMIN_PASSWORD`).
+	//   EMAIL          — the Cloudflare Email Service `send_email` binding (password-reset +
+	//                    verification mail). Absent ⇒ the in-memory mock (mail is dropped).
+	//   EMAIL_FROM     — the sender address (its domain must be onboarded for sending).
+}

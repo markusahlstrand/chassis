@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "rootDir": ".",
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": [
+    "src/worker.ts",
+    "src/auth-do.ts",
+    "src/auth.ts",
+    "src/auth-schema.ts",
+    "src/email.ts",
+    "src/assets.ts",
+    "src/assets.generated.ts",
+    "db/ddl.ts"
+  ]
+}

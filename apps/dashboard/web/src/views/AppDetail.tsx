@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Dialog, Input, Tabs } from '@substrat-run/ui';
-import { api, type AppRow, type AppEvent, type Deployment, type ScopeTable, type ScopeTablePage } from '../lib/api';
-import { verticalMeta, APP_TABS, ENV_VARS, INTEGRATIONS, ENV_OPTS, MOCK_SCOPE_TABLES, MOCK_SCOPE_TABLE_PAGES, type EnvVar } from '../lib/demo';
+import { api, type AppRow, type AppEvent, type Deployment, type ScopeTable, type ScopeTablePage, type AppEnvView } from '../lib/api';
+import { verticalMeta, APP_TABS, INTEGRATIONS, MOCK_SCOPE_TABLES, MOCK_SCOPE_TABLE_PAGES, MOCK_APP_ENV } from '../lib/demo';
 import { DEV_MOCK, MOCK_DEPLOYMENTS } from '../lib/mock';
 import { relativeTime, shortDate, shortId } from '../lib/format';
 import { Ic } from '../lib/icons';
@@ -55,7 +55,7 @@ export function AppDetail({
       {tab === 'overview' && <Overview app={app} meta={meta} statusKind={statusKind} statusLabel={statusLabel} />}
       {tab === 'data' && <DataBrowser app={app} />}
       {tab === 'deployments' && <Deployments app={app} />}
-      {tab === 'env' && <EnvVars />}
+      {tab === 'env' && <EnvVars app={app} />}
       {tab === 'domains' && <AppDomains />}
       {tab === 'integrations' && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 16 }}>{INTEGRATIONS.slice(0, 2).map((i) => <IntegrationCard key={i.name} integ={i} />)}</div>}
       {tab === 'settings' && <Settings app={app} onDeleted={onDeleted} />}
@@ -485,50 +485,169 @@ const pagerBtn = (enabled: boolean): React.CSSProperties => ({
   color: enabled ? 'var(--text-secondary)' : 'var(--text-tertiary)', opacity: enabled ? 1 : 0.5,
 });
 
-function EnvVars() {
-  const [rows, setRows] = useState<EnvVar[]>(ENV_VARS);
-  const [dirty, setDirty] = useState(0);
-  const COLS = '1.4fr 2fr 150px 80px';
-  const toggle = (i: number) =>
-    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, revealed: !r.revealed } : r)));
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'relative', paddingBottom: dirty ? 60 : 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Secrets are masked by default — every reveal is audited.</div>
+/**
+ * The Env tab — a REAL settings form driven by the vertical's declared env-spec
+ * (placeholder + description per key) plus this app's stored values. Secret values are
+ * write-only: never sent back, shown as "set" and left blank to keep. Values are stored
+ * on the account; the honesty banner names that delivery to the running app is on its next
+ * deploy (a hosted vertical reads its per-scope config then).
+ */
+function EnvVars({ app }: { app: AppRow }) {
+  const [view, setView] = useState<AppEnvView | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    if (DEV_MOCK) {
+      setView(MOCK_APP_ENV);
+      return;
+    }
+    let live = true;
+    setView(null);
+    setErr(null);
+    api
+      .appEnv(app.app_scope_id)
+      .then((v) => live && setView(v))
+      .catch((e) => live && setErr(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [app.app_scope_id, nonce]);
+
+  // Seed the inputs when a fresh view loads: non-secrets prefill their current value (or
+  // the spec default); secrets start blank (write-only — the value is never returned).
+  useEffect(() => {
+    if (!view) return;
+    const byKey = new Map(view.values.map((v) => [v.key, v]));
+    const next: Record<string, string> = {};
+    for (const s of view.spec) next[s.key] = s.secret ? '' : byKey.get(s.key)?.value ?? s.default ?? '';
+    for (const v of view.values) if (!view.spec.some((s) => s.key === v.key)) next[v.key] = v.isSecret ? '' : v.value ?? '';
+    setInputs(next);
+  }, [view]);
+
+  if (err) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--status-danger-fg)' }}>Couldn’t load configuration — {err}</div>;
+  if (!view) return <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>Loading configuration…</div>;
+
+  const specKeys = new Set(view.spec.map((s) => s.key));
+  const valueByKey = new Map(view.values.map((v) => [v.key, v]));
+  const custom = view.values.filter((v) => !specKeys.has(v.key));
+  const groups = new Map<string, typeof view.spec>();
+  for (const s of view.spec) {
+    const g = s.group ?? 'General';
+    (groups.get(g) ?? groups.set(g, []).get(g)!).push(s);
+  }
+
+  const set = (key: string, val: string) => setInputs((m) => ({ ...m, [key]: val }));
+
+  const save = async () => {
+    const entries: Array<{ key: string; value: string; secret: boolean }> = [];
+    for (const s of view.spec) {
+      const val = inputs[s.key] ?? '';
+      if (val !== '') entries.push({ key: s.key, value: val, secret: s.secret });
+    }
+    for (const v of custom) {
+      const val = inputs[v.key] ?? '';
+      if (val !== '') entries.push({ key: v.key, value: val, secret: v.isSecret });
+    }
+    if (entries.length === 0) {
+      setNote('Nothing to save — enter a value (blank leaves a secret unchanged).');
+      return;
+    }
+    setSaving(true);
+    setNote(null);
+    try {
+      const r = await api.setAppEnv(app.app_scope_id, entries);
+      setNote(`Saved ${r.saved} value${r.saved === 1 ? '' : 's'}. Applies to the app on its next deploy.`);
+      setNonce((n) => n + 1);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (key: string) => {
+    if (DEV_MOCK) return;
+    await api.deleteAppEnv(app.app_scope_id, key).catch(() => {});
+    setNonce((n) => n + 1);
+  };
+
+  const field = (
+    key: string,
+    opts: { label?: string; description?: string; placeholder?: string; required?: boolean; secret: boolean; hasValue: boolean },
+  ) => (
+    <div key={key} style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{opts.label ?? key}</span>
+        <MonoTag color="var(--text-tertiary)">{key}</MonoTag>
+        {opts.required && <span style={{ fontSize: 11, color: 'var(--status-danger-fg)' }}>required</span>}
+        {opts.secret && <Pill kind={opts.hasValue ? 'success' : 'neutral'}>{opts.hasValue ? 'secret · set' : 'secret'}</Pill>}
         <div style={{ flex: 1 }} />
-        <Button variant="secondary" onClick={() => setDirty((d) => d + 1)}>Add from .env</Button>
+        {opts.hasValue && (
+          <button type="button" aria-label="Remove" onClick={() => remove(key)} style={iconBtn}><Ic name="trash" size={14} /></button>
+        )}
       </div>
-      <div style={{ ...card, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 36, padding: '0 16px', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
-          <span>Key</span><span>Value</span><span>Environment</span><span />
+      {opts.description && <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 8, lineHeight: 1.5 }}>{opts.description}</div>}
+      <input
+        type={opts.secret ? 'password' : 'text'}
+        value={inputs[key] ?? ''}
+        onChange={(e) => set(key, e.target.value)}
+        placeholder={opts.secret && opts.hasValue ? '•••••••• (set — leave blank to keep)' : opts.placeholder ?? ''}
+        style={{
+          width: '100%', maxWidth: 460, height: 34, padding: '0 11px', fontSize: 13,
+          fontFamily: opts.secret ? 'inherit' : 'var(--font-mono)',
+          background: 'var(--surface-inset)', border: '1px solid var(--border-default)', borderRadius: 6, color: 'var(--text-primary)',
+        }}
+      />
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <HonestyBanner>
+        Configuration is stored on your account and applied to the app on its next deploy. Secret values are
+        write-only — masked, never shown again; leave a secret blank to keep it. (Delivery to the running app
+        reads its per-scope config at runtime; that step lands next.)
+      </HonestyBanner>
+
+      {view.spec.length === 0 && custom.length === 0 ? (
+        <div style={{ ...card, padding: 20, fontSize: 13, color: 'var(--text-tertiary)' }}>
+          This vertical declares no configuration.
         </div>
-        {rows.map((r, i) => (
-          <div key={r.key} style={{ display: 'grid', gridTemplateColumns: COLS, alignItems: 'center', height: 44, padding: '0 16px', borderBottom: '1px solid var(--border-subtle)', background: r.revealed ? 'var(--surface-brand-subtle)' : 'transparent' }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-primary)' }}>{r.key}</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: r.revealed ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
-              {r.revealed ? r.value.replace('••••••••••••••••', 'sk_live_9f21…7c0a') : '••••••••••••••••'}
-              {r.revealed && <span style={{ fontSize: 10, color: 'var(--status-warning-fg)', marginLeft: 8 }}>revealed — audited</span>}
-            </span>
-            <span style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.environment}</span>
-            <span style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', color: 'var(--text-tertiary)' }}>
-              <button type="button" aria-label="Reveal" onClick={() => toggle(i)} style={iconBtn}><Ic name="eye" size={14} color={r.revealed ? 'var(--brand-600)' : undefined} /></button>
-              <CopyButton text={r.key} size={14} />
-              <button type="button" aria-label="Delete" onClick={() => setDirty((d) => d + 1)} style={iconBtn}><Ic name="trash" size={14} /></button>
-            </span>
-          </div>
-        ))}
-        <div onClick={() => setDirty((d) => d + 1)} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 16px', color: 'var(--text-brand)', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-          <Ic name="plus" size={14} />Add variable
-        </div>
-      </div>
-      {dirty > 0 && (
-        <div style={{ position: 'sticky', bottom: 0, left: 0, right: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--surface-card)', border: '1px solid var(--border-default)', borderRadius: 8 }}>
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}><b style={{ color: 'var(--text-primary)' }}>{dirty} unsaved change{dirty === 1 ? '' : 's'}</b> — values apply on next use.</span>
-          <div style={{ flex: 1 }} />
-          <Button variant="ghost" onClick={() => setDirty(0)}>Discard</Button>
-          <Button onClick={() => setDirty(0)}>Save changes</Button>
-        </div>
+      ) : (
+        <>
+          {[...groups.entries()].map(([group, specs]) => (
+            <div key={group} style={{ ...card, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 16px', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>{group}</div>
+              {specs.map((s) =>
+                field(s.key, {
+                  ...(s.label !== undefined ? { label: s.label } : {}),
+                  description: s.description,
+                  ...(s.placeholder !== undefined ? { placeholder: s.placeholder } : {}),
+                  required: s.required,
+                  secret: s.secret,
+                  hasValue: valueByKey.get(s.key)?.hasValue ?? false,
+                }),
+              )}
+            </div>
+          ))}
+          {custom.length > 0 && (
+            <div style={{ ...card, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 16px', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>Other</div>
+              {custom.map((v) => field(v.key, { secret: v.isSecret, hasValue: v.hasValue }))}
+            </div>
+          )}
+        </>
       )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {note && <span style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{note}</span>}
+        <div style={{ flex: 1 }} />
+        <Button onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save configuration'}</Button>
+      </div>
     </div>
   );
 }
