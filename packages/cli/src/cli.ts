@@ -3,8 +3,11 @@
  * substrat — authenticated deploy tooling for the platform.
  *
  *   substrat login  [--cp <url>] [--token <serviceToken>]
- *   substrat push   <verticalDir> --slug <slug> --version <v> [--name <name>]
+ *   substrat push   [dir]  [--slug <slug>] [--version <v>] [--name <name>]
  *                   [--cp <url>] [--token <serviceToken>]
+ *
+ * `push` defaults dir to '.', slug/name from the vertical's package.json (`substrat` block
+ * or derived), and version to the registry's latest patch-bumped — flags override each.
  *
  * Auth is a service token (the control plane's SERVICE_TOKEN), sent as x-service-token
  * and resolved to the platform's service actor. `login` stores it in ~/.substrat/config.json
@@ -15,7 +18,7 @@
 import { createInterface } from 'node:readline';
 import { loadConfig, saveConfig, resolveAuth } from './config.js';
 import { browserLogin } from './login.js';
-import { push } from './push.js';
+import { push, readVerticalMeta, nextVersion } from './push.js';
 import { printVersions } from './versions.js';
 import { promote } from './promote.js';
 import { fetchWhoami } from './whoami.js';
@@ -45,9 +48,15 @@ Usage:
   substrat login    [--cp <url>]              sign in via the browser (per-human)
   substrat login    --token <serviceToken>    store a service credential (CI)
   substrat whoami                             show who you are + your workspaces
-  substrat push     <verticalDir> --slug <slug> --version <v> [--name <name>]
+  substrat push     [dir]                      push a vertical (slug/name/version default
+                                               from package.json; version auto-bumps)
   substrat promote  <slug> --channel dev|staging --version <versionId>
   substrat versions <slug>                    list a vertical's versions + channels
+
+'substrat push' defaults everything from the vertical's package.json — run it from inside the
+directory with no flags. Override any of: --slug, --name, --version. The slug/name come from a
+"substrat": { "slug", "name" } block (else derived from the package name); --version omitted
+means "the registry's latest, patch-bumped".
 
 Options (any command):
   --cp <url>       control-plane API base, e.g. https://console.substrat.net/api
@@ -106,21 +115,25 @@ async function cmdLogin(): Promise<void> {
 }
 
 async function cmdPush(): Promise<void> {
-  const dir = argv[1];
-  if (!dir || dir.startsWith('--')) {
-    console.error('usage: substrat push <verticalDir> --slug <slug> --version <v> [--name <name>]');
-    process.exit(1);
-  }
-  const slug = flag('slug');
-  const version = flag('version');
-  if (!slug || !version) {
-    console.error('missing --slug and/or --version');
-    process.exit(1);
-  }
+  // Directory defaults to '.' — run `substrat push` from inside the vertical.
+  const dir = argv[1] && !argv[1].startsWith('--') ? argv[1] : '.';
   const { controlPlaneUrl, header, as } = resolveAuth({ cp: flag('cp'), token: flag('token'), tenant: flag('tenant') });
+
+  // Slug + name default from the vertical's package.json (`substrat` block, else derived);
+  // a flag still wins. So `cd demos/meridian && substrat push` needs no --slug/--name.
+  const meta = readVerticalMeta(dir);
+  const slug = flag('slug') ?? meta.slug;
+  const name = flag('name') ?? meta.name;
+  if (!slug) {
+    console.error('no --slug given and none in package.json — add `"substrat": { "slug": "…" }` or pass --slug');
+    process.exit(1);
+  }
   console.log(`authenticating with ${as}`);
-  const v = await push({ dir, slug, version, name: flag('name'), controlPlaneUrl, authHeader: header });
-  console.log(`✓ pushed. version ${v.id} is ${v.admission}; deploymentRef=${v.deploymentRef}`);
+  // Version defaults to the registry's latest, patch-bumped — no hand-tracking. --version wins.
+  const version = flag('version') ?? (await nextVersion(controlPlaneUrl, header, slug, meta.versionSeed));
+  console.log(`pushing ${slug}@${version}${name && name !== slug ? ` (${name})` : ''} …`);
+  const v = await push({ dir, slug, version, name, controlPlaneUrl, authHeader: header });
+  console.log(`✓ pushed. version ${v.id} (${version}) is ${v.admission}; deploymentRef=${v.deploymentRef}`);
   console.log('  admit it in the console to let a scope bind it.');
 }
 

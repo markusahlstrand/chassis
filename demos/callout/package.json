@@ -4,6 +4,7 @@
   "private": true,
   "license": "Apache-2.0",
   "description": "FSM demo vertical (Callout) — see spec/testrun.md",
+  "substrat": { "slug": "callout", "name": "Callout" },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

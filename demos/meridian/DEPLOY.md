@@ -44,9 +44,13 @@ against an OIDC issuer (Supabase / Auth0 / AuthHero / Keycloak) instead.
 
    ```sh
    substrat login
-   substrat push demos/meridian --slug meridian --version 0.0.9 --name Meridian
-   substrat versions meridian        # confirm the version landed (admission: pending)
+   cd demos/meridian && substrat push   # slug/name from package.json; version auto-bumps
+   substrat versions meridian           # confirm the version landed (admission: pending)
    ```
+
+   `substrat push` needs no flags from inside the vertical: `slug`/`name` come from the
+   package.json `substrat` block and the version is the registry's latest, patch-bumped.
+   Override any with `--slug` / `--name` / `--version` when you need to.
 
 3. **Admit** the version (a human checkpoint — model B). A push is not a deploy: a Substrat
    operator admits the version in the console's Verticals view (or the staff control-plane API)
