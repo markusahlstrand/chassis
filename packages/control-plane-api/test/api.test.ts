@@ -682,6 +682,42 @@ describe('control-plane API — vertical registry', () => {
     expect(await res.json()).toMatchObject({ id: sc, verticalVersionId: v2 });
   });
 
+  it('introspection resolves the scope’s BOUND version, not the prod channel (#220)', async () => {
+    // `sc` is now bound to v2. A scope's data DO lives in the deployment of the version
+    // it is bound to (each push is a separate WfP script + DO namespace) — so the Data
+    // view must reach the BOUND-version deployment, keyed by `verticalVersionId`, and
+    // must NOT fall through to the prod-channel resolver.
+    const calls: string[] = [];
+    const boundClient = {
+      listScopeTables: async (s: string) => {
+        calls.push(`bound:${s}`);
+        return [{ name: 'widget', rowCount: 0, system: false }];
+      },
+    } as unknown as VerticalClient;
+    const prodClient = {
+      listScopeTables: async () => {
+        calls.push('prod');
+        return [];
+      },
+    } as unknown as VerticalClient;
+
+    const delegated = createControlPlaneApi({
+      host,
+      authenticate: UNSAFE_devPlatformActorAuth(),
+      resolveVertical: async () => prodClient, // prod-channel fallback — must NOT be used
+      resolveVerticalVersion: async (slug, versionId) => {
+        calls.push(`resolve:${slug}:${versionId}`);
+        return boundClient;
+      },
+    });
+
+    const res = await delegated.request(`/tenants/${t1}/scopes/${sc}/tables`, { headers: auth });
+    expect(await res.json()).toEqual([{ name: 'widget', rowCount: 0, system: false }]);
+    // The bound-version resolver was consulted with v2's id and its client used; the
+    // prod-channel resolver was never called.
+    expect(calls).toEqual([`resolve:fsm:${v2}`, `bound:${sc}`]);
+  });
+
   it('rejects a fresh pending version, and admitting it afterward conflicts', async () => {
     const v3 = ulid();
     await json('/verticals/fsm/versions', 'POST', version(v3));

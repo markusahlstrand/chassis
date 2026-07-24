@@ -50,6 +50,21 @@ export interface ControlPlaneApiOptions {
    */
   resolveVertical?: (slug: string, actor: PlatformActorId) => Promise<VerticalClient | undefined>;
   /**
+   * Resolves a vertical at a SPECIFIC version — a scope's data DO lives in the
+   * deployment of the version it was provisioned/bound to (`scope.verticalVersionId`),
+   * NOT necessarily the `prod` channel. Because each `substrat push` is a separate WfP
+   * script with its own DO namespace, introspection must reach the BOUND version's
+   * deployment (the same one the router serves the app from), or it reads an empty DO
+   * once an installed app lags prod. The `/tables` route prefers this over
+   * `resolveVertical`; the latter (prod) stays the fallback for a scope with no bound
+   * version. Absent ⇒ the route uses prod-channel/static resolution only.
+   */
+  resolveVerticalVersion?: (
+    slug: string,
+    versionId: string,
+    actor: PlatformActorId,
+  ) => Promise<VerticalClient | undefined>;
+  /**
    * Uploads a built vertical bundle to the platform runtime (a WfP dispatch
    * namespace), injected by the host so this package holds no Cloudflare SDK and the
    * builder never holds a Cloudflare credential (D-34). Absent ⇒ the deploy route
@@ -345,17 +360,26 @@ export function createControlPlaneApi(options: ControlPlaneApiOptions): Hono<{ V
   // The scope's DATA lives in the vertical's own deployment (K-31), NOT in this control
   // plane's own (empty-module) scope host — so we DELEGATE to the vertical, the mirror
   // of `/verticals/:slug/instances`. `getScopeRecord` first does the K-3 cross-check +
-  // access-log entry and tells us which vertical backs the scope; then the same
-  // `verticals[slug] ?? resolveVertical(slug)` resolution provisioning uses reaches it.
-  // When no vertical resolves (a co-located host, or the contract tests), we fall back
-  // to reading this host's own scope DB directly — correct when the data is right here.
+  // access-log entry and tells us which vertical (and which VERSION) backs the scope.
+  //
+  // Resolution order matters. A scope's data DO lives in the deployment of its BOUND
+  // version (`verticalVersionId`) — each `substrat push` is a separate WfP script with
+  // its own DO namespace, so the prod-channel deployment is the wrong one the moment an
+  // installed app lags prod. So we prefer bound-version resolution, then fall back to
+  // prod-channel/static (a scope with no bound version), then to reading this host's own
+  // scope DB directly (a co-located host, or the contract tests — data is right here).
   const verticalForScope = async (
     c: { get: (k: 'actor') => PlatformActorId },
-    scope: { vertical: string | null },
+    scope: { vertical: string | null; verticalVersionId: string | null },
   ): Promise<VerticalClient | undefined> => {
     const slug = scope.vertical;
     if (!slug) return undefined;
-    return options.verticals?.[slug] ?? (await options.resolveVertical?.(slug, c.get('actor')));
+    const actor = c.get('actor');
+    if (scope.verticalVersionId && options.resolveVerticalVersion) {
+      const bound = await options.resolveVerticalVersion(slug, scope.verticalVersionId, actor);
+      if (bound) return bound;
+    }
+    return options.verticals?.[slug] ?? (await options.resolveVertical?.(slug, actor));
   };
 
   app.get('/tenants/:tenantId/scopes/:scopeId/tables', async (c) => {
