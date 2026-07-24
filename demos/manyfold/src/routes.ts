@@ -26,8 +26,11 @@ export function mountApi(app: Hono<any, any, any>, resolveStub: ResolveStub): vo
   // conflicts → 409, missing entity/scope/op → 404, everything else a validation 400.
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
-    if (err instanceof PermissionDenied) return c.json({ error: err.message }, 403);
     const msg = err instanceof Error ? err.message : String(err);
+    // Match by message too, not just instanceof: on the Cloudflare DO adapter the op error
+    // crosses the ScopeDO RPC boundary and is rebuilt as a plain Error, so `instanceof
+    // PermissionDenied` is false there — a denial would otherwise degrade to a 400.
+    if (err instanceof PermissionDenied || /permission denied/i.test(msg)) return c.json({ error: msg }, 403);
     if (/invalid transition|frozen|already|cannot edit|cannot restore|not published|in use/.test(msg)) {
       return c.json({ error: msg }, 409);
     }

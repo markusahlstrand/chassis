@@ -19,7 +19,7 @@ import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { principalId, scopeId, tenantId, readScopeTableInput, z, type PrincipalId, type TenantId, type ScopeId } from '@substrat-run/contracts';
 import { defineScopeDO, CloudflareScopeHost } from '@substrat-run/adapter-cloudflare';
-import { assertPlatformCall, PlatformCallError, readRoutedNode, RouterAssertionError, type ScopeStub } from '@substrat-run/kernel';
+import { assertPlatformCall, PlatformCallError, readRoutedNode, RouterAssertionError, ulid, type ScopeStub } from '@substrat-run/kernel';
 import { IdentityDO, doAuthProvider, oidcAuthProvider, type AuthProvider } from '@substrat-run/vertical-auth';
 import { MODULES, ROLES } from './provision.js';
 import { serveAsset } from './assets.js';
@@ -200,6 +200,58 @@ async function stub(c: Context<{ Bindings: Env }>): Promise<ScopeStub> {
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   return hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
 }
+
+// ── Members & invites (the post-setup join path — admin-only) ────────────────
+
+/** Gate an admin-only action: resolve the caller's scope, then require content:admin. */
+async function requireAdmin(c: Context<{ Bindings: Env }>): Promise<ScopeStub> {
+  const scope = await stub(c);
+  const who = (await scope.invoke('manyfold/whoami', undefined)) as { can: { admin: boolean } };
+  if (!who.can.admin) throw new HTTPException(403, { message: 'only an admin can manage members' });
+  return scope;
+}
+
+const inviteBody = z.object({ email: z.string().email().optional(), roleKey: z.string().min(1) });
+
+/** Who I am, for the members view (display + role) — needs-setup aware handled by /api/me. */
+app.get('/api/invites', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  await requireAdmin(c);
+  return c.json({ roles: ROLES.map((r) => r.key), invites: await identityDo(c.env, node).listInvites(node.scopeId) });
+});
+
+/** Create an invite: mint a member principal, grant it the chosen role at scope level, record
+ *  the invite by token HASH (the plaintext token rides only in the returned accept link). */
+app.post('/api/invites', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  await requireAdmin(c);
+  const { email, roleKey } = inviteBody.parse(await c.req.json());
+  if (!ROLES.some((r) => r.key === roleKey)) throw new HTTPException(400, { message: `unknown role '${roleKey}'` });
+  const principal = principalId.parse(ulid());
+  const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, ''); // 256 bits, URL-safe
+  await hostFor(c.env).assignScopeRole(node.scopeId, principal, roleKey);
+  await identityDo(c.env, node).createInvite(node.scopeId, principal, roleKey, email ?? null, await sha256Hex(token));
+  return c.json({ principal, roleKey, email: email ?? null, acceptUrl: `${originOf(c.req.raw)}/?invite=${token}` }, 201);
+});
+
+app.post('/api/invites/:principal/revoke', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  await requireAdmin(c);
+  await identityDo(c.env, node).revokeInvite(node.scopeId, c.req.param('principal'));
+  return c.body(null, 204);
+});
+
+/** Accept an invite: the invitee has signed up (allowed by the token), and now binds their
+ *  login to the pre-minted member principal. */
+app.post('/api/accept-invite', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  const subject = await authProviderFor(c.env, c.req.raw).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'sign in before accepting an invite' });
+  const { token } = z.object({ token: z.string().min(1) }).parse(await c.req.json());
+  const principal = await identityDo(c.env, node).claimInvite(node.scopeId, subject.sub, await sha256Hex(token));
+  if (!principal) throw new HTTPException(400, { message: 'this invite is invalid or already used' });
+  return c.json({ ok: true, principal });
+});
 
 mountApi(app, stub);
 

@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react';
-import { auth, ApiError } from './api';
+import { api, auth, ApiError } from './api';
 import { Button, Card } from './ui';
 
 const inp: CSSProperties = {
@@ -14,6 +14,51 @@ const inp: CSSProperties = {
  * admin account, and the first sign-in claims that seat (→ admin). On success we reload so
  * `/api/me` resolves the new session cookie.
  */
+/** An invited teammate arrived via ?invite=<token>: create their account (allowed by the
+ *  token) and immediately claim the invite so their login binds to the pre-granted member. */
+export function AcceptInvite({ token }: { token: string }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = async () => {
+    if (busy || !email.trim() || password.length < 8) return;
+    setBusy(true); setErr('');
+    try {
+      await auth.signUpWithInvite(email.trim(), password, name.trim() || email.trim(), token);
+      await api.acceptInvite(token);
+      window.history.replaceState({}, '', location.pathname + location.hash); // drop ?invite=
+      location.reload();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg)', padding: 24 }}>
+      <Card style={{ width: 372 }}>
+        <div style={{ textAlign: 'center', marginBottom: 18 }}>
+          <span style={{ display: 'inline-block', width: 26, height: 26, borderRadius: 8, background: 'var(--accent)', marginBottom: 10 }} />
+          <div style={{ fontSize: 20, fontWeight: 700 }}>Join the workspace</div>
+          <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>Create your account to accept the invite</div>
+        </div>
+        {err && <div style={{ padding: '9px 12px', borderRadius: 'var(--r-input)', background: 'var(--st-danger-bg)', color: 'var(--st-danger-fg)', fontSize: 13, marginBottom: 12 }}>{err}</div>}
+        <div style={{ display: 'grid', gap: 10 }}>
+          <input style={inp} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input style={inp} type="email" placeholder="Email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input style={inp} type="password" placeholder="Password (8+ characters)" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }} />
+          <Button variant="primary" disabled={busy || !email.trim() || password.length < 8} onClick={() => void submit()}>
+            {busy ? 'Please wait…' : 'Accept invite'}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export function SignIn({ firstRun }: { firstRun: boolean }) {
   const [mode, setMode] = useState<'in' | 'up'>(firstRun ? 'up' : 'in');
   const [name, setName] = useState('');

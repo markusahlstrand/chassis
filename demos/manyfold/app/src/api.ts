@@ -53,9 +53,21 @@ async function authPost(path: string, body: unknown): Promise<void> {
 }
 export const auth = {
   signUp: (email: string, password: string, name: string) => authPost('sign-up/email', { email, password, name }),
+  /** Sign up WITH an invite token — allowed even after open sign-up has closed. */
+  signUpWithInvite: (email: string, password: string, name: string, token: string) =>
+    authPost(`sign-up/email?invite=${encodeURIComponent(token)}`, { email, password, name }),
   signIn: (email: string, password: string) => authPost('sign-in/email', { email, password }),
   signOut: () => authPost('sign-out', {}),
 };
+
+// A POST to one of the worker's own JSON routes (invites / accept), not the op transport.
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body) });
+  const text = await res.text();
+  const parsed = (text ? JSON.parse(text) : undefined) as (T & { error?: string }) | undefined;
+  if (!res.ok) throw new ApiError(parsed?.error ?? `${res.status}`, res.status);
+  return parsed as T;
+}
 
 // ── Types mirrored from the vertical (kept minimal, only what the app renders) ──
 
@@ -86,6 +98,9 @@ export interface ContentTypeDef { key: string; version: number; title: string; t
 export interface RevisionMeta { rev_no: number; frozen: number; hash: string | null; author: string; created_at: string }
 export interface EntryDetail { entry: { id: string; type_key: string; status: EntryStatus; slug: string | null; draft_rev: number; published_rev: number | null; created_at: string; updated_at: string }; body: Record<string, unknown>; revisions: RevisionMeta[] }
 export interface DeliveryItem { type_key: string; slug: string | null; title: string; hash: string }
+export interface Invite { principal: string; roleKey: string; email: string | null; createdAt: number }
+export interface InvitesResult { roles: string[]; invites: Invite[] }
+export interface CreatedInvite { principal: string; roleKey: string; email: string | null; acceptUrl: string }
 
 export const api = {
   personas: () => get<Persona[]>('/api/personas'),
@@ -120,4 +135,9 @@ export const api = {
   archive: (entryId: string) => op('archive', { entryId }),
   deliver: (typeKey: string, slug: string) => op<{ type: string; slug: string | null; hash: string; publishedAt: string; body: Record<string, unknown> }>('deliver', { typeKey, slug }),
   listDelivery: (input: { typeKey?: string } = {}) => op<DeliveryItem[]>('list-delivery', input),
+  // Members & invites (worker routes; 404 on the dev server).
+  listInvites: () => get<InvitesResult>('/api/invites'),
+  createInvite: (email: string | undefined, roleKey: string) => postJson<CreatedInvite>('/api/invites', { email, roleKey }),
+  revokeInvite: (principal: string) => postJson<null>(`/api/invites/${principal}/revoke`, {}),
+  acceptInvite: (token: string) => postJson<{ ok: boolean }>('/api/accept-invite', { token }),
 };

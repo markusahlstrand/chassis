@@ -16,7 +16,7 @@ import {
   type Site,
 } from './api';
 import { Button, Card, ColHead, Empty, Mono, Pill, StatusBadge } from './ui';
-import { SignIn } from './Auth';
+import { SignIn, AcceptInvite } from './Auth';
 import { EntryForm } from './EntryForm';
 import { DeliveryPreview } from './Delivery';
 import { ModelsView, ModelEditorView, RelationshipMap, MigrationsView } from './ModelBuilder';
@@ -115,6 +115,8 @@ export default function App() {
   const splash = <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'var(--bg)' }}>Loading…</div>;
   if (!booted || !me) return splash;
   if (me.mode !== 'authed') {
+    const inviteToken = new URLSearchParams(location.search).get('invite');
+    if (inviteToken) return <AcceptInvite token={inviteToken} />;
     if (personas.length > 0) return splash; // dev: persona still resolving, don't flash sign-in
     return <SignIn firstRun={me.mode === 'needs-setup'} />;
   }
@@ -171,7 +173,7 @@ export default function App() {
           {view.kind === 'relationships' && <RelationshipMap />}
           {view.kind === 'migrations' && <MigrationsView />}
           {view.kind === 'media' && <AssetLibrary />}
-          {view.kind === 'members' && <MembersView personas={personas} sites={sites} />}
+          {view.kind === 'members' && <MembersView personas={personas} sites={sites} devMode={personas.length > 0} meName={me.display} canAdmin={caps.admin} />}
           {view.kind === 'entry' && (
             <EntryEditor key={view.id} id={view.id} types={types} caps={caps} onChanged={refresh} onBack={() => navigate({ kind: 'home' })} />
           )}
