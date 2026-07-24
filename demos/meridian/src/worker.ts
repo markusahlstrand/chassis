@@ -151,6 +151,20 @@ const provisionInstanceBody = z.object({
 
 const app = new Hono<{ Bindings: Env }>();
 
+/**
+ * Open sign-up is allowed ONLY during first-run setup (the owner seat unclaimed). Once the
+ * admin has claimed it, this instance is invite-only: a stranger who finds the URL can no
+ * longer self-register. (Better-Auth-DO only; an OIDC deployment never hits this route — its
+ * users come from the issuer.) Must be registered BEFORE the /api/auth/* catch-all forward.
+ */
+app.post('/api/auth/sign-up/email', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  if (!(await identityDo(c.env, node).needsSetup(node.scopeId))) {
+    return c.json({ error: 'Sign-up is closed for this workspace — ask an admin to invite you.' }, 403);
+  }
+  return authProviderFor(c.env, c.req.raw).handle(c.req.raw);
+});
+
 // Identity/credentials/sessions live in the tenant's own AuthDO — the worker just forwards
 // the /api/auth/* surface to it through the AuthProvider contract (it never runs Better Auth).
 app.on(['GET', 'POST'], '/api/auth/*', (c) => authProviderFor(c.env, c.req.raw).handle(c.req.raw));
@@ -208,7 +222,12 @@ app.get('/api/me', async (c) => {
   // Resolve the caller via the configured provider (Better-Auth-DO / OIDC), mapping the
   // subject → principal (claiming the owner seat on first login).
   const principal = await principalFor(c.env, c.req.raw);
-  if (!principal) return c.json({ error: 'unauthorized' }, 401);
+  if (!principal) {
+    // No principal yet. If the owner seat is unclaimed, this instance is awaiting first-run
+    // setup — tell the SPA to show "create the admin account", not a bare sign-in.
+    const needsSetup = await identityDo(c.env, node).needsSetup(node.scopeId);
+    return needsSetup ? c.json({ status: 'needs-setup' }) : c.json({ error: 'unauthorized' }, 401);
+  }
   const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
   const who = (await scope.invoke('hr/whoami', undefined)) as {
     role: string;

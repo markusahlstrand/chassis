@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   api,
   ApiError,
+  isNeedsSetup,
   type Balance,
   type Expense,
   type LeaveRequest,
@@ -38,6 +39,8 @@ export interface Loaded {
   error: string | null;
   /** The caller has no session — show the sign-in screen rather than an error. */
   unauthorized: boolean;
+  /** A freshly-provisioned instance with no admin yet — show first-run setup, not sign-in. */
+  needsSetup: boolean;
   reload: () => void;
 }
 
@@ -47,15 +50,25 @@ export function useAppData(personaKey: string): Loaded {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   const reload = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setUnauthorized(false);
+    setNeedsSetup(false);
     (async () => {
       try {
         const me = await api.me();
+        // A brand-new instance with no admin yet → first-run setup, not the app.
+        if (isNeedsSetup(me)) {
+          if (!cancelled) {
+            setNeedsSetup(true);
+            setLoading(false);
+          }
+          return;
+        }
         if (!me.employeeId) {
           if (!cancelled) {
             setData({ me, leaveTypes: [], balance: null, requests: [], timesheet: null, expenses: [], projects: [], onboarding: null });
@@ -109,7 +122,7 @@ export function useAppData(personaKey: string): Loaded {
 
   useEffect(() => reload(), [reload]);
 
-  return { data, loading, error, unauthorized, reload };
+  return { data, loading, error, unauthorized, needsSetup, reload };
 }
 
 export interface ManagerData {
@@ -141,6 +154,9 @@ export function useManagerData(personaKey: string, enabled: boolean): { data: Ma
           api.requests(),
           api.allExpenses(),
         ]);
+        // These hooks run only for a resolved manager/admin, so setup is never in flight —
+        // the guard is here to keep the union total, not because it's reachable.
+        if (isNeedsSetup(me)) { if (!cancelled) setData(null); return; }
         const timesheets: Record<string, Timesheet> = {};
         const onboarding: Record<string, OnboardingSummary | null> = {};
         await Promise.all(
@@ -204,6 +220,7 @@ export function useAdminData(personaKey: string, enabled: boolean): { data: Admi
           api.roster(),
           api.adminProjects(),
         ]);
+        if (isNeedsSetup(me)) { if (!cancelled) { setData(null); setLoading(false); } return; }
         if (!cancelled) {
           setData({ leaveTypes, roster, projects, country: me.country });
           setLoading(false);

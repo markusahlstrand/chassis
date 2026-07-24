@@ -90,6 +90,17 @@ export class IdentityDO extends DurableObject<IdentityDoEnv> {
   }
 
   /**
+   * Is this scope awaiting first-run setup? True while its owner seat is unclaimed — the
+   * instance is provisioned but no admin has signed in yet. The worker uses this to show a
+   * "create the admin account" setup screen instead of a plain sign-in, and to keep open
+   * sign-up allowed only during this window (after the owner claims, sign-up is invite-only).
+   */
+  async needsSetup(scopeId: string): Promise<boolean> {
+    const pending = [...this.ctx.storage.sql.exec('SELECT 1 FROM pending_owner WHERE scope_id = ?', scopeId)][0];
+    return pending !== undefined;
+  }
+
+  /**
    * Map a verified subject to a PrincipalId in this scope. If already bound, return it. If
    * not, and the scope's owner seat is unclaimed, CLAIM it: bind this subject to the owner
    * principal and consume the pending seat. Otherwise null — a valid login with no seat has
@@ -145,6 +156,7 @@ export class IdentityDO extends DurableObject<IdentityDoEnv> {
 export type IdentityStub = {
   fetch(request: Request): Promise<Response>;
   setPendingOwner(scopeId: string, principal: string): Promise<void>;
+  needsSetup(scopeId: string): Promise<boolean>;
   resolvePrincipal(scopeId: string, sub: string): Promise<string | null>;
 };
 
